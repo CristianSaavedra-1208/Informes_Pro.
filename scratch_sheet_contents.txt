@@ -1,0 +1,160 @@
+
+===== SHEET: Efectivo =====
+   0                                                                                   1                         2 3       4            5       6            7
+0                                                                                                                                                             
+1                                                                                                                                                             
+2                                                                                                         Pacifico    Holdco  Consolidado                     
+3                                                                                                           Fecha     Fecha        Fecha                      
+4                                                                                Detalle                        M$        M$           M$                     
+5                                                                       Efectivo en caja                                                                      
+6                                                                             Fondo fijo                                                                      
+7                                                                     Efectivo en bancos                                                                      
+8                                                                       Deposito a plazo                                                                      
+9                                                                          Fondos mutuos                                                                      
+10                                                                                 Total                                                                      
+11                                                                         Fondos mutuos                                                                      
+12                                                                     Validacion con FS                         0    -0.381       -0.381                     
+13                                                                                                                                                            
+14                                                                         FONDOS MUTUOS                                                                      
+15                                                                               Detalle                                                                      
+16                                                               Dólares estadounidenses                                                                      
+17                                                                        Pesos chilenos                                                                      
+18                                                                                 Euros                                                                      
+19                                                                                 Total                                                                      
+20                                                                                                                                                            
+21                                                          Validacion con nota anterior                         0         0            0                     
+22                                                                                                                                                            
+23                                                                                                                                                            
+24                                                                                                                                                            
+25                                                                                                                                                            
+26                                                                                        DETALLE DE FONDOS MUTUOS                                            
+27                                                                                                                                                            
+28                                                                                                                               Pacifico  Holdco  Consolidado
+29    El detalle de los fondos mutuos al cierre del año 2024 se presenta a continuación:                                                                      
+30                                                                               Detalle                     Banco    Moneda       Fecha   Fecha        Fecha 
+31                                                                                                                                     M$      M$           M$
+32                                                                         Fondos mutuos                                                                      
+33                                                                         Fondos mutuos                                                                      
+34                                                                         Fondos mutuos                                                                      
+35                                                                         Fondos mutuos                                                                      
+36                                                                         Fondos mutuos                                                                      
+37                                                                         Fondos mutuos                                                                      
+38                                                                                 Total                                                                      
+
+===== SHEET: Deudores =====
+   0                                                1         2       3            4
+0                                                                                   
+1                                                      PACIFICO  HOLDCO  CONSOLIDADO
+2                                                         Fecha   Fecha        Fecha
+3                                             Detalle        M$      M$             
+4                                                                                   
+5                                 Deudores por ventas                               
+6                           Estimación de incobrables                               
+7                  Sub total cuentas por cobrar, neto                               
+8                                                                                   
+9                            Recaudaciones por cobrar                               
+10                              Documentos por cobrar                               
+11                                Saldos con personal                               
+12                      Anticipos proveedores y otros                               
+13                                    Deudores varios                               
+14                                              Total                               
+15                                                                                  
+16                                                                                  
+17                                         Validacion         0  -0.859       -0.846
+18                                                                                  
+19                                                                                  
+20                                       VENCIMIENTOS                               
+21                                                                                  
+22    Cuentas comerciales netas vencidas según plazo   PACIFICO  HOLDCO  CONSOLIDADO
+23                                                        Fecha   Fecha        Fecha
+24                                                           M$      M$             
+25                                                                                  
+26                                         No vencido                               
+27                                     De 0 a 30 días                               
+28                                    De 31 a 60 días                               
+29                                    De 61 a 90 días                               
+30                                   De 91 a 120 días                               
+31                                  De 121 a 180 días                               
+32                                   Mayor a 180 días                               
+33                                             Total                                
+34                                                                                  
+35                                         Validacion     0.846   0.561        2.266
+36                                                                                  
+37                                                                                  
+38                          MOVIMIENTO DE INCOBRABLES                               
+39                                                                                  
+40                                                     PACIFICO  HOLDCO  CONSOLIDADO
+41                                                        Fecha   Fecha        Fecha
+42                                        Movimientos        M$      M$           M$
+43                                                                                  
+44                                      Saldo inicial                               
+45                   Pérdida reconocida por deterioro                               
+46                           Reverso de deterioro (1)                               
+47                                       Castigos (1)                               
+48                                      Saldo final                                 
+49                                                                                  
+50                                         Validacion         0       0            0
+
+===== SHEET: Inventarios =====
+   0                                                                                                                                          1                2               3                4           5                 6
+0                                                                                                                                                       Pacifico          Holdco      Consolidado                   Consolidado
+1                                                                                                 La composición de este rubro es la siguiente:                                                                                
+2                                                                                                                                                     31.12.2025      31.12.2025       31.12.2025                    31.12.2024
+3                                                                                                                                       Detalle               M$              M$                                               
+4                                                                                                                                                                                                                              
+5                                                                                                                            Bodega central (*)     12815370.092    19710086.833     32525456.925                      43431321
+6                                                                                                                            Otras bodegas (**)          9406853     2797579.775     12204432.775                      20444231
+7                                                                                                                                Bodega tecnica          6903570                          6903570                              
+8                                                                                                                            Bodega en transito          2027331                          2027331                              
+9                                                                                                                        Bodega de contratistas          1407762                          1407762                              
+10                                                                                                                        Bodega de operaciones          1914081                          1914081                              
+11                                                                                                    Deterioro por obsolescencia de materiales     -1227527.921     -154775.443     -1382303.364                       -233979
+12                                                                                                                                        Total     33247439.171    22352891.165     55600330.336                      63641573
+13                                                                                                                                                                                                                             
+14                                                                                                                            Validacion con FS             0.28             1.0             1.28                         0.445
+15                                                                                                                                                                                                                             
+16                                                                                                                                                                                                                             
+17                                                                                                                                                                                                                             
+18                                                  El movimiento de la provisión de obsolescencia al cierre de cada ejercicio es el siguiente:                                                                                
+19                                                                                                                                                                                                                             
+20                                                                                                                                                      Pacifico           Holco      Consolidado                   Consolidado
+21                                                                                                                                                    31.12.2025      31.12.2025       31.12.2025                    31.12.2024
+22                                                                                                                                                            M$              M$                                               
+23                                                                                                                                Saldo inicial           -44180     -189797.764      -233977.764                             0
+24                                                                                                                Disminución por obsolescencia     -1292525.744      -74470.471     -1366996.215                              
+25                                                                                                                      Utilización por castigo       109179.398      109492.792        218672.19                        235770
+26                                                                                                                    Aumento por obsolescencia                                                                         -469749
+27                                                                                                                                  Saldo final     -1227526.346     -154775.443     -1382301.789                       -233979
+28                                                                                                                                                                                                                             
+29                                                                                       Los movimientos de los inventarios son los siguientes:                                                                                
+30                                                                                                                                                                                                                             
+31                                                                                                                                                      Pacifico           Holco      Consolidado                   Consolidado
+32                                                                                                                                                    31.12.2025      31.12.2025       31.12.2025  Validacion        31.12.2024
+33                                                                                                                                   Movimiento               M$              M$               M$                            M$
+34                                                                                                                                                                                                                             
+35                                                                                                                                Saldo inicial         29430391    34211182.445         63641573      -0.445          54969050
+36                                                                                                                                      Compras     43649940.565    19485872.605      63135813.17                      73026384
+37                                                                                                                              Traspaso a PPE  -37016409.860622   -27314181.418 -64330591.278622                     -57863162
+38                                                                                                                                 Consumos (1)  -1964874.651378 -3246087.622101  -5210962.273479                      -3446411
+39                                                                                                                  Provisión de  obsolescencia     -1183346.346       35022.321     -1148324.025                              
+40                                                                                                                            Otros movimientos           729069     -421585.818       307483.182                      -3044288
+41                                                                                                                                    Traspasos          -397330  -397330.347899   -794660.347899                -794660.347899
+42                                                                                                                                        Total     33247439.707    22352892.165     55600331.427               62846912.652101
+43                                                                                                                                                                                                                             
+44                                                                                                                                   Validacion           -0.256               0            0.189              63578726532.3479
+45                                                                                                                                                                                                                             
+46    Durante el ejercicio 2025 y 2024, se efectuaron traspasos desde inventarios a propiedades, planta y equipo, por los siguientes conceptos:                                                                                
+47                                                                                                                                                                                                                             
+48                                                                                                                                                      Pacifico           Holco      Consolidado                   Consolidado
+49                                                                                                                                     Concepto       31.12.2025      31.12.2025       31.12.2025                    31.12.2024
+50                                                                                                                                                            M$              M$               M$                            M$
+51                                                                                                                                    Licencias                0                                0                             0
+52                                                                                                                      Equipos computacionales         6767.515        7540.557        14308.072                          6061
+53                                                                                                                           Equipos portatiles       339039.867      112481.182       451521.049                        390089
+54                                                                                                                             Muebles y utiles                0               0                0                         27174
+55                                                                                                                               Obras en curso       370936.301    27044553.603     27415489.904                      24374570
+56                                                                                                                                Otros activos       899571.716      141182.616      1040754.332                        104035
+57                                                                                                                     Materiales domiciliarios    4620016.75832               0    4620016.75832                       4307623
+58                                                                                                                                    Vehiculos                0         8423.46          8423.46                             0
+59                                                                                                                             Equipos Seriados  30780077.703302               0  30780077.703302                      28653610
+60                                                                                                                                        Total  37016409.860622    27314181.418  64330591.278622                      57863162

@@ -1,0 +1,7 @@
+etapa: fix_journal_entry_note_linking
+timestamp: 20260803_183118
+archivos:
+  - src/main.py
+  - src/ui_pages/informes_y_notas.py
+  - src/reporting/note_generator.py
+  - src/core/excel_utils.py

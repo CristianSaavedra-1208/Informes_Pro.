@@ -1,0 +1,7 @@
+etapa: fix_consolidation_notes
+timestamp: 20260803_170014
+archivos:
+  - src/main.py
+  - src/ui_pages/informes_y_notas.py
+  - src/reporting/note_generator.py
+  - src/core/excel_utils.py

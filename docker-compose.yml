@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  informes_pro_app:
+    build: .
+    container_name: informes_pro_app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Montar src y data permite ver cambios en vivo y persistir base de datos local SQLite
+      - ./src:/app/src
+      - ./data:/app/data
+    environment:
+      - PYTHONPATH=/app/src
+    restart: unless-stopped

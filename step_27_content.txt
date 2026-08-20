@@ -1,0 +1,200 @@
+Created At: 2026-06-24T15:15:12Z
+Completed At: 2026-06-24T15:15:12Z
+File Path: `file:///c:/Users/cfsaa/OneDrive/Desktop/Informes_Pro/src/core/cierre_engine.py`
+Total Lines: 192
+Total Bytes: 7754
+Showing lines 1 to 192
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import os
+2: import pandas as pd
+3: from datetime import datetime
+4: from src.models.database import SessionLocal
+5: from src.models.trial_balance import TrialBalanceRecord
+6: from src.models.audit_adjustment import AuditAdjustmentRecord
+7: from src.models.historical_data import HistoricalDataRecord, HistoricalDetailRecord
+8: from src.models.trial_balance_db import TrialBalanceDB
+9: 
+10: def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
+11:     """
+12:     Ejecuta el cierre de un periodo:
+13:     1. Lee el Trial Balance activo.
+14:     2. Cruza con los mapeos actuales de Balance y P&L.
+15:     3. Guarda los registros en HistoricalDetailRecord (Papel de trabajo).
+16:     4. Guarda los agregados en HistoricalDataRecord.
+17:     5. Elimina el periodo de la memoria activa (TrialBalanceRecord, AuditAdjustmentRecord).
+18:     """
+19:     db = SessionLocal()
+20:     try:
+21:         # 1. Obtener el TB activo
+22:         tb_df = TrialBalanceDB.get_trial_balance(empresa, periodo)
+23:         if tb_df is None or tb_df.empty:
+24:             return False, f"No hay datos activos para el periodo {periodo}."
+25: 
+26:         # 2. Obtener mapeos
+27:         map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+28:         map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
+29:         
+30:         dict_bal = {}
+31:         dict_nota = {}
+32:         if os.path.exists(map_bal_path):
+33:             df_bal = pd.read_excel(map_bal_path, dtype=str)
+34:             df_bal.columns = [str(c).strip() for c in df_bal.columns]
+35:             cuenta_col = next((c for c in df_bal.columns if "cuenta" in c.lower()), None)
+36:             clasif_col = next((c for c in df_bal.columns if "clasificaci" in c.lower() and "balance" in c.lower()), None)
+37:             nota_col = next((c for c in df_bal.columns if "id_nota" in c.lower()), None)
+38:             
+39:             if cuenta_col and clasif_col:
+40:                 for _, row in df_bal.iterrows():
+41:                     c = str(row[cuenta_col]).strip()
+42:                     dict_bal[c] = str(row[clasif_col]).strip() if pd.notna(row[clasif_col]) else None
+43:                     if nota_col:
+44:                         dict_nota[c] = str(row[nota_col]).strip() if pd.notna(row[nota_col]) else None
+45: 
+46:         # 2b. Leer P&L desde el Cubo Transaccional (ya no usamos map_pl.xlsx)
+47:         from sqlalchemy import func
+48:         from src.models.pl_record import PlRecordDim
+49:         
+50:         pl_records = db.query(
+51:             PlRecordDim.rubro,
+52:             func.sum(PlRecordDim.monto).label('monto')
+53:         ).filter(
+54:             PlRecordDim.empresa == empresa,
+55:             PlRecordDim.periodo == periodo
+56:         ).group_by(PlRecordDim.rubro).all()
+57: 
+58:         # 3. Preparar HistoricalDetailRecords y Summaries
+59:         details = []
+60:         dict_pl = {}
+61:         summaries = {} # key: (reporte, linea_item), value: sum(saldo)
+62: 
+63:         # Borrar historicos previos si existieran (re-cierre)
+64:         db.query(HistoricalDetailRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+65:         db.query(HistoricalDataRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+66: 
+67:         pl_residual = 0.0
+68: 
+69:         for _, row in tb_df.iterrows():
+70:             cid = str(row['cuenta_id']).strip()
+71:             sf = float(row['saldo_final'])
+72:             
+73:             c_bal = dict_bal.get(cid)
+74:             c_pl = dict_pl.get(cid)
+75:             n_aso = dict_nota.get(cid)
+76:             
+77:             details.append(HistoricalDetailRecord(
+78:                 empresa=empresa,
+79:                 periodo=periodo,
+80:                 cuenta_id=cid,
+81:                 descripcion=str(row.get('descripcion', '')),
+82:                 saldo_final=sf,
+83:                 clasificacion_balance=c_bal,
+84:                 clasificacion_pl=c_pl,
+85:                 id_nota_asociada=n_aso
+86:             ))
+87:             
+88:             if c_bal:
+89:                 key = ('Balance', c_bal)
+90:                 summaries[key] = summaries.get(key, 0.0) + sf
+91:             else:
+92:                 pl_residual += sf
+93:                 
+94:         # Inyectar el resultado del ejercicio a Resultados acumulados para cuadrar el balance histórico
+95:         # Buscar si usan 'Resultados acumulados' o 'Ganancias (pérdidas) acumuladas'
+96:         found_key = ('Balance', 'Resultados acumulados')
+97:         for k in summaries.keys():
+98:             if k[0] == 'Balance' and k[1].lower() in ['resultados acumulados', 'ganancias (pérdidas) acumuladas']:
+99:                 found_key = k
+100:                 break
+101:         summaries[found_key] = summaries.get(found_key, 0.0) + pl_residual
+102:                 
+103:         # Agregar sumatorias del Cubo P&L
+104:         for r in pl_records:
+105:             if pd.notna(r.rubro) and str(r.rubro).strip():
+106:                 key = ('P&L', str(r.rubro).strip())
+107:                 summaries[key] = summaries.get(key, 0.0) + r.monto
+108:                 
+109:         # 4. Save Details
+110:         db.bulk_save_objects(details)
+111:         
+112:         # 5. Save Summaries
+113:         sum_records = []
+114:         for (reporte, linea), monto in summaries.items():
+115:             sum_records.append(HistoricalDataRecord(
+116:                 empresa=empresa,
+117:                 periodo=periodo,
+118:                 reporte=reporte,
+119:                 linea_item=linea,
+120:                 monto=monto
+121:             ))
+122:         db.bulk_save_objects(sum_records)
+123:         
+124:         # 6. Borrar data viva
+125:         db.query(TrialBalanceRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+126:         db.query(AuditAdjustmentRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+127:         
+128:         db.commit()
+129:         return True, f"Cierre ejecutado correctamente para {periodo}. Se guardaron {len(details)} registros en memoria histórica."
+130:     except Exception as e:
+131:         db.rollback()
+132:         return False, str(e)
+133:     finally:
+134:         db.close()
+135: 
+136: def reversar_cierre_periodo(empresa: str, periodo: str):
+137:     """
+138:     Deshace el cierre de un periodo:
+139:     1. Toma los registros detallados de HistoricalDetailRecord.
+140:     2. Los reinserta en TrialBalanceRecord (memoria activa).
+141:     3. Elimina los registros históricos (detalles y resúmenes) de ese periodo.
+142:     """
+143:     db = SessionLocal()
+144:     try:
+145:         # Obtener detalle histórico
+146:         historicos = db.query(HistoricalDetailRecord).filter_by(empresa=empresa, periodo=periodo).all()
+147:         if not historicos:
+148:             return False, f"No se encontró data histórica para el periodo {periodo}."
+149: 
+150:         # Preparar para memoria activa
+151:         tb_records = []
+152:         for h in historicos:
+153:             tb_records.append(TrialBalanceRecord(
+154:                 empresa=empresa,
+155:                 periodo=periodo,
+156:                 cuenta_id=h.cuenta_id,
+157:                 descripcion=h.descripcion,
+158:                 saldo_final=h.saldo_final
+159:             ))
+160:             
+161:         # Limpiar memoria activa actual por si acaso
+162:         db.query(TrialBalanceRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+163:         
+164:         # Insertar a memoria activa
+165:         db.bulk_save_objects(tb_records)
+166:         
+167:         # Borrar de memoria histórica
+168:         db.query(HistoricalDetailRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+169:         db.query(HistoricalDataRecord).filter_by(empresa=empresa, periodo=periodo).delete()
+170:         
+171:         db.commit()
+172:         return True, f"El periodo {periodo} ha sido restaurado exitosamente a la memoria activa."
+173:     except Exception as e:
+174:         db.rollback()
+175:         return False, str(e)
+176:     finally:
+177:         db.close()
+178: 
+179: def es_periodo_cerrado(empresa: str, periodo: str) -> bool:
+180:     """
+181:     Verifica si existe registro de cierre histórico para la empresa y periodo especificados.
+182:     """
+183:     db = SessionLocal()
+184:     try:
+185:         from src.models.historical_data import HistoricalDetailRecord
+186:         exists = db.query(HistoricalDetailRecord).filter_by(empresa=empresa, periodo=periodo).first() is not None
+187:         return exists
+188:     finally:
+189:         db.close()
+190: 
+191: 
+192: 
+The above content shows the entire, complete file contents of the requested file.

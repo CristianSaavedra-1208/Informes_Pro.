@@ -1,0 +1,7 @@
+etapa: etapa2
+timestamp: 20260803_153107
+archivos:
+  - src/main.py
+  - src/ui_pages/informes_y_notas.py
+  - src/reporting/note_generator.py
+  - src/core/excel_utils.py
