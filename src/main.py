@@ -98,6 +98,26 @@ def main():
             border-radius: 50%;
             display: inline-block;
         }
+
+        /* Ordenamiento Flexbox de la Barra Lateral */
+        div[data-testid="stSidebarUserContent"] {
+            display: flex !important;
+            flex-direction: column !important;
+        }
+
+        /* Bloque Superior (Marca, Usuario y Botón Logout al inicio) */
+        div[data-testid="stSidebarUserContent"] > div.stMarkdown:nth-child(-n+4),
+        div[data-testid="stSidebarUserContent"] > div.stButton:nth-child(-n+4),
+        div[data-testid="stSidebarUserContent"] > div.element-container:nth-child(-n+4) {
+            order: -10 !important;
+        }
+
+        /* Menú de Navegación (Operaciones, Reportes, Administración) en el medio */
+        div[data-testid="stSidebarNav"] {
+            order: -5 !important;
+            margin-top: 10px !important;
+            margin-bottom: 14px !important;
+        }
         </style>
     """, unsafe_allow_html=True)
 
