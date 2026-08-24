@@ -104,18 +104,17 @@ def check_unmapped_accounts(empresa_path, accounts_to_check, plan_cuentas_df):
         if acc_str in plan_cuentas:
             tipo = plan_tipo_map.get(acc_str)
             tipo_lower = str(tipo).strip().lower()
-            if "balance" in tipo_lower:
-                if acc_str not in mapped_bal_accounts:
-                    cuentas_no_mapeadas.add(acc_str)
-            elif "resultado" in tipo_lower:
-                if acc_str not in mapped_pl_accounts:
-                    cuentas_no_mapeadas.add(acc_str)
+            # Si está mapeada en Balance o en P&L (ej. cuentas de resultado puente mapeadas a Resultados Acumulados), se considera clasificada
+            if acc_str in mapped_bal_accounts or acc_str in mapped_pl_accounts:
+                continue
+            else:
+                cuentas_no_mapeadas.add(acc_str)
                     
     return cuentas_no_mapeadas
 
 def render(empresa_seleccionada, empresa_path):
-    global_opt = "🌐 [GLOBAL] Configuración General"
-    is_global = (empresa_seleccionada == global_opt)
+    global_opt = "[GLOBAL] Configuración General"
+    is_global = ("GLOBAL" in empresa_seleccionada or empresa_seleccionada == global_opt)
         
     st.title("Carga de Datos")
     st.write("Centraliza la carga de todos los insumos necesarios para el ciclo contable.")
@@ -298,7 +297,7 @@ def render(empresa_seleccionada, empresa_path):
                 if cerrado:
                     st.error(f"⚠️ **Periodo Bloqueado:** El periodo {periodo_str} se encuentra actualmente **CERRADO** en el histórico. Para volver a cargar o extraer datos, debes reabrir el periodo desde la pestaña de **Históricos**.")
                 else:
-                    uploaded_file = st.file_uploader("Selecciona un archivo Excel", type=["xlsx", "xls"], key="up_tb")
+                    uploaded_file = st.file_uploader("Selecciona un archivo Excel", type=["xlsx", "xls"], key=f"up_tb_{empresa_seleccionada}_{periodo_str}")
 
                     st.markdown("---")
                     if st.button("🔌 Extracción de data desde ERP", type="secondary"):
@@ -390,8 +389,9 @@ def render(empresa_seleccionada, empresa_path):
                                     st.error(f"Error procesando el archivo: {error_msg}")
 
             with sub_tb2:
-                if 'tb_df' in st.session_state and st.session_state['tb_df'] is not None:
-                    tb_df_to_show = st.session_state['tb_df'].copy()
+                tb_from_db = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_str)
+                if tb_from_db is not None and not tb_from_db.empty:
+                    tb_df_to_show = tb_from_db.copy()
                     cuenta_col_tb = next((c for c in tb_df_to_show.columns if "cuenta" in str(c).lower() and "nombre" not in str(c).lower()), "cuenta_id")
                     desc_col_tb = next((c for c in tb_df_to_show.columns if "nombre" in str(c).lower() or "desc" in str(c).lower()), "descripcion")
                     numeric_cols_tb = [c for c in tb_df_to_show.columns if c not in [cuenta_col_tb, desc_col_tb]]
@@ -412,16 +412,16 @@ def render(empresa_seleccionada, empresa_path):
                         column_config=column_config_tb,
                         key=f"df_tb_show_{empresa_seleccionada}_{periodo_str}"
                     )
-                    excel_data = df_to_excel_bytes(st.session_state['tb_df'], "Trial Balance")
+                    excel_data = df_to_excel_bytes(tb_from_db, "Trial Balance")
                     st.download_button(
                         label="📥 Descargar Trial Balance en Excel",
                         data=excel_data,
-                        file_name="trial_balance_activo.xlsx",
+                        file_name=f"trial_balance_{empresa_seleccionada}_{periodo_str}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="btn_dl_tb"
+                        key=f"btn_dl_tb_{empresa_seleccionada}_{periodo_str}"
                     )
                 else:
-                    st.info("Aún no se ha cargado ningún Trial Balance.")
+                    st.info(f"Aún no se ha cargado ningún Trial Balance para **{empresa_seleccionada}** en el periodo **{periodo_str}**.")
 
     if tab_pl is not None:
         with tab_pl:
@@ -558,7 +558,7 @@ def render(empresa_seleccionada, empresa_path):
                 if cerrado_pl:
                     st.error(f"⚠️ **Periodo Bloqueado:** El periodo {periodo_str_pl} se encuentra actualmente **CERRADO** en el histórico. Para volver a cargar datos de P&L, debes reabrir el periodo desde la pestaña de **Históricos**.")
                 else:
-                    up_pl_cubo = st.file_uploader("Selecciona el Cubo P&L (Excel)", type=["xlsx", "xls"], key="up_pl_cubo")
+                    up_pl_cubo = st.file_uploader("Selecciona el Cubo P&L (Excel)", type=["xlsx", "xls"], key=f"up_pl_cubo_{empresa_seleccionada}_{periodo_str_pl}")
 
                     # Cargar maestro de mapeos para la empresa
                     map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")

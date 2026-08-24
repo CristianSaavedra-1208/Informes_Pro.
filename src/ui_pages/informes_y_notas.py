@@ -652,7 +652,7 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
 def render(empresa_seleccionada, empresa_path):
     st.title("📑 Informes y Notas a los Estados Financieros")
     
-    if empresa_seleccionada == "🌐 [GLOBAL] Configuración General":
+    if "GLOBAL" in empresa_seleccionada:
         st.info("🌐 **Modo Global Activo**: Desde esta sección puedes administrar la **Plantilla Maestra Global** de Notas (`Plantilla de notas_v1.xlsx`). Para ejecutar y visualizar notas contables de una empresa específica, selecciónala en la barra lateral izquierda.")
         
         with st.expander("⚙️ Administrar Plantilla Maestra Global de Notas", expanded=True):
@@ -686,16 +686,12 @@ def render(empresa_seleccionada, empresa_path):
                     st.rerun()
         st.stop()
         
-    from src.models.database import SessionLocal
-    from src.models.historical_data import HistoricalDataRecord
+    from src.models.trial_balance_db import TrialBalanceDB
     
-    # Obtener períodos disponibles en el histórico
-    db = SessionLocal()
-    per_recs = db.query(HistoricalDataRecord.periodo).distinct().all()
-    db.close()
-    periodos_hist = sorted([r[0] for r in per_recs], reverse=True)
+    # Obtener períodos disponibles unificados (Memoria Activa + Histórico)
+    periodos_hist = TrialBalanceDB.get_available_periods(empresa_seleccionada)
     if not periodos_hist:
-        periodos_hist = ["2026-03", "2025-12", "2024-12"]
+        periodos_hist = ["2026-12", "2026-07", "2026-06", "2026-03", "2025-12"]
         
     # Parámetros globales en columnas
     col_p1, col_p2, col_esc = st.columns([1.5, 1.5, 2])

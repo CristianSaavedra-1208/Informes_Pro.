@@ -129,6 +129,14 @@ class TrialBalanceDB:
         """
         db = SessionLocal()
         try:
+            if empresa and str(empresa).startswith("[GRUPO]"):
+                grupo_name = str(empresa).replace("[GRUPO] ", "").strip()
+                from src.models.consolidacion import ConsolidationGroup
+                grupo = db.query(ConsolidationGroup).filter_by(nombre_grupo=grupo_name).first()
+                if grupo and grupo.empresa_matriz:
+                    db.close()
+                    return TrialBalanceDB.get_available_periods(grupo.empresa_matriz)
+
             # Obtener periodos de Memoria Activa
             periods_tb = db.query(TrialBalanceRecord.periodo).filter(
                 TrialBalanceRecord.empresa == empresa
@@ -144,4 +152,7 @@ class TrialBalanceDB:
             res.sort(reverse=True)
             return res
         finally:
-            db.close()
+            try:
+                db.close()
+            except:
+                pass

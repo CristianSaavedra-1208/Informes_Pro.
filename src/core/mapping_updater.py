@@ -159,8 +159,7 @@ def save_manual_mapping(
                 df_pl.to_excel(os.path.join(empresa_path, "map_pl.xlsx"), index=False)
                 
         # Replicar si es global
-        global_opt = "🌐 [GLOBAL] Configuración General"
-        if empresa_seleccionada == global_opt:
+        if "GLOBAL" in empresa_seleccionada:
             import shutil
             empresas_dir = os.path.dirname(empresa_path) # data/empresas
             real_empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])

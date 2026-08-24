@@ -27,8 +27,8 @@ def render(empresa_seleccionada, empresa_path):
     st.title("🔀 Motor de Organización de Cuentas")
     st.write("Configura la equivalencia de cuentas para Balance general y el Estado de Resultados (P&L).")
     
-    global_opt = "🌐 [GLOBAL] Configuración General"
-    is_global = (empresa_seleccionada == global_opt)
+    global_opt = "[GLOBAL] Configuración General"
+    is_global = ("GLOBAL" in empresa_seleccionada or empresa_seleccionada == global_opt)
     real_empresas = sorted([d for d in os.listdir(os.path.dirname(empresa_path)) if os.path.isdir(os.path.join(os.path.dirname(empresa_path), d))])
 
     def propagate_global_file(file_name):
@@ -65,10 +65,10 @@ def render(empresa_seleccionada, empresa_path):
         tab_sabana = None
     else:
         tab_names = [
-            "ℹ️ Guía de Uso",
-            "📋 Administrador de Rubros",
-            "📄 Gestión de Plantillas",
-            "📊 Sábanas de Auditoría"
+            "Guía de Uso",
+            "Administrador de Rubros",
+            "Gestión de Plantillas",
+            "Matriz de Auditoría"
         ]
         tabs = st.tabs(tab_names)
         tab_intro, tab_rubros, tab_plantillas, tab_sabana = tabs
@@ -78,7 +78,7 @@ def render(empresa_seleccionada, empresa_path):
         tab_manual = None
     
     with tab_intro:
-        st.subheader("ℹ️ Guía de Uso y Utilidad del Motor")
+        st.subheader("Guía de Uso y Utilidad del Motor")
         
         st.markdown("""
         El **Motor de Organización de Cuentas** es el núcleo de consistencia del sistema. Su propósito es conectar la contabilidad cruda (saldos transaccionales) con la presentación formal de los Estados Financieros estandarizados.
@@ -1066,7 +1066,7 @@ def render(empresa_seleccionada, empresa_path):
 
     if tab_sabana is not None:
         with tab_sabana:
-            st.subheader("📊 Sábanas de Datos Unificadas (Auditoría)")
+            st.subheader("Matriz de Datos Unificada (Auditoría)")
             st.write("Genera y descarga tablas planas completas que combinan la contabilidad cruda del ERP con tus reglas de clasificación y mapeo actual.")
         
             from src.models.trial_balance_db import TrialBalanceDB
@@ -1100,9 +1100,9 @@ def render(empresa_seleccionada, empresa_path):
                 with col_sab1:
                     sab_periodo = st.selectbox("Selecciona el periodo", available_periods, format_func=format_periodo, key="sab_periodo_sel")
                 with col_sab2:
-                    sab_tipo = st.selectbox("Tipo de Sábana", ["Balance General (Sábana)", "Estado de Resultados / P&L (Sábana)"], key="sab_tipo_sel")
+                    sab_tipo = st.selectbox("Tipo de Matriz", ["Balance General (Matriz)", "Estado de Resultados / P&L (Matriz)"], key="sab_tipo_sel")
                 
-                if st.button("🔨 Construir Sábana", type="primary", key="btn_build_sab"):
+                if st.button("Construir Matriz", type="primary", key="btn_build_sab"):
                     with st.spinner("Procesando datos y cruzando mapeos..."):
                         try:
                             # Cargar mapeos maestros (local o global)
@@ -1148,21 +1148,21 @@ def render(empresa_seleccionada, empresa_path):
                             if sab_df is not None and not sab_df.empty:
                                 clean_name = empresa_seleccionada.replace("[GRUPO] ", "").replace(" ", "_")
                                 st.session_state['generated_sab_df'] = sab_df
-                                st.session_state['generated_sab_name'] = f"sabana_{'balance' if 'balance' in sab_tipo.lower() else 'pl'}_{clean_name}_{sab_periodo}.xlsx"
-                                st.success("✅ ¡Sábana construida con éxito!")
+                                st.session_state['generated_sab_name'] = f"matriz_{'balance' if 'balance' in sab_tipo.lower() else 'pl'}_{clean_name}_{sab_periodo}.xlsx"
+                                st.success("✅ ¡Matriz construida con éxito!")
                             else:
-                                st.warning("⚠️ No se generaron registros para la sábana en este período.")
+                                st.warning("⚠️ No se generaron registros para la matriz en este período.")
                         except Exception as e:
-                            st.error(f"Error construyendo la sábana: {e}")
+                            st.error(f"Error construyendo la matriz: {e}")
                         
                 if 'generated_sab_df' in st.session_state:
                     sab_df = st.session_state['generated_sab_df']
                     sab_filename = st.session_state['generated_sab_name']
                 
                     # Excel Download
-                    excel_bytes = df_to_excel_bytes(sab_df, sheet_name="Sabana_Auditoria")
+                    excel_bytes = df_to_excel_bytes(sab_df, sheet_name="Matriz_Auditoria")
                     st.download_button(
-                        label="📥 Descargar Sábana en Excel",
+                        label="📥 Descargar Matriz en Excel",
                         data=excel_bytes,
                         file_name=sab_filename,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

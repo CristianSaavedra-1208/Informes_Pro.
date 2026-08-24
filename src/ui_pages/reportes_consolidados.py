@@ -777,6 +777,7 @@ def render(empresa_seleccionada, empresa_path):
 
                         st.session_state['consolidated_report_excel_binary'] = result_bytes.getvalue()
                         st.session_state['consolidated_report_word_binary'] = word_bytes_out
+                        st.session_state['consolidated_report_config_key'] = f"{sel_g3}_{periodo_act_g}_{periodo_comp_g}_{report_type}_{scale_factor}"
                         st.session_state['consolidated_report_preview_df'] = preview_df
                         st.session_state['consolidated_report_filename'] = filename
                         st.session_state['consolidated_report_word_filename'] = word_filename
@@ -791,7 +792,13 @@ def render(empresa_seleccionada, empresa_path):
                     else:
                         st.error(f"Error generando consolidación: {msg_act}")
 
+        current_config_key = f"{sel_g3}_{periodo_act_g}_{periodo_comp_g}_{report_type}_{scale_factor}"
+        saved_config_key = st.session_state.get('consolidated_report_config_key')
+        
         if 'consolidated_report_preview_df' in st.session_state and st.session_state.get('consolidated_report_excel_binary') is not None:
+            if saved_config_key and saved_config_key != current_config_key:
+                st.warning("⚠️ **Parámetros modificados:** Has cambiado los selectores de arriba. Pulsa **'🚀 Generar Reporte Consolidado'** para emitir con los nuevos periodos/opciones.")
+                
             preview_df = st.session_state['consolidated_report_preview_df']
             report_type = st.session_state.get('consolidated_report_type', report_type)
             col_actual = st.session_state.get('consolidated_report_col_actual', str(periodo_act_g))
@@ -801,19 +808,21 @@ def render(empresa_seleccionada, empresa_path):
             filename = st.session_state.get('consolidated_report_filename', 'Reporte_Consolidado.xlsx')
             word_filename = st.session_state.get('consolidated_report_word_filename', 'Reporte_Consolidado.docx')
 
-            if report_type == "Estado de Flujos de Efectivo" and 'flujo_audit_data_g' in st.session_state:
-                tab_view1, tab_view2 = st.tabs(["📊 Vista de Reporte (Plantilla)", "📋 Hoja de Trabajo (Detalle Variaciones)"])
-                with tab_view1:
-                    try:
-                        import sys
-                        import importlib
-                        import src.reporting.formatting
-                        importlib.reload(sys.modules['src.reporting.formatting'])
-                        from src.reporting.formatting import apply_corporate_style
-                        st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary')).to_html(index=False), unsafe_allow_html=True)
-                    except Exception as e:
-                        st.dataframe(preview_df, height=500)
-                with tab_view2:
+            tab_view1, tab_view2 = st.tabs(["📊 Vista de Reporte Formal (Plantilla)", "📋 Hoja de Trabajo de Consolidación (Detalle Multi-Empresa)"])
+            
+            with tab_view1:
+                try:
+                    import sys
+                    import importlib
+                    import src.reporting.formatting
+                    importlib.reload(sys.modules['src.reporting.formatting'])
+                    from src.reporting.formatting import apply_corporate_style
+                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary')).to_html(index=False), unsafe_allow_html=True)
+                except Exception as e:
+                    st.dataframe(preview_df, height=500, use_container_width=True)
+
+            with tab_view2:
+                if report_type == "Estado de Flujos de Efectivo" and 'flujo_audit_data_g' in st.session_state:
                     df_mat = pd.DataFrame(st.session_state['flujo_audit_data_g'])
                     if not df_mat.empty:
                         df_gp = df_mat.groupby("Línea de Flujo Mapeada").agg({
@@ -824,16 +833,29 @@ def render(empresa_seleccionada, empresa_path):
                         df_gp["Variación Depurada"] = df_gp["Variación Bruta"] + df_gp["Ingreso Caja (Ajuste)"] - df_gp["Egreso Caja (Ajuste)"]
                         df_gp.columns = ["Línea de Flujo Destino", "Variación Bruta", "Ingresos Caja (Depuración)", "Egresos Caja (Depuración)", "Variación Depurada"]
                         st.dataframe(df_gp, use_container_width=True)
-            else:
-                try:
-                    import sys
-                    import importlib
-                    import src.reporting.formatting
-                    importlib.reload(sys.modules['src.reporting.formatting'])
-                    from src.reporting.formatting import apply_corporate_style
-                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary')).to_html(index=False), unsafe_allow_html=True)
-                except Exception as e:
-                    st.dataframe(preview_df, height=500)
+                else:
+                    if df_hoja_act is not None:
+                        st.write(f"**Hoja de Trabajo de Consolidación - Periodo Actual: {format_periodo(col_actual)}**")
+                        df_hoja_disp = df_hoja_act.copy()
+                        for col in df_hoja_disp.columns[1:]:
+                            df_hoja_disp[col] = pd.to_numeric(df_hoja_disp[col], errors='coerce')
+                            if scale_factor > 1.0:
+                                df_hoja_disp[col] = df_hoja_disp[col] / scale_factor
+                        
+                        st.dataframe(
+                            df_hoja_disp.style.format({col: (lambda v: "" if pd.isna(v) else f"{v:,.0f}".replace(",", ".")) for col in df_hoja_disp.columns[1:]}),
+                            use_container_width=True,
+                            height=450
+                        )
+                        
+                        from src.core.excel_utils import df_to_excel_bytes
+                        st.download_button(
+                            "📥 Descargar Hoja de Trabajo Completa (Excel)",
+                            data=df_to_excel_bytes(df_hoja_disp),
+                            file_name=f"Hoja_Trabajo_Consolidacion_{grupo_name}_{col_actual}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_hoja_trabajo_g"
+                        )
                 
             # --- VALIDACIÓN DE ECUACIÓN CONTABLE / RESULTADOS ---
             if report_type == "Balance Clasificado":

@@ -22,22 +22,59 @@ def main():
     # Inyección CSS para Menú Lateral Tailwind & Iconografía Monocromática
     st.markdown("""
         <style>
-        /* 1. Encabezado de Categorías (OPERACIONES, REPORTES, ADMINISTRACIÓN) */
+        /* 0. Escala general y Tipografía Principal */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+        
+        html, body {
+            font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
+        }
+
+        /* Proteger la fuente de los iconos Material Symbols para que nunca se rompan ni se superpongan */
+        span[data-testid="stIconMaterial"],
+        span[data-testid="stIconMaterial"] * {
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined", sans-serif !important;
+            font-feature-settings: 'liga' 1 !important;
+            font-style: normal !important;
+            font-size: 20px !important;
+            line-height: 1 !important;
+            display: inline-block !important;
+            margin-right: 8px !important;
+        }
+
+        /* Fondo del panel lateral (bg-slate-50 / #F8FAFC) */
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+            background-color: #f8fafc !important;
+        }
+
+        /* Ajuste del Logo Superior (st.logo) */
+        div[data-testid="stLogo"] {
+            padding: 10px 6px 14px 6px !important;
+            border-bottom: 1px solid #e2e8f0 !important;
+            margin-bottom: 6px !important;
+        }
+        div[data-testid="stLogo"] img {
+            height: 30px !important;
+            width: auto !important;
+            max-width: 100% !important;
+        }
+
+        /* 1. Encabezado de Categorías (OPERACIONES, REPORTES, ADMINISTRACIÓN: text-slate-700 #334155, tracking-wider) */
         div[data-testid="stSidebarNav"] span[data-testid="stSidebarNavHeader"] {
-            font-size: 11px !important;
-            font-weight: 700 !important;
+            font-size: 11.5px !important;
+            font-weight: 600 !important;
             letter-spacing: 0.08em !important;
-            color: #94a3b8 !important;
+            color: #334155 !important;
             text-transform: uppercase !important;
             padding-top: 14px !important;
             padding-bottom: 4px !important;
+            display: inline-block !important;
         }
 
-        /* 2. Enlaces del Menú Lateral */
+        /* 2. Enlaces Inactivos del Menú Lateral (text-slate-600 #475569) */
         div[data-testid="stSidebarNav"] a {
             display: flex !important;
             align-items: center !important;
-            gap: 10px !important;
             padding: 8px 12px !important;
             border-radius: 8px !important;
             font-size: 13.5px !important;
@@ -47,79 +84,68 @@ def main():
             transition: all 0.15s ease-in-out !important;
         }
 
-        /* 3. Iconos Monocromáticos (Slate-400 para inactivos) */
+        /* 3. Iconos Inactivos (text-slate-600 #475569) */
         div[data-testid="stSidebarNav"] a span[data-testid="stIconMaterial"] {
-            color: #94a3b8 !important;
-            font-size: 19px !important;
-            transition: color 0.15s ease-in-out !important;
-        }
-
-        /* 4. Hover State */
-        div[data-testid="stSidebarNav"] a:hover {
-            background-color: #f1f5f9 !important;
-            color: #0f172a !important;
-        }
-        div[data-testid="stSidebarNav"] a:hover span[data-testid="stIconMaterial"] {
             color: #475569 !important;
         }
 
-        /* 5. Elemento Activo (bg-blue-50, text-blue-700, shadow-sm) */
+        /* 4. Hover State en Enlaces Inactivos */
+        div[data-testid="stSidebarNav"] a:hover {
+            background-color: #e2e8f0 !important;
+            color: #0f172a !important;
+        }
+        div[data-testid="stSidebarNav"] a:hover span[data-testid="stIconMaterial"] {
+            color: #0f172a !important;
+        }
+
+        /* 5. Elemento Activo (bg-blue-600 #2563EB, text-white #FFFFFF) */
         div[data-testid="stSidebarNav"] a[aria-current="page"] {
-            background-color: #eff6ff !important;
-            color: #1d4ed8 !important;
+            background-color: #2563eb !important;
+            color: #ffffff !important;
             font-weight: 600 !important;
-            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px 0 rgba(0, 0, 0, 0.04) !important;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25) !important;
         }
         div[data-testid="stSidebarNav"] a[aria-current="page"] span[data-testid="stIconMaterial"] {
-            color: #1d4ed8 !important;
+            color: #ffffff !important;
         }
         div[data-testid="stSidebarNav"] a[aria-current="page"] span {
-            color: #1d4ed8 !important;
+            color: #ffffff !important;
             font-weight: 600 !important;
         }
 
-        /* Marca de Encabezado Superior (Blue Dot + INFORMES PRO) */
-        .brand-header-title {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13.5px;
-            font-weight: 800;
-            color: #0f172a;
-            letter-spacing: 0.05em;
-            padding: 2px 4px 10px 4px;
-            border-bottom: 1px solid #e2e8f0;
-            margin-bottom: 10px;
-        }
-        .brand-dot {
-            width: 8px;
-            height: 8px;
-            background-color: #2563eb;
-            border-radius: 50%;
-            display: inline-block;
-        }
-
-        /* Ordenamiento Flexbox de la Barra Lateral */
+        /* 6. Bloque Inferior de Usuario y Empresa Activa */
         div[data-testid="stSidebarUserContent"] {
-            display: flex !important;
-            flex-direction: column !important;
+            border-top: 1px solid #e2e8f0 !important;
+            padding-top: 14px !important;
+            margin-top: 14px !important;
         }
 
-        /* Bloque Superior (Marca, Usuario y Botón Logout al inicio) */
-        div[data-testid="stSidebarUserContent"] > div.stMarkdown:nth-child(-n+4),
-        div[data-testid="stSidebarUserContent"] > div.stButton:nth-child(-n+4),
-        div[data-testid="stSidebarUserContent"] > div.element-container:nth-child(-n+4) {
-            order: -10 !important;
+        /* 7. Estilo del Botón de Cerrar Sesión (Azul Corporativo Resaltado) */
+        div[data-testid="stSidebar"] div.stButton:has(> button[key="btn_logout_sidebar"]) > button,
+        div[data-testid="stSidebar"] button[key="btn_logout_sidebar"] {
+            background-color: #2563eb !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            border: 1px solid #1d4ed8 !important;
+            border-radius: 8px !important;
+            padding: 8px 16px !important;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25) !important;
+            transition: all 0.15s ease-in-out !important;
         }
-
-        /* Menú de Navegación (Operaciones, Reportes, Administración) en el medio */
-        div[data-testid="stSidebarNav"] {
-            order: -5 !important;
-            margin-top: 10px !important;
-            margin-bottom: 14px !important;
+        div[data-testid="stSidebar"] div.stButton:has(> button[key="btn_logout_sidebar"]) > button:hover,
+        div[data-testid="stSidebar"] button[key="btn_logout_sidebar"]:hover {
+            background-color: #1d4ed8 !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 8px rgba(37, 99, 235, 0.35) !important;
+            transform: translateY(-1px) !important;
         }
         </style>
     """, unsafe_allow_html=True)
+
+    # Inyectar Logo Oficial de INFORMES PRO al inicio de la barra lateral
+    logo_path = os.path.join(ROOT_DIR, "src", "assets", "logo_informes_pro.svg")
+    if os.path.exists(logo_path):
+        st.logo(logo_path, size="large")
 
     # Asegurar que el directorio de persistencia e inicializar base de datos
     os.makedirs("data", exist_ok=True)
@@ -158,82 +184,93 @@ def main():
             except:
                 pass
 
-    st.sidebar.markdown("""
-        <div class="brand-header-title">
-            <span class="brand-dot"></span>
-            <span>INFORMES PRO</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Usuario Logueado y Botón de Cerrar Sesión directo
-    st.sidebar.markdown(f"**Usuario:** {st.session_state.get('auth_name', 'Usuario')} (`{st.session_state.get('auth_role')}`)")
-    if st.sidebar.button("Cerrar Sesión", use_container_width=True, key="btn_logout_sidebar"):
-        from src.core.security_engine import register_audit_log
-        register_audit_log(st.session_state.get('auth_user'), "LOGOUT", detalles="Cierre de sesión manual.")
-        for k in ['is_authenticated', 'auth_user', 'auth_role', 'auth_name']:
-            st.session_state.pop(k, None)
-        st.rerun()
-
-    st.sidebar.subheader("🏢 Empresa Activa")
-    
-    # Cargar empresas para armar el selector principal
-    real_empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
-    
-    if not real_empresas:
-        st.sidebar.warning("Crea una empresa.")
-        st.warning("No hay empresas creadas. Por favor, crea una nueva empresa desde el menú lateral.")
-        st.stop()
+    # --- BLOQUE INFERIOR DE LA BARRA LATERAL (Empresa Activa + Usuario + Logout Azul al final) ---
+    with st.sidebar.container():
+        st.subheader("🏢 Empresa Activa")
         
-    user_role = st.session_state.get('auth_role', 'Analista Contable')
+        # Cargar empresas para armar el selector principal
+        real_empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
+        
+        if not real_empresas:
+            st.warning("Crea una empresa.")
+            st.warning("No hay empresas creadas. Por favor, crea una nueva empresa desde el menú lateral.")
+            st.stop()
+            
+        user_role = st.session_state.get('auth_role', 'Analista Contable')
 
-    global_opt = "[GLOBAL] Configuración General"
-    if user_role == "Analista de Reportes":
-        empresas = real_empresas
-        if st.session_state.get('empresa_activa') == global_opt or 'empresa_activa' not in st.session_state:
-            st.session_state['empresa_activa'] = real_empresas[0] if real_empresas else ""
-    else:
-        empresas = [global_opt] + real_empresas
-    
-    last_active_path = os.path.join("data", "last_active.txt")
-    if 'empresa_activa' not in st.session_state:
-        if os.path.exists(last_active_path):
-            with open(last_active_path, "r", encoding="utf-8") as f:
-                last_co = f.read().strip()
-            if last_co in empresas:
-                st.session_state['empresa_activa'] = last_co
+        global_opt = "🌐 [GLOBAL] Configuración General"
+        if user_role == "Analista de Reportes":
+            empresas = real_empresas
+            if "GLOBAL" in str(st.session_state.get('empresa_activa', '')) or 'empresa_activa' not in st.session_state:
+                st.session_state['empresa_activa'] = real_empresas[0] if real_empresas else ""
+        else:
+            empresas = [global_opt] + real_empresas
+        
+        last_active_path = os.path.join("data", "last_active.txt")
+        if 'empresa_activa' not in st.session_state:
+            if os.path.exists(last_active_path):
+                with open(last_active_path, "r", encoding="utf-8") as f:
+                    last_co = f.read().strip()
+                if last_co in empresas:
+                    st.session_state['empresa_activa'] = last_co
+                elif "GLOBAL" in last_co:
+                    st.session_state['empresa_activa'] = global_opt
+                else:
+                    st.session_state['empresa_activa'] = empresas[0]
             else:
                 st.session_state['empresa_activa'] = empresas[0]
+
+        empresa_activa_actual = st.session_state['empresa_activa']
+        if "GLOBAL" in empresa_activa_actual and empresa_activa_actual not in empresas:
+            empresa_activa_actual = global_opt
+            st.session_state['empresa_activa'] = global_opt
+
+        empresa_idx = empresas.index(empresa_activa_actual) if empresa_activa_actual in empresas else 0
+
+        empresa_seleccionada_combo = st.selectbox(
+            "Selecciona la empresa de trabajo:",
+            empresas,
+            index=empresa_idx,
+            key="selector_empresa"
+        )
+
+        if empresa_seleccionada_combo != st.session_state.get('empresa_activa'):
+            st.info(f"Selección pendiente:\n**{empresa_seleccionada_combo}**")
+            if st.button("Aplicar Cambio de Empresa", type="primary", use_container_width=True):
+                auth_keys = {'is_authenticated', 'auth_user', 'auth_role', 'auth_name', 'auth_email', 'empresa_activa', 'selector_empresa'}
+                for key in list(st.session_state.keys()):
+                    if key not in auth_keys:
+                        del st.session_state[key]
+                st.session_state['empresa_activa'] = empresa_seleccionada_combo
+                try:
+                    with open(last_active_path, "w", encoding="utf-8") as f:
+                        f.write(empresa_seleccionada_combo)
+                except Exception:
+                    pass
+                st.session_state['success_msg'] = f"Cambio de empresa efectuado exitosamente: **{empresa_seleccionada_combo}**"
+                st.rerun()
         else:
-            st.session_state['empresa_activa'] = empresas[0]
+            st.success(f"**Empresa activa:**\n\n{st.session_state['empresa_activa']}")
 
-    empresa_activa_actual = st.session_state['empresa_activa']
-    empresa_idx = empresas.index(empresa_activa_actual) if empresa_activa_actual in empresas else 0
-
-    empresa_seleccionada_combo = st.sidebar.selectbox(
-        "Selecciona la empresa de trabajo:",
-        empresas,
-        index=empresa_idx,
-        key="selector_empresa"
-    )
-
-    if empresa_seleccionada_combo != st.session_state['empresa_activa']:
-        st.sidebar.info(f"Selección pendiente:\n**{empresa_seleccionada_combo}**")
-        if st.sidebar.button("Aplicar Cambio de Empresa", type="primary", use_container_width=True):
-            auth_keys = {'is_authenticated', 'auth_user', 'auth_role', 'auth_name', 'auth_email', 'empresa_activa', 'selector_empresa'}
-            for key in list(st.session_state.keys()):
-                if key not in auth_keys:
-                    del st.session_state[key]
-            st.session_state['empresa_activa'] = empresa_seleccionada_combo
-            with open(last_active_path, "w", encoding="utf-8") as f:
-                f.write(empresa_seleccionada_combo)
-            st.session_state['success_msg'] = f"Cambio de empresa efectuado exitosamente: **{empresa_seleccionada_combo}**"
+        # Usuario Logueado y Botón de Cerrar Sesión directo resaltado en Azul
+        st.markdown("<div style='margin-top: 14px; padding-top: 10px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
+        st.markdown(f"**Usuario:** {st.session_state.get('auth_name', 'Usuario')}")
+        if st.button("Cerrar Sesión", use_container_width=True, key="btn_logout_sidebar"):
+            from src.core.security_engine import register_audit_log
+            register_audit_log(st.session_state.get('auth_user'), "LOGOUT", detalles="Cierre de sesión manual.")
+            for k in ['is_authenticated', 'auth_user', 'auth_role', 'auth_name']:
+                st.session_state.pop(k, None)
             st.rerun()
-    else:
-        st.sidebar.success(f"**Empresa activa:**\n\n{st.session_state['empresa_activa']}")
 
     empresa_seleccionada = st.session_state['empresa_activa']
 
-    if empresa_seleccionada == global_opt:
+    # Safeguard: si cambió la empresa, purgar variables de datos en session_state
+    if st.session_state.get('_active_empresa_cache_tag') != empresa_seleccionada:
+        for k in ['plan_cuentas_df', 'tb_df', 'map_balance_df', 'map_pl_df', 'pl_df', 'last_tb_file_sig', 'cubo_pl_df']:
+            st.session_state.pop(k, None)
+        st.session_state['_active_empresa_cache_tag'] = empresa_seleccionada
+
+    if "GLOBAL" in empresa_seleccionada:
         empresa_path = os.path.join(empresas_dir, "Pacifico SpA")
     else:
         empresa_path = os.path.join(empresas_dir, empresa_seleccionada)
@@ -338,21 +375,36 @@ def main():
                 pass
     
 
+    import importlib
     import src.core.excel_utils as excel_utils
     import src.ui_pages.inicio as pg_inicio
+    importlib.reload(pg_inicio)
     import src.ui_pages.cargas_de_datos as pg_cargas
+    importlib.reload(pg_cargas)
     import src.ui_pages.organizacion_de_cuentas as pg_map
+    importlib.reload(pg_map)
     import src.ui_pages.ajustes_manuales as pg_ajustes
+    importlib.reload(pg_ajustes)
     import src.ui_pages.consolidacion as pg_cons
+    importlib.reload(pg_cons)
     import src.ui_pages.estados_financieros as pg_estados
+    importlib.reload(pg_estados)
     import src.ui_pages.informes_y_notas as pg_informes
+    importlib.reload(pg_informes)
     import src.ui_pages.cierre_y_memoria_historica as pg_cierre
+    importlib.reload(pg_cierre)
     import src.ui_pages.validacion_saldos as pg_val
+    importlib.reload(pg_val)
     import src.ui_pages.parametros_globales as pg_param
+    importlib.reload(pg_param)
     import src.ui_pages.configuraciones as pg_conf
+    importlib.reload(pg_conf)
     import src.ui_pages.reportes_consolidados as pg_reportes_cons
+    importlib.reload(pg_reportes_cons)
     import src.ui_pages.reporte_corporativo as pg_reporte_corp
+    importlib.reload(pg_reporte_corp)
     import src.ui_pages.auditoria_diccionario as pg_audit
+    importlib.reload(pg_audit)
 
     # Definir wrappers para st.navigation
     def run_inicio(): pg_inicio.render(empresa_seleccionada, empresa_path)

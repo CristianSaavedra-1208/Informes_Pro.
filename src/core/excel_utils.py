@@ -19,8 +19,14 @@ def read_excel_cached(path, engine=None, **kwargs):
 
 def propagate_global_file(file_name: str, empresas_dir: str = None, source_empresa: str = "Pacifico SpA"):
     """
-    Propaga un archivo desde la empresa fuente global hacia todas las empresas activas.
+    Propaga un archivo de catálogo/maestro desde la empresa fuente global hacia todas las empresas activas.
+    Restringido estrictamente a maestros estructurales para evitar cruces de balances.
     """
+    ALLOWED_PROPAGATION_FILES = {"plan_cuentas.xlsx", "map_balance.xlsx", "map_pl.xlsx"}
+    base_file = os.path.basename(file_name)
+    if base_file not in ALLOWED_PROPAGATION_FILES:
+        return
+
     import shutil
     if empresas_dir is None:
         empresas_dir = os.path.join("data", "empresas")
@@ -32,7 +38,7 @@ def propagate_global_file(file_name: str, empresas_dir: str = None, source_empre
     if os.path.exists(empresas_dir):
         for co in os.listdir(empresas_dir):
             co_path = os.path.join(empresas_dir, co)
-            if os.path.isdir(co_path) and co != source_empresa:
+            if os.path.isdir(co_path) and co != source_empresa and not co.startswith("[GRUPO]"):
                 try:
                     shutil.copy2(source_path, os.path.join(co_path, file_name))
                 except Exception:

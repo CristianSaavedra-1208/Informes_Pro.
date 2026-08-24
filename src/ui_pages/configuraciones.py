@@ -322,50 +322,121 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['success_msg'] = "✅ Mapeos y bóveda de Taxonomía formateados exitosamente. El cerebro del programa ha olvidado esos cruces."
                 st.rerun()
 
-    with danger_col2:
-        with st.expander("🗑️ Borrar Mes (Transaccional)"):
-            st.warning("Extirpa los saldos del Balance y del Cubo P&L de un periodo específico.")
-            from src.models.trial_balance_db import TrialBalanceDB
-            from src.models.pl_cubo_db import PlCuboDB
-            try:
-                per_tb = TrialBalanceDB.get_available_periods(empresa_seleccionada)
-                per_pl = PlCuboDB.get_available_periods(empresa_seleccionada)
-                per_avail = sorted(list(set(per_tb + per_pl)), reverse=True)
-            except Exception:
-                per_avail = []
-            
-            if not per_avail:
-                st.info("No hay meses guardados en el archivo histórico.")
-            else:
-                per_to_del = st.selectbox("Periodo a Eliminar", per_avail, key="sel_del_per", format_func=format_periodo)
-                check_per = st.checkbox(f"Entiendo que borraré todos los datos de {format_periodo(per_to_del)}", key="check_del_per")
-                if st.button(f"Aniquilar transacciones de {format_periodo(per_to_del)}", type="primary", disabled=not check_per):
-                    # DB Trial Balance
-                    try:
-                        from src.models.database import SessionLocal
-                        from src.models.trial_balance import TrialBalanceRecord
-                        db = SessionLocal()
-                        db.query(TrialBalanceRecord).filter(TrialBalanceRecord.empresa == empresa_seleccionada, TrialBalanceRecord.periodo == per_to_del).delete()
-                        from src.models.pl_record import PlRecordDim
-                        db.query(PlRecordDim).filter(PlRecordDim.empresa == empresa_seleccionada, PlRecordDim.periodo == per_to_del).delete()
-                        db.commit()
-                        db.close()
-                    except Exception as e:
-                        pass
+        # Si la empresa activa es Global, permitir elegir a qué empresa aplicar la eliminación
+        is_global = "GLOBAL" in empresa_seleccionada
+        if is_global:
+            empresas_dir = os.path.join("data", "empresas")
+            real_cos = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
+            target_empresa = st.selectbox("🏢 Selecciona la empresa objetivo para eliminar datos:", real_cos, key="del_target_empresa")
+            target_empresa_path = os.path.join(empresas_dir, target_empresa)
+        else:
+            target_empresa = empresa_seleccionada
+            target_empresa_path = empresa_path
+
+        with danger_col2:
+            with st.expander("🗑️ Borrar Mes (Transaccional)"):
+                st.warning(f"Extirpa los saldos del Balance y del Cubo P&L de un periodo específico para **{target_empresa}**.")
+                from src.models.trial_balance_db import TrialBalanceDB
+                from src.models.pl_cubo_db import PlCuboDB
+                from src.models.database import SessionLocal
+                from src.models.historical_data import HistoricalDataRecord
+                
+                per_avail = set()
+                try:
+                    per_tb = TrialBalanceDB.get_available_periods(target_empresa)
+                    per_pl = PlCuboDB.get_available_periods(target_empresa)
+                    per_avail.update(per_tb)
+                    per_avail.update(per_pl)
                     
-                    # Archivos Fisicos P&L y tb temporal
-                    pl_hist = os.path.join(empresa_path, f"pl_cubo_{per_to_del}.xlsx")
-                    if os.path.exists(pl_hist): os.remove(pl_hist)
-                    
-                    # Cache Amnesia
-                    st.session_state.pop('tb_df', None)
-                    st.session_state.pop('pl_df', None)
-                    
-                    temp_tb = os.path.join(empresa_path, "temp_uploaded.xlsx")
-                    if os.path.exists(temp_tb): os.remove(temp_tb)
-                    temp_pl = os.path.join(empresa_path, "pl_cubo.xlsx")
-                    if os.path.exists(temp_pl): os.remove(temp_pl)
-                    
-                    st.session_state['success_msg'] = f"✅ Datos transaccionales del periodo {format_periodo(per_to_del)} eliminados con éxito del servidor y memoria activa."
-                    st.rerun()
+                    db = SessionLocal()
+                    hist_recs = db.query(HistoricalDataRecord.periodo).filter(
+                        (HistoricalDataRecord.empresa == target_empresa) | 
+                        (HistoricalDataRecord.empresa == target_empresa.replace("[GRUPO] ", ""))
+                    ).distinct().all()
+                    if not hist_recs and target_empresa.startswith("[GRUPO]"):
+                        hist_recs = db.query(HistoricalDataRecord.periodo).distinct().all()
+                    for r in hist_recs:
+                        if r[0]: per_avail.add(r[0])
+                    db.close()
+                except Exception:
+                    pass
+                
+                # Buscar también periodos en archivos físicos
+                if os.path.exists(target_empresa_path):
+                    for f in os.listdir(target_empresa_path):
+                        if f.startswith("pl_cubo_") and f.endswith(".xlsx"):
+                            p_str = f.replace("pl_cubo_", "").replace(".xlsx", "")
+                            if len(p_str) == 7 and "-" in p_str:
+                                per_avail.add(p_str)
+                
+                per_list = sorted(list(per_avail), reverse=True)
+                
+                if not per_list:
+                    st.info(f"No hay meses guardados para {target_empresa}.")
+                else:
+                    per_to_del = st.selectbox("Periodo a Eliminar", per_list, key=f"sel_del_per_{target_empresa}", format_func=format_periodo)
+                    check_per = st.checkbox(f"Entiendo que borraré todos los datos de {format_periodo(per_to_del)} en {target_empresa}", key=f"check_del_per_{target_empresa}")
+                    if st.button(f"Aniquilar transacciones de {format_periodo(per_to_del)}", type="primary", disabled=not check_per):
+                        try:
+                            db = SessionLocal()
+                            # 1. Borrar Trial Balance
+                            from src.models.trial_balance import TrialBalanceRecord
+                            db.query(TrialBalanceRecord).filter(
+                                (TrialBalanceRecord.empresa == target_empresa) & 
+                                (TrialBalanceRecord.periodo == per_to_del)
+                            ).delete()
+                            
+                            # 2. Borrar P&L Cubo
+                            from src.models.pl_record import PlRecordDim
+                            db.query(PlRecordDim).filter(
+                                (PlRecordDim.empresa == target_empresa) & 
+                                (PlRecordDim.periodo == per_to_del)
+                            ).delete()
+                            
+                            # 3. Borrar Memoria Histórica
+                            db.query(HistoricalDataRecord).filter(
+                                ((HistoricalDataRecord.empresa == target_empresa) | 
+                                 (HistoricalDataRecord.empresa == target_empresa.replace("[GRUPO] ", ""))) & 
+                                (HistoricalDataRecord.periodo == per_to_del)
+                            ).delete()
+                            from src.models.historical_data import HistoricalDetailRecord
+                            db.query(HistoricalDetailRecord).filter(
+                                (HistoricalDetailRecord.empresa == target_empresa) & 
+                                (HistoricalDetailRecord.periodo == per_to_del)
+                            ).delete()
+                            
+                            # 4. Borrar Asientos de Consolidación si aplica
+                            try:
+                                from src.models.consolidacion import JournalEntryModel, JournalEntryLineModel
+                                je_entries = db.query(JournalEntryModel.id).filter(
+                                    (JournalEntryModel.periodo == per_to_del) & 
+                                    (JournalEntryModel.grupo_name == empresa_seleccionada)
+                                ).all()
+                                je_ids = [je[0] for je in je_entries]
+                                if je_ids:
+                                    db.query(JournalEntryLineModel).filter(JournalEntryLineModel.entry_id.in_(je_ids)).delete(synchronize_session=False)
+                                    db.query(JournalEntryModel).filter(JournalEntryModel.id.in_(je_ids)).delete(synchronize_session=False)
+                            except Exception:
+                                pass
+                                
+                            db.commit()
+                            db.close()
+                        except Exception as e:
+                            pass
+                        
+                        # Archivos Físicos P&L y tb temporal
+                        pl_hist = os.path.join(empresa_path, f"pl_cubo_{per_to_del}.xlsx")
+                        if os.path.exists(pl_hist): os.remove(pl_hist)
+                        
+                        # Limpieza de caché de sesión
+                        st.session_state.pop('tb_df', None)
+                        st.session_state.pop('pl_df', None)
+                        
+                        temp_tb = os.path.join(empresa_path, "temp_uploaded.xlsx")
+                        if os.path.exists(temp_tb): os.remove(temp_tb)
+                        temp_pl = os.path.join(empresa_path, "pl_cubo.xlsx")
+                        if os.path.exists(temp_pl): os.remove(temp_pl)
+                        
+                        st.session_state['success_msg'] = f"✅ Datos transaccionales del periodo {format_periodo(per_to_del)} eliminados con éxito del servidor y memoria activa."
+                        st.rerun()
 

@@ -260,7 +260,24 @@ def populate_notes_docx_table(table, chunk_df):
 
 def load_mappings_for_entity(empresa):
     """Carga los mapeos de balance y PL para una entidad."""
+    empresa_clean = str(empresa).replace("[GRUPO] ", "").strip()
     empresa_path = os.path.join("data", "empresas", empresa)
+    if not os.path.exists(empresa_path):
+        empresa_path = os.path.join("data", "empresas", empresa_clean)
+        
+    if empresa.startswith("[GRUPO]"):
+        from src.models.database import SessionLocal
+        from src.models.consolidacion import ConsolidationGroup
+        db = SessionLocal()
+        try:
+            grupo = db.query(ConsolidationGroup).filter_by(nombre_grupo=empresa_clean).first()
+            if grupo and grupo.empresa_matriz:
+                empresa_path = os.path.join("data", "empresas", grupo.empresa_matriz)
+        finally:
+            try:
+                db.close()
+            except:
+                pass
     
     map_balance_df = None
     map_pl_df = None
@@ -492,6 +509,146 @@ class WordTemplateEngine:
         preview_df = preview_df.dropna(how='all', subset=["Detalle"]).reset_index(drop=True)
         return preview_df
 
+    def _get_consolidated_bal_and_pl(self, grupo_id, periodo_actual, comp_period, scale_factor, empresa_path, grupo_name):
+        from src.core.consolidacion_engine import generar_hoja_trabajo
+        import openpyxl
+        df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_actual)
+        df_hoja_comp = None
+        if comp_period != "Ninguno":
+            df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
+            
+        def clean_str(s):
+            if pd.isna(s): return ""
+            return str(s).strip().lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
+
+        bs_subtotals = {
+            "activos corrientes", "activos corrientes totales",
+            "activos no corrientes", "activos no corrientes totales",
+            "total activos", "patrimonio y pasivos",
+            "pasivos corrientes", "pasivo corrientes totales",
+            "pasivos no corrientes", "pasivo no corrientes totales",
+            "total pasivos", "patrimonio", "patrimonio total",
+            "total patrimonio y pasivos", "estado de resultados"
+        }
+        bs_subtotals_normalized = {clean_str(name) for name in bs_subtotals}
+        
+        idx_er_b = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
+        df_hoja_act_sec_b = df_hoja_act.loc[:idx_er_b[0]-1] if not idx_er_b.empty else df_hoja_act
+        df_hoja_act_clean_b = df_hoja_act_sec_b[df_hoja_act_sec_b['Balance clasificado'].notna() & (df_hoja_act_sec_b['Balance clasificado'].str.strip() != "")]
+        df_hoja_act_clean_b = df_hoja_act_clean_b[~df_hoja_act_clean_b['Balance clasificado'].apply(clean_str).isin(bs_subtotals_normalized)]
+        
+        tb_df_bal = pd.DataFrame({
+            'cuenta_id': df_hoja_act_clean_b['Balance clasificado'],
+            'saldo_final': df_hoja_act_clean_b['CONSOLIDADO']
+        })
+        tb_df_comp_bal = None
+        if df_hoja_comp is not None:
+            idx_er_comp_b = df_hoja_comp[df_hoja_comp['Balance clasificado'] == "Estado de Resultados"].index
+            df_hoja_comp_sec_b = df_hoja_comp.loc[:idx_er_comp_b[0]-1] if not idx_er_comp_b.empty else df_hoja_comp
+            df_hoja_comp_clean_b = df_hoja_comp_sec_b[df_hoja_comp_sec_b['Balance clasificado'].notna() & (df_hoja_comp_sec_b['Balance clasificado'].str.strip() != "")]
+            df_hoja_comp_clean_b = df_hoja_comp_clean_b[~df_hoja_comp_clean_b['Balance clasificado'].apply(clean_str).isin(bs_subtotals_normalized)]
+            tb_df_comp_bal = pd.DataFrame({
+                'cuenta_id': df_hoja_comp_clean_b['Balance clasificado'],
+                'saldo_final': df_hoja_comp_clean_b['CONSOLIDADO']
+            })
+            
+        def is_pl_line_local(li):
+            norm = str(li).lower().strip().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
+            if any(x in norm for x in ["ingreso", "gasto", "costo", "egreso", "depreciacion", "amortizacion", "diferencia de cambio", "unidad de reajuste", "ganancia", "perdida"]):
+                if not any(x in norm for x in ["diferido", "diferidos", "anticipado", "anticipados", "por pagar", "por cobrar", "acumulado", "acumulados", "acumulada", "acumuladas", "capital", "reserva", "ejercicio", "periodo"]):
+                    return True
+            return False
+            
+        tb_df_bal = tb_df_bal[~tb_df_bal['cuenta_id'].apply(is_pl_line_local)]
+        if tb_df_comp_bal is not None:
+            tb_df_comp_bal = tb_df_comp_bal[~tb_df_comp_bal['cuenta_id'].apply(is_pl_line_local)]
+            
+        template_bal_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
+        if not os.path.exists(template_bal_path):
+            template_bal_path = os.path.join("templates", "Balance clasificado.xlsx")
+            
+        wb_bal = openpyxl.load_workbook(template_bal_path)
+        ws_bal = wb_bal.active
+        template_accounts = [str(ws_bal.cell(row=r, column=2).value).strip() for r in range(1, ws_bal.max_row+1) if ws_bal.cell(row=r, column=2).value]
+        
+        dummy_map = pd.DataFrame({
+            'N° de Cuenta': tb_df_bal['cuenta_id'],
+            'Clasificación balance': tb_df_bal['cuenta_id']
+        })
+        dummy_map.loc[~dummy_map['N° de Cuenta'].isin(template_accounts), 'Clasificación balance'] = pd.NA
+        
+        from src.reporting.balance_generator import BalanceGenerator
+        gen_bal = BalanceGenerator(template_bal_path)
+        result_bytes_bal = gen_bal.generate(
+            tb_df=tb_df_bal, 
+            map_balance_df=dummy_map, 
+            scale_factor=scale_factor,
+            tb_df_comp=tb_df_comp_bal,
+            periodo_actual_str=periodo_actual,
+            periodo_comp_str=comp_period if comp_period != "Ninguno" else None
+        )
+        
+        col_actual_tmp = str(periodo_actual)
+        col_comp_tmp = str(comp_period) if comp_period != "Ninguno" else "Comp"
+        if col_actual_tmp == col_comp_tmp:
+            col_comp_tmp = f"{col_comp_tmp} (Comp)"
+            
+        from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
+        wb_check_bal = openpyxl.load_workbook(result_bytes_bal, data_only=True)
+        ws_check_bal = wb_check_bal.active
+        cfg_bal = read_template_config(wb_check_bal)
+        if cfg_bal is None:
+            name_col_idx_b, nota_col_idx_b, val25_col_idx_b, val24_col_idx_b = detect_balance_columns(ws_check_bal, wb_check_bal)
+            cfg_bal = {
+                "name_col": name_col_idx_b,
+                "nota_col": nota_col_idx_b if nota_col_idx_b else 0,
+                "val_actual_col": val25_col_idx_b,
+                "val_comp_col": val24_col_idx_b,
+                "data_start_row": 5,
+            }
+        result_bytes_bal.seek(0)
+        bal_df = read_excel_preview(result_bytes_bal, cfg_bal, col_actual_tmp, col_comp_tmp)
+        if "Nota" in bal_df.columns:
+            bal_df = bal_df.drop(columns=["Nota"])
+            
+        pl_subtotals = {
+            "ganancia bruta", "resultado antes de impuestos",
+            "ganancias (perdida) del ejercicio", "ganancia (perdida) del ejercicio",
+            "estado de resultados", "otros rubros no clasificados"
+        }
+        pl_subtotals_normalized = {clean_str(name) for name in pl_subtotals}
+        
+        idx_er_p = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
+        df_hoja_act_sec_pl = df_hoja_act.loc[idx_er_p[0]+1:] if not idx_er_p.empty else df_hoja_act
+        df_hoja_act_clean_pl = df_hoja_act_sec_pl[df_hoja_act_sec_pl['Balance clasificado'].notna() & (df_hoja_act_sec_pl['Balance clasificado'].str.strip() != "")]
+        df_hoja_act_clean_pl = df_hoja_act_clean_pl[~df_hoja_act_clean_pl['Balance clasificado'].apply(clean_str).isin(pl_subtotals_normalized)]
+        
+        pl_dict_act = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_act_clean_pl.iterrows()}
+        pl_df_wide = pd.DataFrame(pl_dict_act)
+        
+        pl_df_comp_wide = None
+        if df_hoja_comp is not None:
+            idx_er_comp_p = df_hoja_comp[df_hoja_comp['Balance clasificado'] == "Estado de Resultados"].index
+            df_hoja_comp_sec_pl = df_hoja_comp.loc[idx_er_comp_p[0]+1:] if not idx_er_comp_p.empty else df_hoja_comp
+            df_hoja_comp_clean_pl = df_hoja_comp_sec_pl[df_hoja_comp_sec_pl['Balance clasificado'].notna() & (df_hoja_comp_sec_pl['Balance clasificado'].str.strip() != "")]
+            df_hoja_comp_clean_pl = df_hoja_comp_clean_pl[~df_hoja_comp_clean_pl['Balance clasificado'].apply(clean_str).isin(pl_subtotals_normalized)]
+            pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean_pl.iterrows()}
+            pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
+            
+        template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+        if not os.path.exists(template_er_path):
+            template_er_path = os.path.join("templates", "Estado de Resultados Clasificados.xlsx")
+            
+        from src.reporting.er_generator import ERGenerator
+        gen_er = ERGenerator(template_er_path)
+        result_bytes_er, pl_df = gen_er.generate(
+            pl_df=pl_df_wide, 
+            scale_factor=scale_factor,
+            pl_df_comp=pl_df_comp_wide,
+            periodo_actual_str=periodo_actual,
+            periodo_comp_str=comp_period if comp_period != "Ninguno" else None
+        )
+        return bal_df, pl_df, result_bytes_bal, result_bytes_er
 
     def process(self, empresa_activa, periodo_actual, periodo_comp, scale_factor=1.0, use_ifrs_auto=True):
         doc = DocxTemplate(self.template_bytes_io)
@@ -539,13 +696,18 @@ class WordTemplateEngine:
                 
             if grupo_id:
                 from src.core.consolidacion_engine import generar_hoja_trabajo
-                df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_actual)
+                df_hoja_act, msg_act = generar_hoja_trabajo(grupo_id, periodo_actual)
                 if df_hoja_act is not None:
                     idx_er_act = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
                     df_sec_act = df_hoja_act.loc[idx_er_act[0]+1:] if not idx_er_act.empty else df_hoja_act
                     row_hoja_act = df_sec_act[df_sec_act['Balance clasificado'].astype(str).str.strip() == "Ganancias (Pérdida) del Ejercicio"]
                     val_utilidad_pesos = -1 * float(row_hoja_act['CONSOLIDADO'].values[0]) if not row_hoja_act.empty else 0.0
+                else:
+                    raise ValueError(f"No hay información financiera cargada para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Por favor verifica que la empresa matriz tenga cargado dicho periodo.")
         else:
+            tb_check = TrialBalanceDB.get_trial_balance(empresa_activa, periodo_actual)
+            if tb_check is None or tb_check.empty:
+                raise ValueError(f"No se encontraron saldos de Balance para la empresa '{empresa_activa}' en el periodo {periodo_actual}. Por favor sube el archivo en '1️⃣ Cargas de datos'.")
             val_utilidad_pesos = -1 * PlCuboDB.get_pl_cubo_total_sum(empresa_activa, periodo_actual)
             
         txt_utilidad_neta = ""
@@ -639,8 +801,8 @@ class WordTemplateEngine:
                 # Generar reporte a DataFrame
                 preview_df = None
                 
-                # Seleccionar comparativo dinámico o manual
-                comp_period = override_period if override_period else (periodo_comp_balance if code == "#BALANCE" else periodo_comp_resultados)
+                # Seleccionar comparativo dinámico o manual (IFRS: Balance, EFE y Patrimonio usan cierre anual anterior; ER y ORI usan mismo periodo anterior)
+                comp_period = override_period if override_period else (periodo_comp_balance if code in ["#BALANCE", "#EFE", "#PATRIMONIO"] else periodo_comp_resultados)
                 
                 if code == "#BALANCE":
                     if is_consolidated:
@@ -652,15 +814,34 @@ class WordTemplateEngine:
                         finally:
                             db.close()
                         from src.core.consolidacion_engine import generar_hoja_trabajo
-                        df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        df_hoja_act, msg_act = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        if df_hoja_act is None:
+                            raise ValueError(f"No hay datos para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Verifica que la empresa matriz tenga cargado dicho periodo.")
+                            
                         df_hoja_comp = None
                         if comp_period != "Ninguno":
                             df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
                             
+                        def clean_str(s):
+                            if pd.isna(s): return ""
+                            return str(s).strip().lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
+
+                        bs_subtotals = {
+                            "activos corrientes", "activos corrientes totales",
+                            "activos no corrientes", "activos no corrientes totales",
+                            "total activos", "patrimonio y pasivos",
+                            "pasivos corrientes", "pasivo corrientes totales",
+                            "pasivos no corrientes", "pasivo no corrientes totales",
+                            "total pasivos", "patrimonio", "patrimonio total",
+                            "total patrimonio y pasivos", "estado de resultados"
+                        }
+                        bs_subtotals_normalized = {clean_str(name) for name in bs_subtotals}
+
                         # Slice assets
                         idx_er = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
                         df_hoja_act_sec = df_hoja_act.loc[:idx_er[0]-1] if not idx_er.empty else df_hoja_act
                         df_hoja_act_clean = df_hoja_act_sec[df_hoja_act_sec['Balance clasificado'].notna() & (df_hoja_act_sec['Balance clasificado'].str.strip() != "")]
+                        df_hoja_act_clean = df_hoja_act_clean[~df_hoja_act_clean['Balance clasificado'].apply(clean_str).isin(bs_subtotals_normalized)]
                         
                         tb_df = pd.DataFrame({'cuenta_id': df_hoja_act_clean['Balance clasificado'], 'saldo_final': df_hoja_act_clean['CONSOLIDADO']})
                         tb_df_comp = None
@@ -668,11 +849,28 @@ class WordTemplateEngine:
                             idx_er_comp = df_hoja_comp[df_hoja_comp['Balance clasificado'] == "Estado de Resultados"].index
                             df_hoja_comp_sec = df_hoja_comp.loc[:idx_er_comp[0]-1] if not idx_er_comp.empty else df_hoja_comp
                             df_hoja_comp_clean = df_hoja_comp_sec[df_hoja_comp_sec['Balance clasificado'].notna() & (df_hoja_comp_sec['Balance clasificado'].str.strip() != "")]
+                            df_hoja_comp_clean = df_hoja_comp_clean[~df_hoja_comp_clean['Balance clasificado'].apply(clean_str).isin(bs_subtotals_normalized)]
                             tb_df_comp = pd.DataFrame({'cuenta_id': df_hoja_comp_clean['Balance clasificado'], 'saldo_final': df_hoja_comp_clean['CONSOLIDADO']})
+                            
+                        # Excluir cuentas de resultado para evitar distorsiones en el Balance
+                        def is_pl_line_local(li):
+                            norm = str(li).lower().strip().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
+                            if any(x in norm for x in ["ingreso", "gasto", "costo", "egreso", "depreciacion", "amortizacion", "diferencia de cambio", "unidad de reajuste", "ganancia", "perdida"]):
+                                if not any(x in norm for x in ["diferido", "diferidos", "anticipado", "anticipados", "por pagar", "por cobrar", "acumulado", "acumulados", "acumulada", "acumuladas", "capital", "reserva", "ejercicio", "periodo"]):
+                                    return True
+                            return False
+                            
+                        tb_df = tb_df[~tb_df['cuenta_id'].apply(is_pl_line_local)]
+                        if tb_df_comp is not None:
+                            tb_df_comp = tb_df_comp[~tb_df_comp['cuenta_id'].apply(is_pl_line_local)]
+                            
+                        template_bal_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                        if not os.path.exists(template_bal_path):
+                            template_bal_path = os.path.join("templates", "Balance clasificado.xlsx")
                             
                         dummy_map = pd.DataFrame({'N° de Cuenta': tb_df['cuenta_id'], 'Clasificación balance': tb_df['cuenta_id']})
                         from src.reporting.balance_generator import BalanceGenerator
-                        gen = BalanceGenerator(os.path.join(empresa_path, "Balance clasificado.xlsx"))
+                        gen = BalanceGenerator(template_bal_path)
                         result_bytes = gen.generate(tb_df, dummy_map, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
                         col_actual = str(periodo_actual)
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
@@ -697,15 +895,30 @@ class WordTemplateEngine:
                         finally:
                             db.close()
                         from src.core.consolidacion_engine import generar_hoja_trabajo
-                        df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        df_hoja_act, msg_act = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        if df_hoja_act is None:
+                            raise ValueError(f"No hay datos para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Verifica que la empresa matriz tenga cargado dicho periodo.")
+                            
                         df_hoja_comp = None
                         if comp_period != "Ninguno":
                             df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
                             
+                        def clean_str(s):
+                            if pd.isna(s): return ""
+                            return str(s).strip().lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
+
+                        pl_subtotals = {
+                            "ganancia bruta", "resultado antes de impuestos",
+                            "ganancias (perdida) del ejercicio", "ganancia (perdida) del ejercicio",
+                            "estado de resultados", "otros rubros no clasificados"
+                        }
+                        pl_subtotals_normalized = {clean_str(name) for name in pl_subtotals}
+
                         # Slice PL
                         idx_er = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
                         df_hoja_act_sec = df_hoja_act.loc[idx_er[0]+1:] if not idx_er.empty else df_hoja_act
                         df_hoja_act_clean = df_hoja_act_sec[df_hoja_act_sec['Balance clasificado'].notna() & (df_hoja_act_sec['Balance clasificado'].str.strip() != "")]
+                        df_hoja_act_clean = df_hoja_act_clean[~df_hoja_act_clean['Balance clasificado'].apply(clean_str).isin(pl_subtotals_normalized)]
                         pl_dict_act = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_act_clean.iterrows()}
                         pl_df_wide = pd.DataFrame(pl_dict_act)
                         
@@ -714,11 +927,16 @@ class WordTemplateEngine:
                             idx_er_comp = df_hoja_comp[df_hoja_comp['Balance clasificado'] == "Estado de Resultados"].index
                             df_hoja_comp_sec = df_hoja_comp.loc[idx_er_comp[0]+1:] if not idx_er_comp.empty else df_hoja_comp
                             df_hoja_comp_clean = df_hoja_comp_sec[df_hoja_comp_sec['Balance clasificado'].notna() & (df_hoja_comp_sec['Balance clasificado'].str.strip() != "")]
+                            df_hoja_comp_clean = df_hoja_comp_clean[~df_hoja_comp_clean['Balance clasificado'].apply(clean_str).isin(pl_subtotals_normalized)]
                             pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean.iterrows()}
                             pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
                             
+                        template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                        if not os.path.exists(template_er_path):
+                            template_er_path = os.path.join("templates", "Estado de Resultados Clasificados.xlsx")
+                            
                         from src.reporting.er_generator import ERGenerator
-                        gen = ERGenerator(os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx"))
+                        gen = ERGenerator(template_er_path)
                         result_bytes, _ = gen.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
                         col_actual = str(periodo_actual)
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
@@ -764,8 +982,12 @@ class WordTemplateEngine:
                             pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean.iterrows()}
                             pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
                             
+                        template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                        if not os.path.exists(template_er_path):
+                            template_er_path = os.path.join("templates", "Estado de Resultados Clasificados.xlsx")
+                            
                         from src.reporting.er_generator import ERGenerator
-                        gen_er = ERGenerator(os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx"))
+                        gen_er = ERGenerator(template_er_path)
                         _, preview_er = gen_er.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
                     else:
                         pl_df_wide = PlCuboDB.get_pl_cubo(empresa_activa, periodo_actual)
@@ -777,6 +999,8 @@ class WordTemplateEngine:
                     
                     from src.reporting.ori_generator import OriGenerator
                     template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
+                    if not os.path.exists(template_ori_path):
+                        template_ori_path = os.path.join("templates", "Estado de Resultados Integrales.xlsx")
                     if os.path.exists(template_ori_path):
                         gen_ori = OriGenerator(template_ori_path)
                         result_bytes = gen_ori.generate(
@@ -793,12 +1017,36 @@ class WordTemplateEngine:
                         
                 elif code == "#PATRIMONIO":
                     template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
+                    if not os.path.exists(template_pat_path):
+                        template_pat_path = os.path.join("templates", "Estado de Cambios en el Patrimonio.xlsx")
                     if os.path.exists(template_pat_path):
                         from src.reporting.patrimonio_generator import PatrimonioGenerator
                         pat_engine = PatrimonioGenerator(template_pat_path)
+                        
+                        bal_df_pat = None
+                        pl_df_pat = None
+                        if is_consolidated:
+                            grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
+                            db = SessionLocal()
+                            try:
+                                grupo_obj = db.query(ConsolidationGroup).filter_by(nombre_grupo=grupo_name).first()
+                                grupo_id = grupo_obj.id if grupo_obj else None
+                            finally:
+                                db.close()
+                                
+                            if grupo_id:
+                                bal_df_pat, pl_df_pat, _, _ = self._get_consolidated_bal_and_pl(
+                                    grupo_id=grupo_id,
+                                    periodo_actual=periodo_actual,
+                                    comp_period=comp_period,
+                                    scale_factor=scale_factor,
+                                    empresa_path=empresa_path,
+                                    grupo_name=grupo_name
+                                )
+                                
                         ex_pat = pat_engine.generate(
-                            bal_preview_df=None,
-                            pl_preview_df=None,
+                            bal_preview_df=bal_df_pat,
+                            pl_preview_df=pl_df_pat,
                             periodo_actual_str=str(periodo_actual),
                             periodo_comp_str=str(comp_period) if comp_period != "Ninguno" else None,
                             empresa=empresa_activa

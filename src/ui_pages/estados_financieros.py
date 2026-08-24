@@ -4,7 +4,7 @@ import os
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 
 def render(empresa_seleccionada, empresa_path):
-    if empresa_seleccionada == "🌐 [GLOBAL] Configuración General":
+    if "GLOBAL" in empresa_seleccionada:
         st.warning("⚠️ Módulo de Sociedad Activa: Por favor, selecciona una empresa de trabajo específica (ej. Pacifico SpA) en la barra lateral izquierda para acceder a esta sección.")
         st.stop()
         
@@ -32,19 +32,24 @@ def render(empresa_seleccionada, empresa_path):
     with col_p2:
         periodo_comp = st.selectbox("Periodo Comparativo", lista_opciones, index=1 if len(lista_opciones)>1 else 0, format_func=format_periodo)
         
-    # Cargar dinámicamente desde base de datos a memoria estandar si hay datos (usando caché de sesión)
-    db_cache_key = f"_ef_db_cache_{empresa_seleccionada}_{periodo_actual}_{periodo_comp}"
-    if db_cache_key not in st.session_state or 'tb_df' not in st.session_state:
-        if available_periods:
-            st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
-            st.session_state['tb_df_comp'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp)
-            from src.models.pl_cubo_db import PlCuboDB
-            st.session_state['pl_df'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
-            st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp)
-            st.session_state[db_cache_key] = True
-        else:
-            if 'tb_df' in st.session_state:
-                st.session_state['tb_df_comp'] = st.session_state['tb_df'].copy()
+    # Cargar dinámicamente desde base de datos a memoria estándar
+    if available_periods and periodo_actual in available_periods:
+        st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+        st.session_state['tb_df_comp'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+        from src.models.pl_cubo_db import PlCuboDB
+        st.session_state['pl_df'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
+        st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+
+    # Garantizar carga de mapeos desde disco si no están en sesión
+    if 'map_balance_df' not in st.session_state or st.session_state['map_balance_df'] is None or (isinstance(st.session_state['map_balance_df'], pd.DataFrame) and st.session_state['map_balance_df'].empty):
+        map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+        if os.path.exists(map_bal_path):
+            st.session_state['map_balance_df'] = pd.read_excel(map_bal_path, dtype=str)
+
+    if 'map_pl_df' not in st.session_state or st.session_state['map_pl_df'] is None or (isinstance(st.session_state['map_pl_df'], pd.DataFrame) and st.session_state['map_pl_df'].empty):
+        map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
+        if os.path.exists(map_pl_path):
+            st.session_state['map_pl_df'] = pd.read_excel(map_pl_path, dtype=str)
     
     tab_bal, tab_pl, tab_flujo, tab_patrimonio, tab_integral = st.tabs([
         "1️⃣ Balance Clasificado", 
@@ -266,37 +271,47 @@ def render(empresa_seleccionada, empresa_path):
         scale_factor = 1000.0 if unidad_medida.startswith("M$") else 1.0
 
         if st.button("🚀 Ejecutar E.R. Clasificados", type="primary"):
-            missing_periods = []
-            if 'pl_df' not in st.session_state or st.session_state['pl_df'] is None or (isinstance(st.session_state['pl_df'], pd.DataFrame) and st.session_state['pl_df'].empty):
-                missing_periods.append(str(periodo_actual))
-            if 'pl_df_comp' not in st.session_state or st.session_state['pl_df_comp'] is None or (isinstance(st.session_state['pl_df_comp'], pd.DataFrame) and st.session_state['pl_df_comp'].empty):
-                if periodo_comp and str(periodo_comp) not in missing_periods:
-                    missing_periods.append(str(periodo_comp))
-                    
-            if missing_periods:
-                st.warning(f"⚠️ No se ha encontrado el P&L para los siguientes periodos seleccionados: {', '.join(missing_periods)}. Dirígete al módulo '1️⃣ Cargas de datos', selecciona el mes/año respectivo y sube su P&L asociado.")
+            from src.core.sabana_builder import build_pl_sabana
+            
+            # Obtener o derivar P&L actual
+            pl_df = st.session_state.get('pl_df')
+            if pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty):
+                tb_act = st.session_state.get('tb_df')
+                map_pl_df = st.session_state.get('map_pl_df')
+                if tb_act is not None and not tb_act.empty and map_pl_df is not None:
+                    pl_df = build_pl_sabana(None, map_pl_df, tb_act)
+                    st.session_state['pl_df'] = pl_df
+
+            # Obtener o derivar P&L comparativo
+            pl_df_comp = st.session_state.get('pl_df_comp')
+            if (pl_df_comp is None or (isinstance(pl_df_comp, pd.DataFrame) and pl_df_comp.empty)) and periodo_comp != "Ninguno":
+                tb_comp = st.session_state.get('tb_df_comp')
+                map_pl_df = st.session_state.get('map_pl_df')
+                if tb_comp is not None and not tb_comp.empty and map_pl_df is not None:
+                    pl_df_comp = build_pl_sabana(None, map_pl_df, tb_comp)
+                    st.session_state['pl_df_comp'] = pl_df_comp
+
+            if pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty):
+                st.warning(f"⚠️ No se ha encontrado el P&L ni el Trial Balance para el periodo {periodo_actual}. Sube el archivo correspondiente en 'Cargas de datos'.")
             else:
                 with st.spinner("Mapeando columnas y calculando sumatorias y subtotales del Estado de Resultados..."):
                     try:
                         import time
                         start_time = time.time()
-                        import importlib
-                        import src.reporting.er_generator
-                        importlib.reload(src.reporting.er_generator)
                         from src.reporting.er_generator import ERGenerator
-                        from src.reporting.excel_export import generate_excel_report
-                        import io
                         
                         template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
                         if not os.path.exists(template_er_path):
-                            st.error(f"❌ No se encontró la plantilla base '{template_er_path}' en la carpeta de la empresa.)")
+                            st.error(f"❌ No se encontró la plantilla base '{template_er_path}' en la carpeta de la empresa.")
                         else:
-                            pl_df = st.session_state['pl_df'].copy()
-                            
                             engine = ERGenerator(template_er_path)
-                            # Guardamos ambos en session state para permitir las descargas
-                            pl_df_comp = st.session_state.get('pl_df_comp')
-                            excel_output, preview_df = engine.generate(pl_df, scale_factor=scale_factor, pl_df_comp=pl_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp)
+                            excel_output, preview_df = engine.generate(
+                                pl_df, 
+                                scale_factor=scale_factor, 
+                                pl_df_comp=pl_df_comp, 
+                                periodo_actual_str=periodo_actual, 
+                                periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None
+                            )
                             st.session_state['er_preview_df'] = preview_df
                             st.session_state['er_excel_binary'] = excel_output.getvalue()
                             
@@ -802,22 +817,66 @@ def render(empresa_seleccionada, empresa_path):
                 st.warning("⚠️ No se encontró la plantilla 'Estado de Cambios en el Patrimonio.xlsx'.")
         
         if st.button("🚀 Ejecutar Cambios en el Patrimonio", type="primary"):
-            # Verificamos que se haya corrido el Balance y P&L primero para robarle los Bottom Lines matemáticos
+            scale_factor = 1000.0 if "M$" in st.session_state.get('um_bal', 'M$') else 1.0
+            # Auto-generar Balance si no está en sesión
+            if 'preview_df' not in st.session_state or st.session_state['preview_df'] is None:
+                tmpl_bal = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                tb_act = st.session_state.get('tb_df')
+                map_bal = st.session_state.get('map_balance_df')
+                if os.path.exists(tmpl_bal) and tb_act is not None and map_bal is not None:
+                    from src.reporting.balance_generator import BalanceGenerator
+                    from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
+                    import openpyxl
+                    b_engine = BalanceGenerator(tmpl_bal)
+                    tb_comp = st.session_state.get('tb_df_comp')
+                    b_out = b_engine.generate(tb_act, map_bal, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                    st.session_state['balance_excel_binary'] = b_out.getvalue()
+                    b_out.seek(0)
+                    wb_c = openpyxl.load_workbook(b_out, data_only=True)
+                    ws_c = wb_c.active
+                    b_cfg = read_template_config(wb_c)
+                    if b_cfg is None:
+                        n_col, nt_col, v_act, v_comp = detect_balance_columns(ws_c, wb_c)
+                        b_cfg = {"name_col": n_col, "nota_col": nt_col if nt_col else 0, "val_actual_col": v_act, "val_comp_col": v_comp, "data_start_row": 5}
+                    c_act = str(periodo_actual)
+                    c_cmp = str(periodo_comp) if periodo_comp != "Ninguno" else f"{c_act} (Comp)"
+                    b_out.seek(0)
+                    st.session_state['preview_df'] = read_excel_preview(b_out, b_cfg, c_act, c_cmp)
+
+            # Auto-generar ER si no está en sesión
+            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                from src.core.sabana_builder import build_pl_sabana
+                pl_act = st.session_state.get('pl_df')
+                map_pl = st.session_state.get('map_pl_df')
+                tb_act = st.session_state.get('tb_df')
+                if (pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty)) and tb_act is not None and map_pl is not None:
+                    pl_act = build_pl_sabana(None, map_pl, tb_act)
+                    st.session_state['pl_df'] = pl_act
+
+                pl_cmp = st.session_state.get('pl_df_comp')
+                tb_cmp = st.session_state.get('tb_df_comp')
+                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and tb_cmp is not None and map_pl is not None and periodo_comp != "Ninguno":
+                    pl_cmp = build_pl_sabana(None, map_pl, tb_cmp)
+                    st.session_state['pl_df_comp'] = pl_cmp
+
+                if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
+                    from src.reporting.er_generator import ERGenerator
+                    er_eng = ERGenerator(tmpl_er)
+                    er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                    st.session_state['er_preview_df'] = er_prev
+                    st.session_state['er_excel_binary'] = er_out.getvalue()
+
             if 'preview_df' not in st.session_state or 'er_preview_df' not in st.session_state:
-                st.warning("⚠️ Debes pulsar el botón de 'Procesar Balance' y 'Procesar E.R.' en esta misma pantalla antes de procesar el Patrimonio para que el sistema tenga cargado el resultado del ejercicio final.")
+                st.warning("⚠️ No se pudieron cargar los datos de Balance y P&L. Por favor, asegúrate de tener un Trial Balance cargado.")
             else:
                 with st.spinner("Realizando cuadratura de capital, reservas e inyectando resultados del ER..."):
                     try:
                         import sys
                         import time
                         start_time = time.time()
-                        import importlib
-                        import src.reporting.patrimonio_generator
-                        importlib.reload(sys.modules['src.reporting.patrimonio_generator'])
                         from src.reporting.patrimonio_generator import PatrimonioGenerator
                         
-                        import src.reporting.formatting
-                        importlib.reload(sys.modules['src.reporting.formatting'])
                         template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
                         if not os.path.exists(template_pat_path):
                             st.error(f"❌ No se encontró la plantilla '{template_pat_path}'.")
@@ -826,14 +885,13 @@ def render(empresa_seleccionada, empresa_path):
                             pl_df = st.session_state['er_preview_df'].copy()
                             
                             pat_engine = PatrimonioGenerator(template_pat_path)
-                            ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp), empresa=empresa_seleccionada)
+                            ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None, empresa=empresa_seleccionada)
                             st.session_state['pat_excel_binary'] = ex_pat
                             
                             ex_pat.seek(0)
                             from src.core.excel_utils import detect_patrimonio_skiprows
                             pat_skip = detect_patrimonio_skiprows(ex_pat)
                             ex_pat.seek(0)
-                            # Skip header space to grab the table rows
                             prev = pd.read_excel(ex_pat, skiprows=pat_skip)
                             from src.core.excel_utils import clean_preview_dataframe
                             prev = clean_preview_dataframe(prev)
@@ -905,16 +963,39 @@ def render(empresa_seleccionada, empresa_path):
                 st.warning("⚠️ No se encontró la plantilla 'Estado de Resultados Integrales.xlsx'.")
         
         if st.button("🚀 Ejecutar Resultados Integrales", type="primary"):
-            if 'er_preview_df' not in st.session_state:
-                st.warning("⚠️ Debes pulsar el botón de 'Procesar E.R. Clasificados' primero para tener cargados sobre este entorno los resultados de las operaciones continuadas.")
+            scale_factor = 1000.0 if "M$" in st.session_state.get('um_er', 'M$') else 1.0
+            # Auto-generar ER si no está en sesión
+            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                from src.core.sabana_builder import build_pl_sabana
+                pl_act = st.session_state.get('pl_df')
+                map_pl = st.session_state.get('map_pl_df')
+                tb_act = st.session_state.get('tb_df')
+                if (pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty)) and tb_act is not None and map_pl is not None:
+                    pl_act = build_pl_sabana(None, map_pl, tb_act)
+                    st.session_state['pl_df'] = pl_act
+
+                pl_cmp = st.session_state.get('pl_df_comp')
+                tb_cmp = st.session_state.get('tb_df_comp')
+                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and tb_cmp is not None and map_pl is not None and periodo_comp != "Ninguno":
+                    pl_cmp = build_pl_sabana(None, map_pl, tb_cmp)
+                    st.session_state['pl_df_comp'] = pl_cmp
+
+                if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
+                    from src.reporting.er_generator import ERGenerator
+                    er_eng = ERGenerator(tmpl_er)
+                    er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                    st.session_state['er_preview_df'] = er_prev
+                    st.session_state['er_excel_binary'] = er_out.getvalue()
+
+            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                st.warning("⚠️ No se pudieron cargar los resultados operacionales para calcular el ORI. Por favor verifica que el periodo tenga un Trial Balance cargado.")
             else:
                 with st.spinner("Desplegando componentes de otro resultado integral..."):
                     try:
                         import sys
                         import time
                         start_time = time.time()
-                        import src.reporting.ori_generator
-                        importlib.reload(sys.modules['src.reporting.ori_generator'])
                         from src.reporting.ori_generator import OriGenerator
                         template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
                         if not os.path.exists(template_ori_path):
@@ -926,7 +1007,7 @@ def render(empresa_seleccionada, empresa_path):
                             ex_ori = ori_engine.generate(
                                 pl_df, 
                                 periodo_actual_str=str(periodo_actual), 
-                                periodo_comp_str=str(periodo_comp),
+                                periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None,
                                 bal_preview_df=st.session_state.get('preview_df'),
                                 empresa=empresa_seleccionada
                             )

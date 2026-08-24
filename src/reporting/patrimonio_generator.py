@@ -262,6 +262,55 @@ class PatrimonioGenerator:
             
         # ------------------ CÁLCULO E INYECCIÓN DE DATOS ------------------
 
+        # Extraer Ganancia (pérdida) del Estado de Resultados si está disponible
+        def get_pl_val(col_target):
+            if pl_preview_df is not None and not pl_preview_df.empty:
+                clasif_col = pl_preview_df.columns[0]
+                target_col_name = None
+                if col_target in pl_preview_df.columns:
+                    target_col_name = col_target
+                else:
+                    year = col_target[:4] if isinstance(col_target, str) and len(col_target) >= 4 else ""
+                    month = col_target[5:7] if isinstance(col_target, str) and len(col_target) >= 7 else ""
+                    for c in pl_preview_df.columns[1:]:
+                        c_str = str(c).lower()
+                        if year and year in c_str:
+                            if not month or (month == "06" and "jun" in c_str) or (month == "12" and "dic" in c_str) or (month == "03" and "mar" in c_str):
+                                target_col_name = c
+                                break
+                    if not target_col_name:
+                        # Fallback a la primera columna numérica después de Clasificación/Nota
+                        data_cols = [c for c in pl_preview_df.columns if c not in [clasif_col, "Nota", "nota"]]
+                        if data_cols:
+                            target_col_name = data_cols[0]
+
+                if not target_col_name:
+                    return None
+
+                target_names = [
+                    "propietarios de la controladora",
+                    "ganancia (perdida) del ejercicio",
+                    "ganancias (perdida) del ejercicio",
+                    "ganancia (pérdida) del ejercicio",
+                    "ganancias (pérdidas) del ejercicio",
+                    "(perdida) procedente de operaciones continuadas",
+                    "(pérdida) procedente de operaciones continuadas",
+                    "perdida", "pérdida"
+                ]
+                for name in target_names:
+                    matched = pl_preview_df[pl_preview_df[clasif_col].astype(str).str.replace(r'\xa0', ' ', regex=True).str.strip().str.lower() == name]
+                    if not matched.empty:
+                        val = matched[target_col_name].iloc[0]
+                        if pd.notna(val) and str(val).strip() != "":
+                            try:
+                                return float(val)
+                            except:
+                                pass
+            return None
+
+        pl_val_actual = get_pl_val(col_actual)
+        pl_val_comp = get_pl_val(col_comp)
+
         # 1. Bloque Ejercicio Actual (row_ini_25 a row_fin_25)
         periodo_ini_actual = get_prior_december_period(col_actual)
         if periodo_ini_actual:

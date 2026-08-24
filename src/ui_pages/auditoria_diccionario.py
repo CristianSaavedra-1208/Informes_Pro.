@@ -92,7 +92,7 @@ def render(empresa_seleccionada, empresa_path):
             
     st.write("---")
     st.write("---")
-    st.subheader("Sábanas de Cuadratura (Lead Sheets)")
+    st.subheader("Matrices de Cuadratura")
     st.write("Traza cada línea del Diccionario Maestro hacia las cuentas de tu ERP que la componen (cruzando el Mapeo activo y el Trial Balance).")
     
     is_consolidated = empresa_seleccionada.startswith("[GRUPO]")
@@ -137,7 +137,7 @@ def render(empresa_seleccionada, empresa_path):
     col_btn_aud1, col_btn_aud2 = st.columns(2)
     
     with col_btn_aud1:
-        if st.button("Generar Sábana Cuadratura (Balance)", type="secondary", use_container_width=True):
+        if st.button("Generar Matriz Cuadratura (Balance)", type="secondary", use_container_width=True):
             try:
                 # Cargar mapeo de balance (local o global)
                 map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
@@ -167,26 +167,26 @@ def render(empresa_seleccionada, empresa_path):
                         
                 if df_tie is not None and not df_tie.empty:
                     p_name = sel_periodo_bal if sel_periodo_bal else "Actual"
-                    excel_data = df_to_excel_bytes(df_tie, 'Lead Sheet Balance')
+                    excel_data = df_to_excel_bytes(df_tie, 'Matriz Balance')
                     
-                    st.write("### 📊 Vista Previa: Sábana de Cuadratura (Balance)")
+                    st.write("### 📊 Vista Previa: Matriz de Cuadratura (Balance)")
                     st.dataframe(df_tie, use_container_width=True)
                     
                     clean_co_name = empresa_seleccionada.replace("[GRUPO] ", "").replace(" ", "_")
                     st.download_button(
-                        label=f"📥 Descargar Lead_Sheet_Balance_{clean_co_name}_{p_name}.xlsx",
+                        label=f"📥 Descargar Matriz_Balance_{clean_co_name}_{p_name}.xlsx",
                         data=excel_data,
-                        file_name=f"Lead_Sheet_Balance_{clean_co_name}_{p_name}.xlsx",
+                        file_name=f"Matriz_Balance_{clean_co_name}_{p_name}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
-                    st.success(f"✅ Lead Sheet / Sábana de Balance ({p_name}) generada con {len(df_tie)} filas.")
+                    st.success(f"✅ Matriz de Balance ({p_name}) generada con {len(df_tie)} filas.")
                 else:
                     st.warning("⚠️ No se pudieron consolidar datos de balance para esta selección.")
             except Exception as e:
-                st.error(f"Error al generar Sábana de Balance: {e}")
+                st.error(f"Error al generar Matriz de Balance: {e}")
 
     with col_btn_aud2:
-        if st.button("Generar Sábana Cuadratura (P&L Matrix)", type="secondary", use_container_width=True):
+        if st.button("Generar Matriz Cuadratura (P&L)", type="secondary", use_container_width=True):
             try:
                 # Cargar mapeo de P&L (local o global)
                 map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
@@ -208,23 +208,23 @@ def render(empresa_seleccionada, empresa_path):
                     
                 if df_pl_tie is not None and not df_pl_tie.empty:
                     p_name_pl = sel_periodo_pl if sel_periodo_pl else "Actual"
-                    excel_data_pl = df_to_excel_bytes(df_pl_tie, 'Lead Sheet PL Matrix')
+                    excel_data_pl = df_to_excel_bytes(df_pl_tie, 'Matriz PL')
                     
-                    st.write("### 📊 Vista Previa: Sábana de Cuadratura (P&L Matrix)")
+                    st.write("### 📊 Vista Previa: Matriz de Cuadratura (P&L)")
                     st.dataframe(df_pl_tie, use_container_width=True)
                     
                     clean_co_name = empresa_seleccionada.replace("[GRUPO] ", "").replace(" ", "_")
                     st.download_button(
-                        label=f"📥 Descargar Lead_Sheet_PL_{clean_co_name}_{p_name_pl}.xlsx",
+                        label=f"📥 Descargar Matriz_PL_{clean_co_name}_{p_name_pl}.xlsx",
                         data=excel_data_pl,
-                        file_name=f"Lead_Sheet_PL_{clean_co_name}_{p_name_pl}.xlsx",
+                        file_name=f"Matriz_PL_{clean_co_name}_{p_name_pl}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
-                    st.success(f"✅ Lead Sheet / Sábana de P&L Matrix ({p_name_pl}) generada con {len(df_pl_tie)} filas.")
+                    st.success(f"✅ Matriz de P&L ({p_name_pl}) generada con {len(df_pl_tie)} filas.")
                 else:
                     st.warning("⚠️ No se pudieron consolidar datos de P&L para esta selección.")
             except Exception as e:
-                st.error(f"Error al generar Sábana de P&L Matrix: {e}")
+                st.error(f"Error al generar Matriz de P&L: {e}")
 
 
 

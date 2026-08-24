@@ -106,21 +106,11 @@ def render(empresa_seleccionada, empresa_path):
         
     st.write("")
     
-    # 1. Obtener períodos históricos disponibles para los selectores
-    from src.models.database import SessionLocal
-    from src.models.historical_data import HistoricalDataRecord
-    
-    db = SessionLocal()
-    try:
-        per_recs = db.query(HistoricalDataRecord.periodo).distinct().all()
-        periodos_hist = sorted([r[0] for r in per_recs], reverse=True)
-    except Exception as e:
-        periodos_hist = []
-    finally:
-        db.close()
-        
+    # 1. Obtener períodos disponibles unificados (Memoria Activa + Histórico)
+    from src.models.trial_balance_db import TrialBalanceDB
+    periodos_hist = TrialBalanceDB.get_available_periods(empresa_seleccionada)
     if not periodos_hist:
-        periodos_hist = ["2025-12", "2025-03", "2024-12"]
+        periodos_hist = ["2026-12", "2026-07", "2026-06", "2026-03", "2025-12"]
         
     # 2. Configuración de parámetros en columnas
     st.subheader("⚙️ Configuración del Informe")
@@ -193,7 +183,13 @@ def render(empresa_seleccionada, empresa_path):
         if st.button("Generar Reporte Corporativo", type="primary", use_container_width=True):
             with st.spinner("Procesando plantilla e inyectando datos financieros..."):
                 try:
+                    import importlib
+                    import src.core.word_template_engine
+                    importlib.reload(src.core.word_template_engine)
+                    from src.core.word_template_engine import WordTemplateEngine
+                    
                     # Crear una copia de los bytes subidos
+                    uploaded_file.seek(0)
                     template_bytes = BytesIO(uploaded_file.read())
                     
                     # Instanciar el motor y ejecutar
@@ -211,8 +207,7 @@ def render(empresa_seleccionada, empresa_path):
                     st.session_state['corp_word_filename'] = f"Reporte_Corporativo_{empresa_seleccionada.replace('[GRUPO] ', '').replace(' ', '_')}_{periodo_actual}.docx"
                     st.success("¡Reporte generado con éxito!")
                 except Exception as e:
-                    st.error(f"Ocurrió un error al procesar el reporte: {str(e)}")
-                    st.exception(e)
+                    st.warning(f"⚠️ **Información del Sistema:** {str(e)}")
                     
         if 'corp_word_output_bytes' in st.session_state:
             st.write("---")
