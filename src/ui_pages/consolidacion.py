@@ -260,6 +260,12 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_guardar_asiento(sel_grupo, periodo_a, col_ajuste):
+                from src.core.consolidacion_lock_manager import ConsolidationLockManager
+                if ConsolidationLockManager.is_period_locked(sel_grupo, periodo_a):
+                    st.session_state["asiento_msg_error"] = f"🔒 No se puede guardar en el período {format_periodo(periodo_a)} porque está cerrado con candado. Para modificarlo, reábrelo primero en Históricos."
+                    st.session_state["asiento_msg_success"] = None
+                    return
+
                 glosa_val = st.session_state.get("asiento_glosa", "").strip()
                 es_rec_val = st.session_state.get("asiento_es_rec", False)
                 draft_lines = st.session_state.get("temp_asiento_lineas", [])
@@ -269,13 +275,19 @@ def render(empresa_seleccionada, empresa_path):
                     st.session_state["asiento_msg_success"] = None
                     return
                     
-                tot_d = sum(l["debe"] for l in draft_lines)
-                tot_h = sum(l["haber"] for l in draft_lines)
-                diff = tot_d - tot_h
-                has_dynamic = any(l["elimina_saldo_total"] for l in draft_lines)
+                from src.core.consolidacion_engine import resolver_montos_asiento
+                try:
+                    resolved = resolver_montos_asiento(sel_grupo, periodo_a, draft_lines, columna_destino=col_ajuste)
+                    tot_d = sum(r["debe_calculado"] for r in resolved)
+                    tot_h = sum(r["haber_calculado"] for r in resolved)
+                except Exception:
+                    tot_d = sum(l["debe"] for l in draft_lines)
+                    tot_h = sum(l["haber"] for l in draft_lines)
                 
-                if not has_dynamic and abs(diff) > 0.01:
-                    st.session_state["asiento_msg_error"] = f"❌ No se puede guardar: El asiento no está cuadrado. La diferencia debe ser cero (Diferencia actual: {diff:,.0f})."
+                diff = tot_d - tot_h
+                
+                if abs(diff) > 0.01:
+                    st.session_state["asiento_msg_error"] = f"❌ No se puede guardar: El asiento no está cuadrado. La diferencia entre Debe y Haber debe ser cero (Diferencia actual: {diff:,.0f})."
                     st.session_state["asiento_msg_success"] = None
                     return
                     
@@ -356,6 +368,12 @@ def render(empresa_seleccionada, empresa_path):
                     db_save.close()
 
             def cb_cargar_para_editar(periodo, columna, glosa, es_rec, lines):
+                from src.core.consolidacion_lock_manager import ConsolidationLockManager
+                if ConsolidationLockManager.is_period_locked(sel_grupo, periodo):
+                    st.session_state["asiento_msg_error"] = f"🔒 El período {format_periodo(periodo)} está cerrado con candado. Puedes usar la opción '📋 Copiar' para llevarlo a un período abierto, o reabrir el período en Históricos si requieres modificarlo directamente."
+                    st.session_state["asiento_msg_success"] = None
+                    return
+
                 st.session_state['temp_asiento_lineas'] = [
                     {
                         "linea_item": l.linea_item,
@@ -390,20 +408,18 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_col_ajuste'] = columna
                 st.session_state['asiento_es_rec'] = bool(es_rec)
                 st.session_state['asiento_editando_original_key'] = None
-                st.session_state['asiento_msg_success'] = f"📋 Estructura de '{glosa}' copiada al borrador superior. Cambia el periodo/mes, modifica los montos y haz clic en 'Guardar Asiento Completo' para guardarlo como un nuevo registro."
-                st.session_state['edit_msg_success'] = f"📋 **Estructura copiada**: Desplázate hacia arriba 👆 al formulario superior ('Nuevo Asiento Contable') para cambiar el mes, cambiar números y guardar."
-                st.session_state['asiento_msg_error'] = None
-                st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
-                st.session_state['asiento_glosa'] = f"Copia de {glosa}"
-                st.session_state['asiento_col_ajuste'] = columna
-                st.session_state['asiento_es_rec'] = bool(es_rec)
-                st.session_state['asiento_editando_original_key'] = None
-                st.session_state['asiento_msg_success'] = f"📋 Estructura de '{glosa}' copiada al borrador superior. Cambia el periodo/mes, modifica los montos y haz clic en 'Guardar Asiento Completo' para guardarlo como un nuevo registro."
-                st.session_state['edit_msg_success'] = f"📋 **Estructura copiada**: Desplázate hacia arriba 👆 al formulario superior ('Nuevo Asiento Contable') para cambiar el mes, cambiar números y guardar."
+                st.session_state['asiento_msg_success'] = f"📋 Estructura de '{glosa}' copiada al borrador superior. Selecciona el período destino abierto, modifica los montos y haz clic en 'Guardar Asiento Completo'."
+                st.session_state['edit_msg_success'] = f"📋 **Estructura copiada**: Desplázate hacia arriba 👆 al formulario superior ('Nuevo Asiento Contable') para cambiar el período/montos y guardar."
                 st.session_state['asiento_msg_error'] = None
                 st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_eliminar_asiento(periodo, columna, glosa):
+                from src.core.consolidacion_lock_manager import ConsolidationLockManager
+                if ConsolidationLockManager.is_period_locked(sel_grupo, periodo):
+                    st.session_state["asiento_msg_error"] = f"🔒 No se puede eliminar el asiento porque el período {format_periodo(periodo)} está cerrado con candado. Reábrelo en Históricos si requieres modificarlo."
+                    st.session_state["asiento_msg_success"] = None
+                    return
+
                 db_del = SessionLocal()
                 try:
                     db_del.query(ConsolidationJournalEntry).filter_by(
@@ -850,6 +866,12 @@ def render(empresa_seleccionada, empresa_path):
                                         key=f"df_preview_v3_{sel_grupo}_{p_key}_{chosen.columna_ajuste}_{idx_c}"
                                     )
                                     
+                                    from src.core.consolidacion_lock_manager import ConsolidationLockManager
+                                    is_chosen_locked = ConsolidationLockManager.is_period_locked(sel_grupo, chosen.periodo)
+                                    
+                                    if is_chosen_locked:
+                                        st.warning(f"🔒 **Comprobante en Período Cerrado ({format_periodo(chosen.periodo)})**: Este comprobante está bloqueado contra modificaciones directas. Puedes usar la opción **'📋 Copiar al Borrador'** para llevarlo a un período abierto.")
+                                    
                                     col_act1, col_act2, col_act3 = st.columns(3)
                                     
                                     col_act1.button(
@@ -858,6 +880,7 @@ def render(empresa_seleccionada, empresa_path):
                                         use_container_width=True, 
                                         on_click=cb_cargar_para_editar, 
                                         args=(chosen.periodo, chosen.columna_ajuste, chosen.glosa, chosen.es_recurrente, lineas_comp),
+                                        disabled=is_chosen_locked,
                                         key=f"btn_edit_{p_key}_{idx_c}"
                                     )
                                     
@@ -876,6 +899,7 @@ def render(empresa_seleccionada, empresa_path):
                                         use_container_width=True, 
                                         on_click=cb_eliminar_asiento, 
                                         args=(chosen.periodo, chosen.columna_ajuste, chosen.glosa),
+                                        disabled=is_chosen_locked,
                                         key=f"btn_del_{p_key}_{idx_c}"
                                     )
                 else:

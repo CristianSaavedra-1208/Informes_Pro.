@@ -240,7 +240,7 @@ def main():
                 auth_keys = {'is_authenticated', 'auth_user', 'auth_role', 'auth_name', 'auth_email', 'empresa_activa', 'selector_empresa'}
                 for key in list(st.session_state.keys()):
                     if key not in auth_keys:
-                        del st.session_state[key]
+                        st.session_state.pop(key, None)
                 st.session_state['empresa_activa'] = empresa_seleccionada_combo
                 try:
                     with open(last_active_path, "w", encoding="utf-8") as f:
@@ -462,8 +462,11 @@ def main():
             st.Page(run_param, title="Parámetros", icon=":material/settings:")
         ]
         
+    is_global_env = "GLOBAL" in str(empresa_seleccionada).upper()
+
     if user_role == "Administrador":
-        admin_list.append(st.Page(run_conf, title="Roles & Settings", icon=":material/group:"))
+        if is_global_env:
+            admin_list.append(st.Page(run_conf, title="Roles & Settings", icon=":material/group:"))
     elif user_role == "Analista de Reportes":
         admin_list.append(st.Page(run_conf, title="Perfil y Clave", icon=":material/key:"))
 

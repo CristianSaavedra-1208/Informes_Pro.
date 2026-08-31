@@ -174,7 +174,10 @@ def reversar_cierre_periodo(empresa: str, periodo: str):
                 periodo=periodo,
                 cuenta_id=h.cuenta_id,
                 descripcion=h.descripcion,
-                saldo_final=h.saldo_final
+                saldo_inicial=float(h.saldo_inicial or 0.0),
+                debitos=float(h.debitos or 0.0),
+                creditos=float(h.creditos or 0.0),
+                saldo_final=float(h.saldo_final or 0.0)
             ))
             
         # Limpiar memoria activa actual por si acaso

@@ -11,21 +11,22 @@ def format_period_to_spanish_date(period_str):
     if not period_str:
         return ""
     try:
-        parts = str(period_str).strip().split('-')
-        if len(parts) >= 2:
-            year = int(parts[0])
-            month = int(parts[1])
+        from src.core.pl_cubo_processor import parse_month_to_num, parse_year_to_num
+        year = parse_year_to_num(period_str)
+        month = parse_month_to_num(period_str)
+        if year and month:
             last_day = calendar.monthrange(year, month)[1]
             months_es = {
                 1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
                 5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
                 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
             }
-            month_name = months_es[month]
-            return f"{last_day} de {month_name} {year}"
+            month_name = months_es.get(month, "")
+            if month_name:
+                return f"{last_day} de {month_name} {year}"
     except Exception:
         pass
-    return period_str
+    return str(period_str)
 
 class BalanceGenerator:
     def __init__(self, template_path):
@@ -38,11 +39,23 @@ class BalanceGenerator:
         3. Calcula el residuo de P&L (cuentas sin mapeo de balance).
         4. Inyecta los valores en el template de Excel.
         """
-        # Ensure correct types
-        tb_df['cuenta_id'] = tb_df['cuenta_id'].astype(str).str.strip()
-        tb_df['saldo_final'] = pd.to_numeric(tb_df['saldo_final'], errors='coerce').fillna(0)
+        # Ensure correct types on copy
+        tb_df = tb_df.copy()
+        acc_col_tb = next((c for c in tb_df.columns if str(c).strip().lower() in ['cuenta_id', 'cuenta', 'n° de cuenta', 'n de cuenta', 'n° de cuenta \n']), tb_df.columns[0])
+        sf_col_tb = next((c for c in tb_df.columns if str(c).strip().lower() in ['saldo_final', 'saldo final', 'saldo']), None)
         
-        map_balance_df['N° de Cuenta'] = map_balance_df['N° de Cuenta'].astype(str).str.strip()
+        tb_df['cuenta_id'] = tb_df[acc_col_tb].astype(str).str.strip()
+        if sf_col_tb:
+            tb_df['saldo_final'] = pd.to_numeric(tb_df[sf_col_tb], errors='coerce').fillna(0)
+        elif 'saldo_final' in tb_df.columns:
+            tb_df['saldo_final'] = pd.to_numeric(tb_df['saldo_final'], errors='coerce').fillna(0)
+        else:
+            tb_df['saldo_final'] = 0.0
+        
+        map_balance_df = map_balance_df.copy()
+        col_map_acc = next((c for c in map_balance_df.columns if str(c).strip().lower() in ['n° de cuenta', 'n de cuenta', 'cuenta', 'cuenta_id']), map_balance_df.columns[0])
+        map_balance_df['N° de Cuenta'] = map_balance_df[col_map_acc].astype(str).str.strip()
+        
         cls_col = next((c for c in map_balance_df.columns if "clasificaci" in c.lower() and "balance" in c.lower()), "Clasificación balance")
         if cls_col in map_balance_df.columns:
             map_balance_df[cls_col] = map_balance_df[cls_col].apply(lambda x: str(x).strip() if pd.notna(x) else x)
@@ -66,6 +79,17 @@ class BalanceGenerator:
         sums_comp_dict = {}
         pl_residual_comp = 0.0
         if tb_df_comp is not None and not tb_df_comp.empty:
+            tb_df_comp = tb_df_comp.copy()
+            acc_col_comp = next((c for c in tb_df_comp.columns if str(c).strip().lower() in ['cuenta_id', 'cuenta', 'n° de cuenta', 'n de cuenta', 'n° de cuenta \n']), tb_df_comp.columns[0])
+            sf_col_comp = next((c for c in tb_df_comp.columns if str(c).strip().lower() in ['saldo_final', 'saldo final', 'saldo']), None)
+            tb_df_comp['cuenta_id'] = tb_df_comp[acc_col_comp].astype(str).str.strip()
+            if sf_col_comp:
+                tb_df_comp['saldo_final'] = pd.to_numeric(tb_df_comp[sf_col_comp], errors='coerce').fillna(0)
+            elif 'saldo_final' in tb_df_comp.columns:
+                tb_df_comp['saldo_final'] = pd.to_numeric(tb_df_comp['saldo_final'], errors='coerce').fillna(0)
+            else:
+                tb_df_comp['saldo_final'] = 0.0
+
             merged_comp = build_balance_sabana(tb_df_comp, map_balance_df)
             mapped_mask_comp = merged_comp[cls_col].notna()
             agg_mapped_comp = merged_comp[mapped_mask_comp].groupby(cls_col, as_index=False)['saldo_final'].sum()
@@ -135,6 +159,8 @@ class BalanceGenerator:
         subtotal_no_corriente = 0.0
         activos_totales = 0.0
         pasivos_totales = 0.0
+        patrimonio_controladora = 0.0
+        patrimonio_no_controladora = 0.0
         patrimonio_totales = 0.0
         
         # Trackers for 2024 totals
@@ -142,6 +168,8 @@ class BalanceGenerator:
         subtotal_no_corriente_24 = 0.0
         activos_totales_24 = 0.0
         pasivos_totales_24 = 0.0
+        patrimonio_controladora_24 = 0.0
+        patrimonio_no_controladora_24 = 0.0
         patrimonio_totales_24 = 0.0
         
         def sanitize(text):
@@ -163,8 +191,12 @@ class BalanceGenerator:
             return ('pasivo' in s or 'liabilit' in s) and ('no corrien' in s or 'nocorrien' in s or 'largo' in s) and ('total' in s or 'subtotal' in s)
         def _is_total_pasivos(s):
             return ('total' in s or 'subtotal' in s) and ('pasivo' in s or 'liabilit' in s) and 'corrien' not in s and 'no corrien' not in s and 'patrimonio' not in s
+        def _is_patrimonio_controladora(s):
+            return 'patrimonio' in s and ('controlad' in s or 'propietari' in s or 'atribuible' in s)
+        def _is_participaciones_no_controladoras(s):
+            return ('no controlad' in s or 'nocontrolad' in s or 'minoritari' in s) and 'patrimonio' not in s
         def _is_total_patrimonio(s):
-            return ('total' in s or 'subtotal' in s) and 'patrimonio' in s and 'pasivo' not in s
+            return ('total' in s or 'subtotal' in s) and 'patrimonio' in s and 'pasivo' not in s and 'controlad' not in s and 'propietari' not in s and 'atribuible' not in s
         def _is_total_pasivos_patrimonio(s):
             return ('total' in s or 'subtotal' in s) and 'patrimonio' in s and 'pasivo' in s
             
@@ -244,6 +276,10 @@ class BalanceGenerator:
                     elif current_section == "Pasivos No Corrientes":
                         subtotal_no_corriente += visual_val
                     elif current_section == "Patrimonio":
+                        if _is_participaciones_no_controladoras(cell_lower):
+                            patrimonio_no_controladora += visual_val
+                        else:
+                            patrimonio_controladora += visual_val
                         patrimonio_totales += visual_val
                 
                 # Check if this is the target row for the P&L residual
@@ -276,6 +312,7 @@ class BalanceGenerator:
                     elif current_section == "Pasivos No Corrientes":
                         subtotal_no_corriente += visual_final_resid
                     elif current_section == "Patrimonio":
+                        patrimonio_controladora += visual_final_resid
                         patrimonio_totales += visual_final_resid
                         
                 # Independent accumulator for 2024 lines that just have pure static data
@@ -294,6 +331,7 @@ class BalanceGenerator:
                     _is_total_pasivos_corrientes(cell_lower) or
                     _is_total_pasivos_no_corrientes(cell_lower) or
                     _is_total_pasivos(cell_lower) or
+                    _is_patrimonio_controladora(cell_lower) or
                     _is_total_patrimonio(cell_lower) or
                     _is_total_pasivos_patrimonio(cell_lower)
                 )
@@ -310,6 +348,10 @@ class BalanceGenerator:
                     elif current_section == "Pasivos No Corrientes":
                         subtotal_no_corriente_24 += val24
                     elif current_section == "Patrimonio":
+                        if _is_participaciones_no_controladoras(cell_lower):
+                            patrimonio_no_controladora_24 += val24
+                        else:
+                            patrimonio_controladora_24 += val24
                         patrimonio_totales_24 += val24
                 
                 # Inyeccion de totales/subtotales usando deteccion flexible (no exacta)
@@ -348,6 +390,9 @@ class BalanceGenerator:
                 elif _is_total_pasivos(cell_lower):
                     ws.cell(row=row, column=val25_col_idx).value = pasivos_totales
                     ws.cell(row=row, column=val24_col_idx).value = pasivos_totales_24
+                elif _is_patrimonio_controladora(cell_lower):
+                    ws.cell(row=row, column=val25_col_idx).value = patrimonio_controladora
+                    ws.cell(row=row, column=val24_col_idx).value = patrimonio_controladora_24
                 elif _is_total_pasivos_patrimonio(cell_lower):
                     ws.cell(row=row, column=val25_col_idx).value = (pasivos_totales + patrimonio_totales)
                     ws.cell(row=row, column=val24_col_idx).value = (pasivos_totales_24 + patrimonio_totales_24)
@@ -362,5 +407,12 @@ class BalanceGenerator:
         output = BytesIO()
         wb.save(output)
         output.seek(0)
+        
+        # Evaluate any remaining formulas present in the workbook (SUM, subtotals, arithmetic, etc.)
+        try:
+            from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook
+            output = evaluate_formulas_in_workbook(output)
+        except Exception:
+            pass
         
         return output

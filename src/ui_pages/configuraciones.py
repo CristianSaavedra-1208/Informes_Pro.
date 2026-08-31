@@ -36,72 +36,117 @@ def render(empresa_seleccionada, empresa_path):
     empresas_dir = os.path.join("data", "empresas")
     empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
     
-    tab_empresas, tab_erp, tab_roles, tab_danger = st.tabs(["Empresas y Entornos", "Conexiones ERP (API)", "Roles & Settings", "Eliminación de Data"])
+    is_global = "GLOBAL" in str(empresa_seleccionada).upper()
+    if not is_global:
+        st.warning("🔒 **Acceso Restringido:** El módulo de Roles, Usuarios y Configuración General del Sistema solo puede ser administrado desde el entorno **🌐 [GLOBAL] Configuración General**.")
+        st.info("Para acceder a estas funciones de administración, selecciona **🌐 [GLOBAL] Configuración General** en el selector de empresa de la barra lateral.")
+        return
+
+    tabs = st.tabs(["🏢 Empresas y Entornos", "🔌 Conexiones ERP (API)", "👥 Roles & Settings", "🗑️ Eliminación de Data"])
+    tab_empresas, tab_erp, tab_roles, tab_danger = tabs
     
     with tab_empresas:
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
+        db_path = os.path.join(os.path.dirname(empresas_dir), "informes_pro.db")
+        from src.core.company_resolver import CompanyResolver
+        CompanyResolver.ensure_catalog_table()
+        all_catalog = CompanyResolver.get_all_companies(include_groups=True, only_active=True)
         
         with col1:
             with st.expander("➕ Crear Nueva Empresa", expanded=True):
-                nueva_empresa = st.text_input("Nombre de la Empresa")
-                if st.button("Crear Empresa"):
+                nueva_empresa = st.text_input("Nombre / Razón Social", key="create_empresa_input")
+                es_grupo_check = st.checkbox("Es Grupo Consolidado", key="create_is_group_check")
+                if st.button("Crear Empresa", key="btn_create_empresa", type="primary"):
                     if nueva_empresa.strip():
-                        nueva_carpeta = os.path.join(empresas_dir, nueva_empresa.strip())
-                        if not os.path.exists(nueva_carpeta):
-                            os.makedirs(nueva_carpeta, exist_ok=True)
-                            
-                            # Copiar plantillas default desde templates a la nueva empresa
-                            import shutil
-                            templates_dir = "templates"
-                            if os.path.exists(templates_dir):
-                                for t_file in os.listdir(templates_dir):
-                                    if t_file.endswith(".xlsx"):
-                                        shutil.copy2(os.path.join(templates_dir, t_file), os.path.join(nueva_carpeta, t_file))
-                                        
-                            # Copiar archivos maestros globales de configuracion si existen
-                            global_master_dir = os.path.join(empresas_dir, "Pacifico SpA")
-                            if os.path.exists(global_master_dir):
-                                for master_f in ["plan_cuentas.xlsx", "map_balance.xlsx", "map_pl.xlsx"]:
-                                    src_master = os.path.join(global_master_dir, master_f)
-                                    if os.path.exists(src_master):
-                                        shutil.copy2(src_master, os.path.join(nueva_carpeta, master_f))
-
-                            st.success(f"Empresa '{nueva_empresa}' creada exitosamente.")
+                        success, msg, code = CompanyResolver.register_company(nueva_empresa.strip(), es_consolidado=es_grupo_check)
+                        if success:
+                            st.success(f"✅ {msg}")
                             st.rerun()
                         else:
-                            st.error("La empresa ya existe.")
+                            st.error(f"❌ {msg}")
+                    else:
+                        st.warning("El nombre de la empresa no puede estar vacío.")
 
-    with col2:
-        with st.expander("✏️ Renombrar Empresa", expanded=True):
-            if empresas:
-                empresa_a_renombrar = st.selectbox("Selecciona empresa a modificar", empresas, key="rename_select")
-                nuevo_nombre = st.text_input("Nuevo nombre de la empresa", key="rename_input")
-                if st.button("Renombrar Empresa"):
-                    if nuevo_nombre.strip():
-                        if nuevo_nombre.strip() not in empresas:
-                            old_path = os.path.join(empresas_dir, empresa_a_renombrar)
-                            new_path = os.path.join(empresas_dir, nuevo_nombre.strip())
-                            try:
-                                os.rename(old_path, new_path)
+        with col2:
+            with st.expander("✏️ Modificar Carátula / Nombre", expanded=True):
+                if all_catalog:
+                    sel_cat = st.selectbox(
+                        "Selecciona sociedad a modificar", 
+                        all_catalog, 
+                        format_func=lambda c: f"[{c['codigo_id']}] {c['nombre_caratula']}",
+                        key="rename_select_cat"
+                    )
+                    st.caption(f"🔑 **Código Inmutable:** `{sel_cat['codigo_id']}` {'(Grupo Consolidado)' if sel_cat['es_consolidado'] else '(Sociedad Individual)'}")
+                    nuevo_nombre = st.text_input("Nuevo Nombre / Razón Social", value=sel_cat['nombre_caratula'], key="rename_input_cat")
+                    
+                    if st.button("Guardar Nuevo Nombre", key="btn_rename_empresa_cat"):
+                        nuevo_clean = nuevo_nombre.rstrip('.').strip()
+                        if nuevo_clean and nuevo_clean != sel_cat['nombre_caratula']:
+                            from src.core.company_manager import rename_company_cascade
+                            # Actualizar nombre en cascada y catálogo
+                            success_cas, msg_cas = rename_company_cascade(empresas_dir, db_path, sel_cat['nombre_caratula'], nuevo_clean)
+                            if success_cas:
+                                CompanyResolver.update_display_name(sel_cat['codigo_id'], nuevo_clean)
+                                
                                 # Limpiar cache local forzosamente
-                                for key in ['plan_cuentas_df', 'tb_df', 'map_balance_df', 'map_pl_df', 'pl_df', 'er_preview_df']:
+                                for key in ['plan_cuentas_df', 'tb_df', 'tb_df_comp', 'map_balance_df', 'map_pl_df', 'pl_df', 'pl_df_comp', 'er_preview_df', 'preview_df']:
                                     if key in st.session_state:
                                         del st.session_state[key]
                                 
-                                if st.session_state.get('empresa_activa') == empresa_a_renombrar:
-                                    st.session_state['empresa_activa'] = nuevo_nombre.strip()
-                                    st.session_state['empresa_activa_prev'] = nuevo_nombre.strip()
+                                if st.session_state.get('empresa_activa') == sel_cat['nombre_caratula']:
+                                    st.session_state['empresa_activa'] = nuevo_clean
+                                    st.session_state['empresa_activa_prev'] = nuevo_clean
                                     
-                                st.success(f"Empresa renombrada a '{nuevo_nombre.strip()}' correctamente.")
+                                st.success(f"✅ Carátula actualizada a '{nuevo_clean}' para el código [{sel_cat['codigo_id']}].")
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al renombrar: {e}")
+                            else:
+                                st.error(msg_cas)
+                        elif nuevo_clean == sel_cat['nombre_caratula']:
+                            st.info("El nombre ingresado es idéntico al actual.")
                         else:
-                            st.error("El nombre ya existe.")
+                            st.warning("El nuevo nombre no puede estar vacío.")
+                else:
+                    st.warning("No hay empresas registradas.")
+
+        with col3:
+            with st.expander("🗑️ Eliminar Empresa", expanded=True):
+                if all_catalog:
+                    from src.core.company_manager import check_company_has_data, delete_company
+                    sel_cat_del = st.selectbox(
+                        "Selecciona empresa a eliminar", 
+                        all_catalog, 
+                        format_func=lambda c: f"[{c['codigo_id']}] {c['nombre_caratula']}",
+                        key="delete_empresa_select_cat"
+                    )
+                    empresa_a_eliminar = sel_cat_del['nombre_caratula']
+                    
+                    has_data, reasons = check_company_has_data(empresas_dir, db_path, empresa_a_eliminar)
+                    if has_data:
+                        st.warning(f"⚠️ **[{sel_cat_del['codigo_id']}] {empresa_a_eliminar}** tiene datos registrados:\n" + "\n".join([f"- {r}" for r in reasons]) + "\n\n*Antes de eliminar, debe borrar la data desde la pestaña **Eliminación de Data**.*")
                     else:
-                        st.warning("El nuevo nombre no puede estar vacío.")
-            else:
-                st.warning("No hay empresas registradas.")
+                        st.info(f"ℹ️ **[{sel_cat_del['codigo_id']}] {empresa_a_eliminar}** no contiene datos transaccionales. Puede ser eliminada de forma segura.")
+                        
+                    confirm_del = st.checkbox("Confirmo que deseo eliminar esta empresa", key="check_confirm_del_empresa")
+                    if st.button("Eliminar Empresa", type="primary", disabled=not confirm_del or has_data, key="btn_delete_empresa"):
+                        success, msg = delete_company(empresas_dir, db_path, empresa_a_eliminar)
+                        if success:
+                            # Limpiar cache local
+                            for key in ['plan_cuentas_df', 'tb_df', 'tb_df_comp', 'map_balance_df', 'map_pl_df', 'pl_df', 'pl_df_comp', 'er_preview_df', 'preview_df']:
+                                if key in st.session_state:
+                                    del st.session_state[key]
+                                    
+                            remaining_cos = CompanyResolver.get_all_companies(include_groups=True, only_active=True)
+                            if st.session_state.get('empresa_activa') == empresa_a_eliminar:
+                                next_co = remaining_cos[0]['nombre_caratula'] if remaining_cos else ""
+                                st.session_state['empresa_activa'] = next_co
+                                st.session_state['empresa_activa_prev'] = next_co
+                                
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.warning("No hay empresas registradas.")
                 
     with tab_erp:
         st.write(f"Configura la extracción automática de saldos directamente desde tu ERP para **{empresa_seleccionada}**.")

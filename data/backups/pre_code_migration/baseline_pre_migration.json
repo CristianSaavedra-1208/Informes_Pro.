@@ -1,0 +1,838 @@
+{
+  "trial_balance_counts": {
+    "Db Terra Holdco": [
+      "2026-06",
+      "2026-05",
+      "2026-04",
+      "2026-03",
+      "2025-12",
+      "2025-09",
+      "2025-06",
+      "2025-03",
+      "2025-01"
+    ],
+    "Pacifico SpA": [
+      "2026-12",
+      "2026-06",
+      "2026-05",
+      "2026-04",
+      "2026-03",
+      "2025-12",
+      "2025-09",
+      "2025-06",
+      "2025-03"
+    ],
+    "Terra Parent": [],
+    "[GRUPO] Consolidado DB Terra Holdco": [
+      "2026-06",
+      "2026-05",
+      "2026-04",
+      "2026-03",
+      "2025-12",
+      "2025-09",
+      "2025-06",
+      "2025-03",
+      "2025-01"
+    ],
+    "[GRUPO] Consolidado Terra Parent": []
+  },
+  "pl_cubo_counts": {
+    "Db Terra Holdco": [
+      "2025-03",
+      "2025-06",
+      "2025-09",
+      "2025-12",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06"
+    ],
+    "Pacifico SpA": [
+      "2025-03",
+      "2025-06",
+      "2025-09",
+      "2025-12",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06"
+    ],
+    "Terra Parent": [],
+    "[GRUPO] Consolidado DB Terra Holdco": [],
+    "[GRUPO] Consolidado Terra Parent": []
+  },
+  "balance_values": {
+    "Db Terra Holdco_2026-06_2026-05": {
+      "R4_Activos": {
+        "v_act": "M$",
+        "v_comp": null
+      },
+      "R5_Activos corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R7_Efectivo y efectivo equivalente": {
+        "v_act": 2633139451.0,
+        "v_comp": null
+      },
+      "R8_Activos financieros, Corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R9_Otros activos no financieros, corrientes": {
+        "v_act": 30925924.0,
+        "v_comp": null
+      },
+      "R10_Deudores comerciales y otras cuentas por cobrar, corrientes": {
+        "v_act": 934729856.0,
+        "v_comp": null
+      },
+      "R11_Activo por impuestos, corrientes": {
+        "v_act": 556790441.0,
+        "v_comp": null
+      },
+      "R12_Cuentas por cobrar a entidades relacionadas, corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R13_Inventarios": {
+        "v_act": 29373300255.0,
+        "v_comp": null
+      },
+      "R14_Activos corrientes totales": {
+        "v_act": 33528885927.0,
+        "v_comp": null
+      },
+      "R16_Activos no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R18_Activos intangibles distinto a la plusvalía": {
+        "v_act": 3013718425.0,
+        "v_comp": null
+      },
+      "R19_Propiedades, plantas y equipos": {
+        "v_act": 414268884103.0,
+        "v_comp": null
+      },
+      "R20_Activo por derechos de uso": {
+        "v_act": 15079081666.0,
+        "v_comp": null
+      },
+      "R21_Cuentas por cobrar a entidades relacionadas, no corrientes": {
+        "v_act": 168346645369.0,
+        "v_comp": null
+      },
+      "R22_Activo por impuestos diferidos, no corrientes": {
+        "v_act": 84236704628.0,
+        "v_comp": null
+      },
+      "R23_Otros activos financieros, no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R24_Inversion en empresas relacionadas": {
+        "v_act": 357772160957.0,
+        "v_comp": null
+      },
+      "R25_Plusvalia": {
+        "v_act": 0.0,
+        "v_comp": null
+      },
+      "R26_Total activos no corrientes": {
+        "v_act": 1042717195148.0,
+        "v_comp": null
+      },
+      "R27_Total activos": {
+        "v_act": 1076246081075.0,
+        "v_comp": null
+      },
+      "R30_Patrimonio y pasivos": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R32_Pasivos corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R34_Otros pasivos financieros corrientes": {
+        "v_act": 6736151285.0,
+        "v_comp": null
+      },
+      "R35_Pasivos por derechos de uso, corrientes": {
+        "v_act": 3002412772.0,
+        "v_comp": null
+      },
+      "R36_Cuentas comerciales y otras cuentas por pagar, corrientes": {
+        "v_act": 13291521920.0,
+        "v_comp": null
+      },
+      "R37_Cuentas por pagar entidades relacionadas, corrientes": {
+        "v_act": 3322865802.0,
+        "v_comp": null
+      },
+      "R38_Provisiones por beneficios a los empleados": {
+        "v_act": 876662721.0,
+        "v_comp": null
+      },
+      "R39_Pasivo por impuestos, corrientes": {
+        "v_act": 1635978569.0,
+        "v_comp": null
+      },
+      "R40_Pasivos corrientes totales": {
+        "v_act": 28865593069.0,
+        "v_comp": null
+      },
+      "R42_Pasivos no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R44_Otros pasivos financieros, no corriente": {
+        "v_act": 392131409807.0,
+        "v_comp": null
+      },
+      "R45_Pasivos por derechos de uso, no corrientes": {
+        "v_act": 13061945857.0,
+        "v_comp": null
+      },
+      "R46_Cuentas por pagar entidades relacionadas, no corrientes": {
+        "v_act": 0.0,
+        "v_comp": null
+      },
+      "R47_Otras provisiones, no corrientes": {
+        "v_act": 0.0,
+        "v_comp": null
+      },
+      "R48_Cuentas comerciales y otras cuentas por pagar, no corrientes": {
+        "v_act": 8375435041.0,
+        "v_comp": null
+      },
+      "R49_Pasivos por impuestos diferidos, no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R50_Total pasivos no corrientes": {
+        "v_act": 413568790705.0,
+        "v_comp": null
+      },
+      "R51_Total pasivos": {
+        "v_act": 442434383774.0,
+        "v_comp": null
+      },
+      "R53_Patrimonio": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R55_Capital emitido": {
+        "v_act": 503344994549.0,
+        "v_comp": null
+      },
+      "R56_Aporte por enterar": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R57_Otras reservas": {
+        "v_act": 174034447705.0,
+        "v_comp": null
+      },
+      "R58_Resultados acumulados": {
+        "v_act": -43567744953.0,
+        "v_comp": null
+      },
+      "R59_Patrimonio total": {
+        "v_act": 633811697301.0,
+        "v_comp": null
+      },
+      "R60_Total patrimonio y pasivos": {
+        "v_act": 1076246081075.0,
+        "v_comp": null
+      }
+    },
+    "Pacifico SpA_2026-12_2026-06": {
+      "R4_Activos": {
+        "v_act": null,
+        "v_comp": "M$"
+      },
+      "R5_Activos corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R7_Efectivo y efectivo equivalente": {
+        "v_act": null,
+        "v_comp": 25199752822.0
+      },
+      "R8_Activos financieros, Corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R9_Otros activos no financieros, corrientes": {
+        "v_act": null,
+        "v_comp": 632160062.0
+      },
+      "R10_Deudores comerciales y otras cuentas por cobrar, corrientes": {
+        "v_act": null,
+        "v_comp": 11431256304.0
+      },
+      "R11_Activo por impuestos, corrientes": {
+        "v_act": null,
+        "v_comp": 3076958398.0
+      },
+      "R12_Cuentas por cobrar a entidades relacionadas, corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R13_Inventarios": {
+        "v_act": null,
+        "v_comp": 28273437025.0
+      },
+      "R14_Activos corrientes totales": {
+        "v_act": null,
+        "v_comp": 68613564611.0
+      },
+      "R16_Activos no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R18_Activos intangibles distinto a la plusvalía": {
+        "v_act": null,
+        "v_comp": 898793814.0
+      },
+      "R19_Propiedades, plantas y equipos": {
+        "v_act": null,
+        "v_comp": 138415548395.0
+      },
+      "R20_Activo por derechos de uso": {
+        "v_act": null,
+        "v_comp": 8519128943.0
+      },
+      "R21_Cuentas por cobrar a entidades relacionadas, no corrientes": {
+        "v_act": null,
+        "v_comp": 3322865802.0
+      },
+      "R22_Activo por impuestos diferidos, no corrientes": {
+        "v_act": null,
+        "v_comp": 22249551772.0
+      },
+      "R23_Otros activos financieros, no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R24_Inversion en empresas relacionadas": {
+        "v_act": null,
+        "v_comp": 1000000.0
+      },
+      "R25_Plusvalia": {
+        "v_act": null,
+        "v_comp": 81462672868.0
+      },
+      "R26_Total activos no corrientes": {
+        "v_act": null,
+        "v_comp": 254869561594.0
+      },
+      "R27_Total activos": {
+        "v_act": null,
+        "v_comp": 323483126205.0
+      },
+      "R30_Patrimonio y pasivos": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R32_Pasivos corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R34_Otros pasivos financieros corrientes": {
+        "v_act": null,
+        "v_comp": 0.0
+      },
+      "R35_Pasivos por derechos de uso, corrientes": {
+        "v_act": null,
+        "v_comp": 4369243173.0
+      },
+      "R36_Cuentas comerciales y otras cuentas por pagar, corrientes": {
+        "v_act": null,
+        "v_comp": 37463918797.0
+      },
+      "R37_Cuentas por pagar entidades relacionadas, corrientes": {
+        "v_act": null,
+        "v_comp": 36562495469.0
+      },
+      "R38_Provisiones por beneficios a los empleados": {
+        "v_act": null,
+        "v_comp": 1320691704.0
+      },
+      "R39_Pasivo por impuestos, corrientes": {
+        "v_act": null,
+        "v_comp": 4610375714.0
+      },
+      "R40_Pasivos corrientes totales": {
+        "v_act": null,
+        "v_comp": 84326724857.0
+      },
+      "R42_Pasivos no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R44_Otros pasivos financieros, no corriente": {
+        "v_act": null,
+        "v_comp": 0.0
+      },
+      "R45_Pasivos por derechos de uso, no corrientes": {
+        "v_act": null,
+        "v_comp": 4475845305.0
+      },
+      "R46_Cuentas por pagar entidades relacionadas, no corrientes": {
+        "v_act": null,
+        "v_comp": 131782379489.0
+      },
+      "R47_Otras provisiones, no corrientes": {
+        "v_act": null,
+        "v_comp": 1610745675.0
+      },
+      "R48_Cuentas comerciales y otras cuentas por pagar, no corrientes": {
+        "v_act": null,
+        "v_comp": 31872786766.0
+      },
+      "R49_Pasivos por impuestos diferidos, no corrientes": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R50_Total pasivos no corrientes": {
+        "v_act": null,
+        "v_comp": 169741757235.0
+      },
+      "R51_Total pasivos": {
+        "v_act": null,
+        "v_comp": 254068482092.0
+      },
+      "R53_Patrimonio": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R55_Capital emitido": {
+        "v_act": null,
+        "v_comp": 141173956582.0
+      },
+      "R56_Aporte por enterar": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R57_Otras reservas": {
+        "v_act": null,
+        "v_comp": 3.0
+      },
+      "R58_Resultados acumulados": {
+        "v_act": null,
+        "v_comp": -71759312472.0
+      },
+      "R59_Patrimonio total": {
+        "v_act": null,
+        "v_comp": 69414644113.0
+      },
+      "R60_Total patrimonio y pasivos": {
+        "v_act": null,
+        "v_comp": 323483126205.0
+      },
+      "R62_Validacion": {
+        "v_act": null,
+        "v_comp": null
+      },
+      "R66_Total cuentas de P&L (Resultado)": {
+        "v_act": null,
+        "v_comp": null
+      }
+    }
+  },
+  "consolidation_hojas": {
+    "Grupo_1_2026-05": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 26700740444.0,
+      "Otros activos no financieros, corrientes": 657637500.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 13676673832.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 60202410897.0,
+      "Activos corrientes totales": 101237462673.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 87819172626.0,
+      "Propiedades, plantas y equipos": 748549856082.0,
+      "Activo por derechos de uso": 24109812965.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2699411.0,
+      "Activo por impuestos diferidos, no corrientes": 103721672783.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 1045665886735.0,
+      "Total activos": 1146903349408.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -4918553140.0,
+      "Pasivos por derechos de uso, corrientes": -7666276638.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -59075902154.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2220417882.0,
+      "Pasivo por impuestos, corrientes": -1465095712.0,
+      "Pasivo corrientes totales": -75346245526.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -389257418956.0,
+      "Pasivos por derechos de uso, no corrientes": -17745425293.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -2672131932.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -33360425591.0,
+      "Pasivos por impuestos diferidos, no corrientes": -74573082756.0,
+      "Pasivo no corrientes totales": -517608484528.0,
+      "Total pasivos": -592954730054.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -172609636250.0,
+      "Resultados acumulados": 122006011445.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -553948619354.0,
+      "Total patrimonio y pasivos": -1146903349408.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de actividades ordinarias": -100035434901.0,
+      "Costo de ventas": 43129657207.0,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Ingresos de arriendo fibra optica": -32839980860.0,
+      "Costos de uso fibra optica": 32839980860.0,
+      "Depreciación operacional": 49431808406.0,
+      "Ganancia bruta": -7473969288.0,
+      "Gastos de administración": 9596653794.0,
+      "Depreciación y amortizaciones": 3032917494.0,
+      "Otros ingresos por función": -248202794.0,
+      "Otros egresos por función": 24848564.0,
+      "Ingresos financieros": -518171249.0,
+      "Costos financieros": 36329738954.0,
+      "Diferencias de cambio": -3662919110.0,
+      "Resultados por unidades de reajuste": -4188944.0,
+      "Ingresos financieros IC": -5391792670.0,
+      "Resultado antes de impuestos": 31684914751.0,
+      "Resultado por impuestos a las ganancias": -10496089282.0,
+      "Ganancias (Pérdida) del Ejercicio": 21188825469.0
+    },
+    "Grupo_1_2025-12": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 26068023381.0,
+      "Otros activos no financieros, corrientes": 657081936.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 13102588987.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 55600331616.0,
+      "Activos corrientes totales": 95428025920.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 88923320511.0,
+      "Propiedades, plantas y equipos": 760222920483.0,
+      "Activo por derechos de uso": 25960593893.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2689345.0,
+      "Activo por impuestos diferidos, no corrientes": 19649937793.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 976222134893.0,
+      "Total activos": 1071650160813.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -24293619055.0,
+      "Pasivos por derechos de uso, corrientes": -10654870080.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -49002421562.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2580225762.0,
+      "Pasivo por impuestos, corrientes": -2003744252.0,
+      "Pasivo corrientes totales": -88534880711.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -356248024872.0,
+      "Pasivos por derechos de uso, no corrientes": -15096489712.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -1460796943.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -29426419095.0,
+      "Pasivos por impuestos diferidos, no corrientes": 0.0,
+      "Pasivo no corrientes totales": -402231730622.0,
+      "Total pasivos": -490766611333.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -178355740907.0,
+      "Resultados acumulados": 100817185976.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -580883549480.0,
+      "Total patrimonio y pasivos": -1071650160813.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de actividades ordinarias": -229763350565.0,
+      "Costo de ventas": 106877881391.76,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Ingresos de arriendo fibra optica": 0.0,
+      "Costos de uso fibra optica": 0.0,
+      "Depreciación operacional": 109456250126.0,
+      "Ganancia bruta": -13429219047.240005,
+      "Gastos de administración": 25619729770.79,
+      "Depreciación y amortizaciones": 4524003366.0,
+      "Otros ingresos por función": -2580458981.0,
+      "Otros egresos por función": 2414872605.0,
+      "Ingresos financieros": -2202998083.0,
+      "Costos financieros": 42690604693.0,
+      "Diferencias de cambio": -3571571702.8000016,
+      "Resultados por unidades de reajuste": -1155061.0,
+      "Ingresos financieros IC": 0.0,
+      "Resultado antes de impuestos": 53463807559.74999,
+      "Resultado por impuestos a las ganancias": -20051298942.0,
+      "Ganancias (Pérdida) del Ejercicio": 33412508617.749992
+    },
+    "Grupo_1_2025-09": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 44966779267.0,
+      "Otros activos no financieros, corrientes": 679229746.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 12896382847.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 53398722046.0,
+      "Activos corrientes totales": 111941113906.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 89403855777.0,
+      "Propiedades, plantas y equipos": 765455596943.0,
+      "Activo por derechos de uso": 24528618482.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2541212.0,
+      "Activo por impuestos diferidos, no corrientes": 13909924152.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 974763209434.0,
+      "Total activos": 1086704323340.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -23972823346.0,
+      "Pasivos por derechos de uso, corrientes": -6026743227.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -41388977760.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2681942769.0,
+      "Pasivo por impuestos, corrientes": -2287055211.0,
+      "Pasivo corrientes totales": -76357542313.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -360510547724.0,
+      "Pasivos por derechos de uso, no corrientes": -18147561035.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -1468739241.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -40107027267.0,
+      "Pasivos por impuestos diferidos, no corrientes": 0.0,
+      "Pasivo no corrientes totales": -420233875267.0,
+      "Total pasivos": -496591417580.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -182612200878.0,
+      "Resultados acumulados": 95844289667.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -590112905760.0,
+      "Total patrimonio y pasivos": -1086704323340.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de actividades ordinarias": -170762321982.0,
+      "Costo de ventas": 80858309290.0,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Ingresos de arriendo fibra optica": 0.0,
+      "Costos de uso fibra optica": 0.0,
+      "Depreciación operacional": 80638294790.0,
+      "Ganancia bruta": -9265717902.0,
+      "Gastos de administración": 16935945536.0,
+      "Depreciación y amortizaciones": 4736510452.0,
+      "Otros ingresos por función": -1688762377.0,
+      "Otros egresos por función": 269116039.0,
+      "Ingresos financieros": -1731159379.0,
+      "Costos financieros": 30694559077.0,
+      "Diferencias de cambio": -1118058998.0,
+      "Resultados por unidades de reajuste": -1292368.0,
+      "Ingresos financieros IC": 0.0,
+      "Resultado antes de impuestos": 38831140080.0,
+      "Resultado por impuestos a las ganancias": -14519950650.0,
+      "Ganancias (Pérdida) del Ejercicio": 24311189430.0
+    },
+    "Grupo_2_2026-05": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 26700740444.0,
+      "Otros activos no financieros, corrientes": 657637500.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 13676673832.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 60202410897.0,
+      "Activos corrientes totales": 101237462673.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 87819172626.0,
+      "Propiedades, plantas y equipos": 748549856082.0,
+      "Activo por derechos de uso": 24109812965.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2699411.0,
+      "Activo por impuestos diferidos, no corrientes": 103721672783.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 1045665886735.0,
+      "Total activos": 1146903349408.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -4918553140.0,
+      "Pasivos por derechos de uso, corrientes": -7666276638.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -59075902154.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2220417882.0,
+      "Pasivo por impuestos, corrientes": -1465095712.0,
+      "Pasivo corrientes totales": -75346245526.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -389257418956.0,
+      "Pasivos por derechos de uso, no corrientes": -17745425293.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -2672131932.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -33360425591.0,
+      "Pasivos por impuestos diferidos, no corrientes": -74573082756.0,
+      "Pasivo no corrientes totales": -517608484528.0,
+      "Total pasivos": -592954730054.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -172609636250.0,
+      "Resultados acumulados": 122006011445.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -553948619354.0,
+      "Total patrimonio y pasivos": -1146903349408.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de arriendo fibra optica": -32839980860.0,
+      "Ingresos de actividades ordinarias": -100035434901.0,
+      "Costo de ventas": 43129657207.0,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Costos de uso fibra optica": 32839980860.0,
+      "Depreciación operacional": 49431808406.0,
+      "Ganancia bruta": -7473969288.0,
+      "Otros ingresos por función": -248202794.0,
+      "Gastos de administración": 9596653794.0,
+      "Depreciación y amortizaciones": 3032917494.0,
+      "Otros egresos por función": 24848564.0,
+      "Ingresos financieros IC": -5391792670.0,
+      "Ingresos financieros": -518171249.0,
+      "Costos financieros": 36329738954.0,
+      "Diferencias de cambio": -3662919110.0,
+      "Resultados por unidades de reajuste": -4188944.0,
+      "Resultado antes de impuestos": 31684914751.0,
+      "Resultado por impuestos a las ganancias": -10496089282.0,
+      "Ganancias (Pérdida) del Ejercicio": 21188825469.0
+    },
+    "Grupo_2_2025-12": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 26068023381.0,
+      "Otros activos no financieros, corrientes": 657081936.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 13102588987.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 55600331616.0,
+      "Activos corrientes totales": 95428025920.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 88923320511.0,
+      "Propiedades, plantas y equipos": 760222920483.0,
+      "Activo por derechos de uso": 25960593893.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2689345.0,
+      "Activo por impuestos diferidos, no corrientes": 19649937793.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 976222134893.0,
+      "Total activos": 1071650160813.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -24293619055.0,
+      "Pasivos por derechos de uso, corrientes": -10654870080.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -49002421562.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2580225762.0,
+      "Pasivo por impuestos, corrientes": -2003744252.0,
+      "Pasivo corrientes totales": -88534880711.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -356248024872.0,
+      "Pasivos por derechos de uso, no corrientes": -15096489712.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -1460796943.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -29426419095.0,
+      "Pasivos por impuestos diferidos, no corrientes": 0.0,
+      "Pasivo no corrientes totales": -402231730622.0,
+      "Total pasivos": -490766611333.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -178355740907.0,
+      "Resultados acumulados": 100817185976.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -580883549480.0,
+      "Total patrimonio y pasivos": -1071650160813.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de arriendo fibra optica": 0.0,
+      "Ingresos de actividades ordinarias": -229763350565.0,
+      "Costo de ventas": 106877881391.76,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Costos de uso fibra optica": 0.0,
+      "Depreciación operacional": 109456250126.0,
+      "Ganancia bruta": -13429219047.240005,
+      "Otros ingresos por función": -2580458981.0,
+      "Gastos de administración": 25619729770.79,
+      "Depreciación y amortizaciones": 4524003366.0,
+      "Otros egresos por función": 2414872605.0,
+      "Ingresos financieros IC": 0.0,
+      "Ingresos financieros": -2202998083.0,
+      "Costos financieros": 42690604693.0,
+      "Diferencias de cambio": -3571571702.8000016,
+      "Resultados por unidades de reajuste": -1155061.0,
+      "Resultado antes de impuestos": 53463807559.74999,
+      "Resultado por impuestos a las ganancias": -20051298942.0,
+      "Ganancias (Pérdida) del Ejercicio": 33412508617.749992
+    },
+    "Grupo_2_2025-09": {
+      "Activos corrientes": 0.0,
+      "Efectivo y efectivo equivalente": 44966779267.0,
+      "Otros activos no financieros, corrientes": 679229746.0,
+      "Deudores comerciales y otras cuentas por cobrar, corrientes": 12896382847.0,
+      "Activo por impuestos, corrientes": 0.0,
+      "Inventarios": 53398722046.0,
+      "Activos corrientes totales": 111941113906.0,
+      "Activos no corrientes": 0.0,
+      "Activos intangibles distinto a la plusvalía": 89403855777.0,
+      "Propiedades, plantas y equipos": 765455596943.0,
+      "Activo por derechos de uso": 24528618482.0,
+      "Cuentas por cobrar a entidades relacionadas, no corrientes": 2541212.0,
+      "Activo por impuestos diferidos, no corrientes": 13909924152.0,
+      "Inversion en empresas relacionadas": 0.0,
+      "Plusvalia": 81462672868.0,
+      "Activos no corrientes totales": 974763209434.0,
+      "Total activos": 1086704323340.0,
+      "Patrimonio y pasivos": 0.0,
+      "Pasivos corrientes": 0.0,
+      "Otros pasivos financieros corrientes": -23972823346.0,
+      "Pasivos por derechos de uso, corrientes": -6026743227.0,
+      "Cuentas comerciales y otras cuentas por pagar, corrientes": -41388977760.0,
+      "Cuentas por pagar entidades relacionadas, corrientes": 0.0,
+      "Provisiones por beneficios a los empleados": -2681942769.0,
+      "Pasivo por impuestos, corrientes": -2287055211.0,
+      "Pasivo corrientes totales": -76357542313.0,
+      "Pasivos no corrientes": 0.0,
+      "Otros pasivos financieros, no corriente": -360510547724.0,
+      "Pasivos por derechos de uso, no corrientes": -18147561035.0,
+      "Cuentas por pagar entidades relacionadas, no corrientes": 0.0,
+      "Otras provisiones, no corrientes": -1468739241.0,
+      "Cuentas comerciales y otras cuentas por pagar, no corrientes": -40107027267.0,
+      "Pasivos por impuestos diferidos, no corrientes": 0.0,
+      "Pasivo no corrientes totales": -420233875267.0,
+      "Total pasivos": -496591417580.0,
+      "Patrimonio": 0.0,
+      "Capital emitido": -503344994549.0,
+      "Aporte por enterar": 0.0,
+      "Otras reservas": -182612200878.0,
+      "Resultados acumulados": 95844289667.0,
+      "Ganancias acumuladas": 0.0,
+      "Patrimonio total": -590112905760.0,
+      "Total patrimonio y pasivos": -1086704323340.0,
+      "Estado de Resultados": 0.0,
+      "Ingresos de arriendo fibra optica": 0.0,
+      "Ingresos de actividades ordinarias": -170762321982.0,
+      "Costo de ventas": 80858309290.0,
+      "Acceso a infraestructura fibra óptica": 0.0,
+      "Costos de uso fibra optica": 0.0,
+      "Depreciación operacional": 80638294790.0,
+      "Ganancia bruta": -9265717902.0,
+      "Otros ingresos por función": -1688762377.0,
+      "Gastos de administración": 16935945536.0,
+      "Depreciación y amortizaciones": 4736510452.0,
+      "Otros egresos por función": 269116039.0,
+      "Ingresos financieros IC": 0.0,
+      "Ingresos financieros": -1731159379.0,
+      "Costos financieros": 30694559077.0,
+      "Diferencias de cambio": -1118058998.0,
+      "Resultados por unidades de reajuste": -1292368.0,
+      "Resultado antes de impuestos": 38831140080.0,
+      "Resultado por impuestos a las ganancias": -14519950650.0,
+      "Ganancias (Pérdida) del Ejercicio": 24311189430.0
+    }
+  }
+}

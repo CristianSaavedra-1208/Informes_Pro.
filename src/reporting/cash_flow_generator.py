@@ -345,6 +345,12 @@ class CashFlowGenerator:
         wb.save(output)
         output.seek(0)
         
+        try:
+            from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook
+            output = evaluate_formulas_in_workbook(output)
+        except Exception:
+            pass
+        
         # Enriquecer matriz_audit con campos de depuración para la salida
         for item in matriz_audit:
             linea = item["Línea de Flujo Mapeada"]

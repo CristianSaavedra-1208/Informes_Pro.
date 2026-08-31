@@ -41,9 +41,18 @@ def render_login():
         
         st.markdown("""
             <div class="login-header">
-                <div style="font-size: 42px; margin-bottom: 8px;">📊</div>
-                <div class="login-title">Informes Pro</div>
-                <div class="login-subtitle">Sistema de Emisión de Estados Financieros bajo IFRS</div>
+                <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 12px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 38" width="270" height="44">
+                      <g transform="translate(2, 3)">
+                        <path d="M15 2L3 9L15 16L27 9L15 2Z" fill="none" stroke="#2563EB" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M3 15L15 22L27 15" fill="none" stroke="#2563EB" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M3 21L15 28L27 21" fill="none" stroke="#2563EB" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+                      </g>
+                      <text x="38" y="25" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="20" font-weight="800" letter-spacing="0.4" fill="#0F172A">INFORMES</text>
+                      <text x="156" y="25" font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="20" font-weight="800" letter-spacing="0.4" fill="#DC2626">PRO</text>
+                    </svg>
+                </div>
+                <div class="login-subtitle">Sistema de Emisión de informes Financieros</div>
             </div>
         """, unsafe_allow_html=True)
         

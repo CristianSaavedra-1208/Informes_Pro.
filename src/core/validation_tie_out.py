@@ -627,3 +627,92 @@ class ValidationTieOutEngine:
         wb.save(output)
         return output.getvalue()
 
+    @staticmethod
+    def validar_balance_vs_pl(empresa: str, periodo: str, pl_df_override: pd.DataFrame = None, tb_df_override: pd.DataFrame = None) -> dict:
+        """
+        Valida que la suma de todas las cuentas del Balance clasificadas como 'Resultados acumulados'
+        (cuentas de resultado del ejercicio) coincida exactamente con la suma total de los montos cargados en el Cubo P&L.
+        """
+        # 1. Obtener TB
+        tb_df = tb_df_override if tb_df_override is not None else TrialBalanceDB.get_trial_balance(empresa, periodo)
+        has_tb = tb_df is not None and not tb_df.empty
+
+        # 2. Cargar map_balance.xlsx
+        empresa_dir = os.path.join("data", "empresas", empresa)
+        if not os.path.exists(empresa_dir):
+            empresa_dir = os.path.join("data", "empresas", f"[GRUPO] {empresa}")
+        map_bal_path = os.path.join(empresa_dir, "map_balance.xlsx")
+        if not os.path.exists(map_bal_path):
+            map_bal_path = "map_balance.xlsx"
+        
+        saldo_balance_res_acum = 0.0
+        cuentas_balance_res_count = 0
+        if has_tb:
+            try:
+                map_res_accs = set()
+                if os.path.exists(map_bal_path):
+                    map_bal_df = pd.read_excel(map_bal_path, dtype=str)
+                    col_acc_map = map_bal_df.columns[0]
+                    col_clas_map = next((c for c in map_bal_df.columns if "clasifica" in str(c).lower() or "balance" in str(c).lower()), map_bal_df.columns[2] if len(map_bal_df.columns)>2 else map_bal_df.columns[1])
+                    
+                    from src.core.pl_cubo_processor import normalize_text
+                    target_keys = ["resultados acumulados", "resultado acumulado", "ganancias acumuladas", "ganancias (perdidas) acumuladas", "ganancias (pérdidas) acumuladas"]
+                    map_res_accs = set(
+                        map_bal_df[map_bal_df[col_clas_map].apply(normalize_text).isin(target_keys)][col_acc_map].dropna().astype(str).str.strip()
+                    )
+                
+                col_acc_tb = next((c for c in tb_df.columns if "cuenta" in str(c).lower() and "nombre" not in str(c).lower()), "cuenta_id")
+                # Priorizar saldo_final explícito sobre saldo_inicial
+                if "saldo_final" in tb_df.columns:
+                    col_monto_tb = "saldo_final"
+                else:
+                    col_monto_tb = next((c for c in tb_df.columns if "final" in str(c).lower() or "monto" in str(c).lower()), tb_df.columns[-1])
+                
+                tb_df_copy = tb_df.copy()
+                tb_df_copy[col_acc_tb] = tb_df_copy[col_acc_tb].astype(str).str.strip()
+                
+                # Seleccionar cuentas de resultado: aquellas mapeadas a Resultados Acumulados (excluyendo patrimonio histórico 1/2) o cuentas 3/4/5/6/7/8
+                mask_res = (tb_df_copy[col_acc_tb].isin(map_res_accs) & (~tb_df_copy[col_acc_tb].str.startswith(('1', '2')))) | tb_df_copy[col_acc_tb].str.startswith(('3', '4', '5', '6', '7', '8'))
+                tb_match = tb_df_copy[mask_res]
+                
+                saldo_balance_res_acum = float(pd.to_numeric(tb_match[col_monto_tb], errors='coerce').fillna(0.0).sum())
+                cuentas_balance_res_count = len(tb_match)
+            except Exception:
+                saldo_balance_res_acum = 0.0
+
+        # 3. Obtener suma del Cubo P&L
+        if pl_df_override is not None and not pl_df_override.empty:
+            exclude_cols = ['n° de cuenta', 'n de cuenta', 'cuenta', 'cuenta_id', 'nombre de la cuenta', 'nombre', 'descripcion', 'rubro']
+            c_acc_pl = next((c for c in pl_df_override.columns if "cuenta" in str(c).lower() and "nombre" not in str(c).lower()), None)
+            pl_df_clean = pl_df_override.copy()
+            if c_acc_pl:
+                pl_df_clean = pl_df_clean[pl_df_clean[c_acc_pl].astype(str).str.strip().str.upper() != "TOTAL"]
+            
+            num_cols = [c for c in pl_df_clean.columns if not any(ex in str(c).lower() for ex in exclude_cols)]
+            pl_total_sum = 0.0
+            from src.ui_pages.cargas_de_datos import parse_numeric_cell
+            for col in num_cols:
+                pl_total_sum += pl_df_clean[col].apply(parse_numeric_cell).sum()
+            has_pl = True
+        else:
+            pl_total_sum = PlCuboDB.get_pl_cubo_total_sum(empresa, periodo)
+            has_pl = PlCuboDB.get_pl_cubo(empresa, periodo) is not None
+
+        diff_direct = round(abs(saldo_balance_res_acum - pl_total_sum), 2)
+        diff_opp = round(abs(saldo_balance_res_acum + pl_total_sum), 2)
+        diff_abs = round(abs(abs(saldo_balance_res_acum) - abs(pl_total_sum)), 2)
+        min_diff = min(diff_direct, diff_opp, diff_abs)
+        
+        is_cuadrado = min_diff < 1.0
+
+        return {
+            "has_tb": has_tb,
+            "has_pl": has_pl,
+            "saldo_balance": saldo_balance_res_acum,
+            "cuentas_res_count": cuentas_balance_res_count,
+            "saldo_pl": pl_total_sum,
+            "diferencia": min_diff,
+            "is_cuadrado": is_cuadrado,
+            "status_str": "✅ 100% CUADRADO" if is_cuadrado else "❌ DESCUADRE DETECTADO"
+        }
+

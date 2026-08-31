@@ -39,3 +39,18 @@ class ConsolidationJournalEntry(Base):
     updated_by = Column(String(100), nullable=True) # Auditoría: usuario modificador
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class ConsolidationPeriodLock(Base):
+    """
+    Controla el candado de cierre y protección contra escritura para períodos consolidados.
+    """
+    __tablename__ = 'consolidation_period_locks'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    grupo_id = Column(Integer, ForeignKey('consolidation_groups.id'), nullable=False)
+    periodo = Column(String(7), index=True, nullable=False) # ej YYYY-MM
+    is_locked = Column(Boolean, default=True)
+    locked_at = Column(DateTime, default=datetime.utcnow)
+    locked_by = Column(String(100), default='Administrador')
+    unlocked_at = Column(DateTime, nullable=True)
+    unlocked_by = Column(String(100), nullable=True)

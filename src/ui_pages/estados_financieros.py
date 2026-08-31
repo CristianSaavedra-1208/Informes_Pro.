@@ -9,14 +9,17 @@ def render(empresa_seleccionada, empresa_path):
         st.stop()
         
     from src.models.trial_balance_db import TrialBalanceDB
+    from src.models.pl_cubo_db import PlCuboDB
     TrialBalanceDB.initialize()
     
     st.title("⚙️ Ejecución y Generación de Reportes Financieros")
     
-    available_periods = TrialBalanceDB.get_available_periods(empresa_seleccionada)
+    tb_periods = TrialBalanceDB.get_available_periods(empresa_seleccionada) or []
+    pl_periods = PlCuboDB.get_available_periods(empresa_seleccionada) or []
+    available_periods = sorted(list(set(tb_periods + pl_periods)), reverse=True)
     
     if not available_periods:
-        st.warning(f"⚠️ No hay periodos de Trial Balance cargados en la Base de Datos Histórica para {empresa_seleccionada}.")
+        st.warning(f"⚠️ No hay periodos de Trial Balance ni de P&L cargados en la Base de Datos Histórica para {empresa_seleccionada}.")
     
     # Determinar las opciones para el selector
     lista_opciones = available_periods.copy()
@@ -36,9 +39,16 @@ def render(empresa_seleccionada, empresa_path):
     if available_periods and periodo_actual in available_periods:
         st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
         st.session_state['tb_df_comp'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
-        from src.models.pl_cubo_db import PlCuboDB
         st.session_state['pl_df'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
         st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+
+    # Detectar cambio de periodo o empresa para invalidar previews desactualizados
+    cur_period_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}"
+    if st.session_state.get('last_selected_period_sig') != cur_period_sig:
+        st.session_state['last_selected_period_sig'] = cur_period_sig
+        for k in ['preview_df', 'balance_excel_binary', 'balance_word_binary', 'er_preview_df', 'er_excel_binary', 'flujo_preview_df', 'pat_preview_df', 'ori_preview_df']:
+            if k in st.session_state:
+                del st.session_state[k]
 
     # Garantizar carga de mapeos desde disco si no están en sesión
     if 'map_balance_df' not in st.session_state or st.session_state['map_balance_df'] is None or (isinstance(st.session_state['map_balance_df'], pd.DataFrame) and st.session_state['map_balance_df'].empty):
@@ -79,12 +89,16 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.warning("⚠️ No se encontró la plantilla 'Balance clasificado.xlsx' en la carpeta de la empresa.")
         
+        if 'tb_df' not in st.session_state or st.session_state['tb_df'] is None:
+            if periodo_actual and periodo_actual in available_periods:
+                st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+
         if 'tb_df' not in st.session_state or st.session_state['tb_df'] is None or 'map_balance_df' not in st.session_state:
             miss = []
             if 'tb_df' not in st.session_state: miss.append('tb_df (no está en memoria)')
-            elif st.session_state['tb_df'] is None: miss.append('tb_df (es None)')
+            elif st.session_state['tb_df'] is None: miss.append('Trial Balance de este periodo no cargado')
             if 'map_balance_df' not in st.session_state: miss.append('map_balance_df (Mapeo)')
-            st.warning(f"⚠️ Debes importar un Trial Balance y haber configurado tu Mapeo de Balance previamente. (Falta: {', '.join(miss)})")
+            st.warning(f"⚠️ Debes importar el Trial Balance (8 columnas) para el periodo {periodo_actual} y haber configurado tu Mapeo de Balance previamente. (Falta: {', '.join(miss)})")
         else:
             unidad = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="um_bal")
             scale_factor = 1000.0 if "M$" in unidad else 1.0
@@ -155,11 +169,15 @@ def render(empresa_seleccionada, empresa_path):
                                 preview_df[col_comp] = pd.to_numeric(preview_df[col_comp], errors='coerce')
                             
                             # Generate Word Version
+                            import importlib
+                            import src.reporting.word_export
+                            importlib.reload(src.reporting.word_export)
                             from src.reporting.word_export import WordExportEngine
                             word_output = WordExportEngine.generate_classified_balance_word(
                                 df=preview_df, 
                                 title="Estado de Situación Financiera Clasificado",
-                                unit=unidad
+                                unit=unidad,
+                                entity_name=empresa_seleccionada.replace('[GRUPO] ', '')
                             )
                             
                             st.session_state['preview_df'] = preview_df

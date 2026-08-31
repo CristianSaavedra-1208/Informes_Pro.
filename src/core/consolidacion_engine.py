@@ -305,14 +305,8 @@ def resolver_montos_asiento(grupo_id: int, periodo: str, lineas_asiento: list, d
                                     static_lines_other.append(a)
 
                         if abs(sum_total) > 0.001:
-                            if static_lines_zero:
+                            if dynamic_lines and static_lines_zero:
                                 balancer_entry = static_lines_zero[0]
-                                netos_comprobante[balancer_entry.id] -= sum_total
-                            elif static_lines_other:
-                                balancer_entry = static_lines_other[0]
-                                netos_comprobante[balancer_entry.id] -= sum_total
-                            elif dynamic_lines:
-                                balancer_entry = dynamic_lines[0]
                                 netos_comprobante[balancer_entry.id] -= sum_total
 
                         for a in lines:
@@ -387,14 +381,8 @@ def resolver_montos_asiento(grupo_id: int, periodo: str, lineas_asiento: list, d
                     static_lines_other.append(idx)
                     
         if abs(sum_total) > 0.001:
-            if static_lines_zero:
+            if dynamic_lines and static_lines_zero:
                 balancer_idx = static_lines_zero[0]
-                netos_comprobante[balancer_idx] -= sum_total
-            elif static_lines_other:
-                balancer_idx = static_lines_other[0]
-                netos_comprobante[balancer_idx] -= sum_total
-            elif dynamic_lines:
-                balancer_idx = dynamic_lines[0]
                 netos_comprobante[balancer_idx] -= sum_total
                 
         resolved_lines = []
@@ -559,18 +547,10 @@ def generar_hoja_trabajo(grupo_id: int, periodo: str):
                         else:
                             static_lines_other.append(a)
                 
-                # Si el comprobante está descuadrado (por ejemplo, porque tiene líneas dinámicas o diferencias IC)
+                # Si el comprobante tiene líneas dinámicas y una línea en cero para balancear
                 if abs(sum_total) > 0.001:
-                    # Buscar la mejor línea para absorber la diferencia y cuadrar el asiento
-                    if static_lines_zero:
+                    if dynamic_lines and static_lines_zero:
                         balancer_entry = static_lines_zero[0]
-                        netos_comprobante[balancer_entry.id] -= sum_total
-                    elif static_lines_other:
-                        balancer_entry = static_lines_other[0]
-                        netos_comprobante[balancer_entry.id] -= sum_total
-                    elif dynamic_lines:
-                        # Si no hay estáticas, usamos la primera dinámica para absorber la diferencia y cuadrar la columna
-                        balancer_entry = dynamic_lines[0]
                         netos_comprobante[balancer_entry.id] -= sum_total
                         
                 # Aplicar los netos calculados y balanceados

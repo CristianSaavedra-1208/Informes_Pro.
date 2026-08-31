@@ -64,43 +64,67 @@ def apply_table_column_widths(table, num_cols, total_width_inches=6.8):
 
 class WordExportEngine:
     @staticmethod
-    def generate_classified_balance_word(df, title="Estado de Situación Financiera Clasificado", unit="Ch$"):
+    def generate_classified_balance_word(df, title="Estado de Situación Financiera Clasificado", unit="Ch$", entity_name="DB TERRA CHILE HOLDCO SPA AND SUBSIDIARIES", *args, **kwargs):
         """
         Genera un informe en Word con formato financiero profesional tipo IFRS / Memoria Anual.
-        Aplica anchos de columna proporcionados, interlíneas compactas y bordes contables.
+        Garantiza ajuste a 1 sola página con espacio superior para encabezado y párrafo inferior de notas.
         """
         doc = Document()
         
-        # Establecer márgenes de página limpios (0.8 pulgadas / ~2cm)
+        # Márgenes estrechos (0.5 pulgadas / 1.27 cm) para maximizar altura imprimible
         sections = doc.sections
         for section in sections:
-            section.top_margin = Inches(0.8)
-            section.bottom_margin = Inches(0.8)
-            section.left_margin = Inches(0.85)
-            section.right_margin = Inches(0.85)
+            section.top_margin = Inches(0.5)
+            section.bottom_margin = Inches(0.5)
+            section.left_margin = Inches(0.6)
+            section.right_margin = Inches(0.6)
 
-        # Encabezado principal
-        heading = doc.add_heading(title, level=1)
-        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for r in heading.runs:
-            r.font.name = 'Arial'
-            r.font.size = Pt(16)
-            r.font.color.rgb = RGBColor(31, 78, 120)
-            r.font.bold = True
+        # ---------------------------------------------------------
+        # ENCABEZADO SUPERIOR (Estructura de Auditores ~8 interlíneas)
+        # ---------------------------------------------------------
+        p_ent = doc.add_paragraph()
+        p_ent.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_ent.paragraph_format.space_before = Pt(0)
+        p_ent.paragraph_format.space_after = Pt(1)
+        r_ent = p_ent.add_run(entity_name.upper())
+        r_ent.font.name = 'Arial'
+        r_ent.font.size = Pt(10)
+        r_ent.font.bold = True
+        r_ent.font.color.rgb = RGBColor(31, 78, 120)
+
+        p_tit = doc.add_paragraph()
+        p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_tit.paragraph_format.space_before = Pt(1)
+        p_tit.paragraph_format.space_after = Pt(1)
+        r_tit = p_tit.add_run(title.upper())
+        r_tit.font.name = 'Arial'
+        r_tit.font.size = Pt(10)
+        r_tit.font.bold = True
+
+        # Períodos y Unidad
+        col_dates = [str(c) for c in df.columns if any(char.isdigit() for char in str(c))]
+        period_str = f"Al {col_dates[0]} y {col_dates[1]}" if len(col_dates) >= 2 else (f"Al {col_dates[0]}" if col_dates else "")
         
-        # Subtítulo / Unidad de medida
-        subtitle = doc.add_paragraph(f"Expresado en {unit}")
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for r in subtitle.runs:
-            r.font.name = 'Arial'
-            r.font.size = Pt(9.5)
-            r.font.italic = True
-            r.font.color.rgb = RGBColor(80, 80, 80)
-        
+        p_sub = doc.add_paragraph()
+        p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_sub.paragraph_format.space_before = Pt(1)
+        p_sub.paragraph_format.space_after = Pt(1)
+        if period_str:
+            r_per = p_sub.add_run(f"{period_str}\n")
+            r_per.font.name = 'Arial'
+            r_per.font.size = Pt(8.5)
+            r_per.font.italic = True
+        r_unit = p_sub.add_run(f"(Expresado en {unit})")
+        r_unit.font.name = 'Arial'
+        r_unit.font.size = Pt(8)
+        r_unit.font.italic = True
+        r_unit.font.color.rgb = RGBColor(90, 90, 90)
+
         p_space = doc.add_paragraph()
         p_space.paragraph_format.space_before = Pt(0)
-        p_space.paragraph_format.space_after = Pt(4)
-        
+        p_space.paragraph_format.space_after = Pt(2)
+        p_space.paragraph_format.line_spacing = Pt(6)
+
         num_cols = len(df.columns)
         table = doc.add_table(rows=1, cols=num_cols)
         table.style = 'Normal Table'
@@ -110,18 +134,18 @@ class WordExportEngine:
         for i, col_name in enumerate(df.columns):
             hdr_cells[i].text = str(col_name)
             set_cell_bg(hdr_cells[i], "1F4E78") # Azul Corporativo
-            set_cell_margins(hdr_cells[i], top=70, bottom=70, left=100, right=100)
+            set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
             
             for p in hdr_cells[i].paragraphs:
-                p.paragraph_format.space_before = Pt(2)
-                p.paragraph_format.space_after = Pt(2)
-                p.paragraph_format.line_spacing = 1.0
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.line_spacing = Pt(9.0)
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
                 for run in p.runs:
                     run.font.bold = True
                     run.font.color.rgb = RGBColor(255, 255, 255)
                     run.font.name = 'Arial' 
-                    run.font.size = Pt(9)
+                    run.font.size = Pt(8)
         
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
         
@@ -169,7 +193,7 @@ class WordExportEngine:
                 cell = row_cells[i]
                 cell.text = text_val
                 set_cell_bg(cell, bg_color)
-                set_cell_margins(cell, top=40, bottom=40, left=100, right=100)
+                set_cell_margins(cell, top=8, bottom=8, left=50, right=50)
                 
                 # Aplicar bordes contables
                 if is_grand_total:
@@ -178,9 +202,9 @@ class WordExportEngine:
                     set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
                 
                 for p in cell.paragraphs:
-                    p.paragraph_format.space_before = Pt(1.5)
-                    p.paragraph_format.space_after = Pt(1.5)
-                    p.paragraph_format.line_spacing = 1.0
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.space_after = Pt(0)
+                    p.paragraph_format.line_spacing = Pt(8.8)
                     
                     if col_name in numeric_cols or i > 0 or isinstance(val, (int, float)):
                         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -189,19 +213,44 @@ class WordExportEngine:
                         
                     for run in p.runs:
                         run.font.name = 'Arial'
-                        run.font.size = Pt(8.5)
+                        run.font.size = Pt(7.5)
                         if is_grand_total or is_subtotal or is_category_header:
                             run.font.bold = True
                             if is_grand_total or is_category_header:
                                 run.font.color.rgb = RGBColor(15, 45, 80)
 
         # Aplicar anchos de columna profesionales
-        apply_table_column_widths(table, num_cols, total_width_inches=6.8)
+        apply_table_column_widths(table, num_cols, total_width_inches=7.1)
+
+        # ---------------------------------------------------------
+        # PIE INFERIOR (Con 2 interlíneas de separación)
+        # ---------------------------------------------------------
+        p_footer_space = doc.add_paragraph()
+        p_footer_space.paragraph_format.space_before = Pt(12)
+        p_footer_space.paragraph_format.space_after = Pt(0)
+        p_footer_space.paragraph_format.line_spacing = 1.0
+
+        is_cons = kwargs.get('is_consolidado', False) or ("[grupo]" in str(entity_name).lower()) or ("consolidado" in str(title).lower())
+        if is_cons:
+            note_text = "Las notas adjuntas N°s 1 a XX forman parte integral de estos estados financieros consolidados."
+        else:
+            note_text = "Las notas adjuntas N°s 1 a XX forman parte integral de estos estados financieros."
+
+        p_footer = doc.add_paragraph()
+        p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_footer.paragraph_format.space_before = Pt(0)
+        p_footer.paragraph_format.space_after = Pt(0)
+        r_foot = p_footer.add_run(note_text)
+        r_foot.font.name = 'Arial'
+        r_foot.font.size = Pt(8)
+        r_foot.font.italic = True
+        r_foot.font.color.rgb = RGBColor(80, 80, 80)
 
         output = BytesIO()
         doc.save(output)
         output.seek(0)
         return output
+
 
     @staticmethod
     def generate_notes_word(elements, title="Nota", unit="M$", note_code=None):
@@ -349,39 +398,49 @@ class WordExportEngine:
         return output
 
 
-def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en pesos"):
+def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en pesos", entity_name="DB TERRA CHILE HOLDCO SPA AND SUBSIDIARIES", *args, **kwargs):
     """
     Exporta un DataFrame genérico a Word con formato financiero profesional.
-    Aplica para Estados de Resultados, Flujos de Efectivo, Patrimonio y Consolidados.
+    Aplica para Estados de Resultados, Flujos de Efectivo, Patrimonio y Consolidados en 1 sola página.
     """
     doc = Document()
     
     for section in doc.sections:
-        section.top_margin = Inches(0.8)
-        section.bottom_margin = Inches(0.8)
-        section.left_margin = Inches(0.85)
-        section.right_margin = Inches(0.85)
+        section.top_margin = Inches(0.5)
+        section.bottom_margin = Inches(0.5)
+        section.left_margin = Inches(0.6)
+        section.right_margin = Inches(0.6)
 
-    heading = doc.add_heading(title, level=1)
-    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in heading.runs:
-        r.font.name = 'Arial'
-        r.font.size = Pt(16)
-        r.font.color.rgb = RGBColor(31, 78, 120)
-        r.font.bold = True
-    
-    sub = doc.add_paragraph(subtitle)
+    # Encabezado superior tipo auditoría
+    p_ent = doc.add_paragraph()
+    p_ent.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_ent.paragraph_format.space_before = Pt(0)
+    p_ent.paragraph_format.space_after = Pt(1)
+    r_ent = p_ent.add_run(entity_name.upper())
+    r_ent.font.name = 'Arial'
+    r_ent.font.size = Pt(10)
+    r_ent.font.bold = True
+    r_ent.font.color.rgb = RGBColor(31, 78, 120)
+
+    p_tit = doc.add_paragraph()
+    p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_tit.paragraph_format.space_before = Pt(1)
+    p_tit.paragraph_format.space_after = Pt(1)
+    r_tit = p_tit.add_run(title.upper())
+    r_tit.font.name = 'Arial'
+    r_tit.font.size = Pt(10)
+    r_tit.font.bold = True
+
+    sub = doc.add_paragraph(f"({subtitle})")
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub.paragraph_format.space_before = Pt(1)
+    sub.paragraph_format.space_after = Pt(2)
     for r in sub.runs:
         r.font.name = 'Arial'
-        r.font.size = Pt(9.5)
+        r.font.size = Pt(8)
         r.font.italic = True
         r.font.color.rgb = RGBColor(80, 80, 80)
         
-    p_space = doc.add_paragraph()
-    p_space.paragraph_format.space_before = Pt(0)
-    p_space.paragraph_format.space_after = Pt(4)
-    
     num_cols = len(df.columns)
     table = doc.add_table(rows=1, cols=num_cols)
     table.style = 'Normal Table'
@@ -390,18 +449,18 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
     for i, col_name in enumerate(df.columns):
         hdr_cells[i].text = str(col_name)
         set_cell_bg(hdr_cells[i], "1F4E78") # Azul Corporativo
-        set_cell_margins(hdr_cells[i], top=70, bottom=70, left=100, right=100)
+        set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
         
         for paragraph in hdr_cells[i].paragraphs:
-            paragraph.paragraph_format.space_before = Pt(2)
-            paragraph.paragraph_format.space_after = Pt(2)
-            paragraph.paragraph_format.line_spacing = 1.0
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = Pt(9.0)
             paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
             for run in paragraph.runs:
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(255, 255, 255)
                 run.font.name = 'Arial' 
-                run.font.size = Pt(9)
+                run.font.size = Pt(8)
                 
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
     for index, row in df.iterrows():
@@ -439,7 +498,7 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
             cell = row_cells[i]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=40, bottom=40, left=100, right=100)
+            set_cell_margins(cell, top=8, bottom=8, left=50, right=50)
             
             if is_grand_total:
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
@@ -447,9 +506,9 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
             
             for p in row_cells[i].paragraphs:
-                p.paragraph_format.space_before = Pt(1.5)
-                p.paragraph_format.space_after = Pt(1.5)
-                p.paragraph_format.line_spacing = 1.0
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.line_spacing = Pt(8.8)
                 
                 if col_name in numeric_cols or isinstance(val, (int, float)) or i > 0:
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -458,14 +517,37 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(8.5)
+                    run.font.size = Pt(7.5)
                     if is_grand_total or is_subtotal:
                         run.font.bold = True
                         run.font.color.rgb = RGBColor(15, 45, 80)
 
-    apply_table_column_widths(table, num_cols, total_width_inches=6.8)
+    apply_table_column_widths(table, num_cols, total_width_inches=7.1)
+
+    # Pie inferior con 2 interlíneas
+    p_footer_space = doc.add_paragraph()
+    p_footer_space.paragraph_format.space_before = Pt(12)
+    p_footer_space.paragraph_format.space_after = Pt(0)
+    p_footer_space.paragraph_format.line_spacing = 1.0
+
+    is_cons = kwargs.get('is_consolidado', False) or ("[grupo]" in str(entity_name).lower()) or ("consolidado" in str(title).lower()) or ("consolidada" in str(title).lower())
+    if is_cons:
+        note_text = "Las notas adjuntas N°s 1 a XX forman parte integral de estos estados financieros consolidados."
+    else:
+        note_text = "Las notas adjuntas N°s 1 a XX forman parte integral de estos estados financieros."
+
+    p_footer = doc.add_paragraph()
+    p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_footer.paragraph_format.space_before = Pt(0)
+    p_footer.paragraph_format.space_after = Pt(0)
+    r_foot = p_footer.add_run(note_text)
+    r_foot.font.name = 'Arial'
+    r_foot.font.size = Pt(8)
+    r_foot.font.italic = True
+    r_foot.font.color.rgb = RGBColor(80, 80, 80)
 
     output = BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
+

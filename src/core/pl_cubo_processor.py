@@ -14,6 +14,114 @@ def normalize_text(text):
     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
     return s
 
+def parse_month_to_num(val):
+    """
+    Convierte cualquier representación de mes (número, texto en español/inglés,
+    abreviación de 3 o 4 letras como 'sept', formato YYYY-MM, etc.) a un entero entre 1 y 12.
+    """
+    if pd.isna(val):
+        return None
+    s = str(val).strip().lower()
+    if not s or s == 'nan' or s == 'none':
+        return None
+    
+    # 1. Si contiene separadores de fecha o periodo ('YYYY-MM', 'YYYY/MM', 'DD-MM-YYYY')
+    if '-' in s or '/' in s:
+        parts = s.replace('/', '-').split('-')
+        if len(parts) >= 2:
+            # Formato ISO: YYYY-MM o YYYY-MM-DD
+            if len(parts[0]) == 4 and parts[0].isdigit():
+                m_part = parts[1].strip()
+                if m_part.isdigit() and 1 <= int(m_part) <= 12:
+                    return int(m_part)
+            # Formato tradicional: DD-MM-YYYY
+            elif len(parts[-1]) == 4 and parts[-1].isdigit():
+                m_part = parts[1].strip()
+                if m_part.isdigit() and 1 <= int(m_part) <= 12:
+                    return int(m_part)
+
+    # 2. Intento directo como número entero o float ('09', '9', 9, 9.0)
+    try:
+        n = int(float(s))
+        if 1 <= n <= 12:
+            return n
+    except (ValueError, TypeError):
+        pass
+
+    # 3. Normalización de texto (sin acentos, minúsculas)
+    s_norm = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+    month_map = {
+        # Enero
+        'ene': 1, 'ener': 1, 'enero': 1, 'jan': 1, 'january': 1, '01': 1, '1': 1, 'i': 1,
+        # Febrero
+        'feb': 2, 'febr': 2, 'febrero': 2, 'february': 2, '02': 2, '2': 2, 'ii': 2,
+        # Marzo
+        'mar': 3, 'marz': 3, 'marzo': 3, 'march': 3, '03': 3, '3': 3, 'iii': 3,
+        # Abril
+        'abr': 4, 'abri': 4, 'abril': 4, 'apr': 4, 'april': 4, '04': 4, '4': 4, 'iv': 4,
+        # Mayo
+        'may': 5, 'mayo': 5, '05': 5, '5': 5, 'v': 5,
+        # Junio
+        'jun': 6, 'juni': 6, 'junio': 6, 'june': 6, '06': 6, '6': 6, 'vi': 6,
+        # Julio
+        'jul': 7, 'juli': 7, 'julio': 7, 'july': 7, '07': 7, '7': 7, 'vii': 7,
+        # Agosto
+        'ago': 8, 'agos': 8, 'agosto': 8, 'aug': 8, 'august': 8, '08': 8, '8': 8, 'viii': 8,
+        # Septiembre (incluye 'sept', 'sep', 'set', 'seti', 'septiembre', 'setiembre', etc.)
+        'sep': 9, 'sept': 9, 'set': 9, 'seti': 9, 'septiembre': 9, 'setiembre': 9, 'september': 9, '09': 9, '9': 9, 'ix': 9,
+        # Octubre
+        'oct': 10, 'octu': 10, 'octubre': 10, 'october': 10, '10': 10, 'x': 10,
+        # Noviembre
+        'nov': 11, 'novi': 11, 'noviembre': 11, 'november': 11, '11': 11, 'xi': 11,
+        # Diciembre
+        'dic': 12, 'dici': 12, 'diciembre': 12, 'dec': 12, 'december': 12, '12': 12, 'xii': 12,
+    }
+
+    if s_norm in month_map:
+        return month_map[s_norm]
+
+    # 4. Prefijos comunes
+    for prefix, m_num in [
+        ('ener', 1), ('ene', 1), ('jan', 1),
+        ('febr', 2), ('feb', 2),
+        ('marz', 3), ('mar', 3),
+        ('abri', 4), ('abr', 4), ('apr', 4),
+        ('mayo', 5), ('may', 5),
+        ('juni', 6), ('jun', 6),
+        ('juli', 7), ('jul', 7),
+        ('agos', 8), ('ago', 8), ('aug', 8),
+        ('sept', 9), ('sep', 9), ('seti', 9), ('set', 9),
+        ('octu', 10), ('oct', 10),
+        ('novi', 11), ('nov', 11),
+        ('dici', 12), ('dic', 12), ('dec', 12)
+    ]:
+        if s_norm.startswith(prefix):
+            return m_num
+
+    return None
+
+def parse_year_to_num(val):
+    """
+    Extrae el año como número entero de 4 dígitos.
+    """
+    if pd.isna(val):
+        return None
+    s = str(val).strip()
+    if not s or s == 'nan' or s == 'none':
+        return None
+    import re
+    m = re.search(r'\b(20\d\d|19\d\d)\b', s)
+    if m:
+        return int(m.group(1))
+    try:
+        n = int(float(s))
+        if 1900 <= n <= 2100:
+            return n
+    except (ValueError, TypeError):
+        pass
+    return None
+
 def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None):
     """
     Procesa un DataFrame transaccional del Cubo de Odoo, filtra por periodo YTD,
@@ -21,12 +129,36 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
     al formato P&L configurado.
     """
     # 1. Detectar nombres de columnas de forma dinámica
-    col_year = next((c for c in df_cubo.columns if 'fec_doc' in c and 'mes' not in c.lower() and c != 'fec_doc'), None)
-    col_month = next((c for c in df_cubo.columns if 'mes' in c.lower()), None)
-    col_cuenta = next((c for c in df_cubo.columns if "cuenta" in c.lower() and "nombre" not in c.lower()), None)
-    col_nombre = next((c for c in df_cubo.columns if "nombre_cuenta" in c.lower() or "nombre de la cuenta" in c.lower()), None)
-    col_importe = next((c for c in df_cubo.columns if "importe" in c.lower() or "monto" in c.lower()), None)
-    col_category = next((c for c in df_cubo.columns if "informe_eerr" in c.lower() or "eerr" in c.lower()), None)
+    col_nivel1 = next((c for c in df_cubo.columns if normalize_text(c) in ['nivel 1', 'nivel_1', 'nivel1', 'n1']), None)
+
+    col_year = next((c for c in df_cubo.columns if any(k in normalize_text(c) for k in ['ano', 'año', 'year']) or ('fec_doc' in normalize_text(c) and 'mes' not in normalize_text(c) and normalize_text(c) != 'fec_doc')), None)
+    if not col_year and 'fec_doc' in df_cubo.columns:
+        col_year = 'fec_doc'
+
+    col_month = next((c for c in df_cubo.columns if 'mes' in normalize_text(c) or 'month' in normalize_text(c)), None)
+    if not col_month and 'fec_doc' in df_cubo.columns:
+        col_month = 'fec_doc'
+
+    # Priorizar nombres exactos para cuenta y nombre
+    col_cuenta = next((c for c in df_cubo.columns if normalize_text(c) in ["cuenta", "n° de cuenta", "n de cuenta", "cuenta_id", "cod_cuenta"]), None)
+    if not col_cuenta:
+        col_cuenta = next((c for c in df_cubo.columns if "cuenta" in normalize_text(c) and "nombre" not in normalize_text(c) and "agrup" not in normalize_text(c) and "fcst" not in normalize_text(c) and "flujo" not in normalize_text(c)), None)
+
+    col_nombre = next((c for c in df_cubo.columns if normalize_text(c) in ["nombre_cuenta", "nombre de la cuenta", "nombre cuenta", "descripcion", "desc"]), None)
+    if not col_nombre:
+        col_nombre = next((c for c in df_cubo.columns if "nombre" in normalize_text(c) and "empresa" not in normalize_text(c) and "depto" not in normalize_text(c) and "departamento" not in normalize_text(c)), None)
+
+    # Priorizar importe_mn / importe
+    col_importe = next((c for c in df_cubo.columns if normalize_text(c) in ["importe_mn", "importe mn", "importe", "monto", "saldo", "monto_mn"]), None)
+    if not col_importe:
+        col_importe = next((c for c in df_cubo.columns if any(k in normalize_text(c) for k in ["importe", "monto", "saldo"])), None)
+
+    # Priorizar informe_ee_rr (columna 37 / con guiones o espacios) sobre informe_eerr
+    col_category = next((c for c in df_cubo.columns if normalize_text(c) in ["informe_ee_rr", "informeee_rr", "informe ee rr", "ee_rr", "eerr"]), None)
+    if not col_category:
+        col_category = next((c for c in df_cubo.columns if "informe_ee_rr" in normalize_text(c) or "ee_rr" in normalize_text(c)), None)
+    if not col_category:
+        col_category = next((c for c in df_cubo.columns if "informe_eerr" in normalize_text(c) or "eerr" in normalize_text(c)), None)
 
     # Fallbacks de detección por posición por si fallan los nombres
     if not col_cuenta:
@@ -38,20 +170,32 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
     if not col_category:
         col_category = df_cubo.columns[6] if len(df_cubo.columns) > 6 else df_cubo.columns[0]
 
-    # 2. Filtrar por Año y Rango YTD de Meses
-    MONTH_LIST = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
-    try:
-        month_idx = int(month)
-    except Exception:
-        month_idx = 12
-    allowed_months = MONTH_LIST[:month_idx]
-
     df_filtered = df_cubo.copy()
+
+    # 1.1 Filtrar por Nivel 1 (EBITDA / NO EBITDA) si existe la columna
+    if col_nivel1 and col_nivel1 in df_filtered.columns:
+        series_n1 = df_filtered[col_nivel1].apply(normalize_text)
+        mask_n1 = series_n1.isin(["ebitda", "no ebitda", "no_ebitda", "no-ebitda"])
+        if mask_n1.any():
+            df_filtered = df_filtered[mask_n1]
+
+    # 2. Filtrar por Año y Rango YTD de Meses
+    target_year = parse_year_to_num(year)
+    target_month = parse_month_to_num(month)
+    if target_month is None:
+        target_month = 12
     
-    if col_year and col_year in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered[col_year].astype(str).str.contains(str(year))]
-    if col_month and col_month in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered[col_month].astype(str).str.strip().str.lower().isin(allowed_months)]
+    if col_year and col_year in df_filtered.columns and target_year is not None:
+        series_year = df_filtered[col_year].apply(parse_year_to_num)
+        if series_year.notna().any():
+            df_filtered = df_filtered[series_year == target_year]
+        else:
+            df_filtered = df_filtered[df_filtered[col_year].astype(str).str.contains(str(target_year))]
+
+    if col_month and col_month in df_filtered.columns and target_month is not None:
+        series_month = df_filtered[col_month].apply(parse_month_to_num)
+        if series_month.notna().any():
+            df_filtered = df_filtered[series_month.notna() & (series_month >= 1) & (series_month <= target_month)]
 
     # Asegurar montos numéricos
     if col_importe and col_importe in df_filtered.columns:
