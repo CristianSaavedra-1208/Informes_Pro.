@@ -47,99 +47,108 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
             return 0.0
         visited.add(coord)
         
-    formula = formula.strip().upper()
+    clean_formula = formula.strip().upper()
     
-    # Pattern 1: =SUM(D36:G36) o =SUM(C5:C6)
-    sum_match = re.match(r'^=SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$', formula)
-    if sum_match:
-        col1_let = sum_match.group(1)
-        row1_num = int(sum_match.group(2))
-        col2_let = sum_match.group(3)
-        row2_num = int(sum_match.group(4))
-        
-        from openpyxl.utils import column_index_from_string
-        col1_idx = column_index_from_string(col1_let)
-        col2_idx = column_index_from_string(col2_let)
-        
-        total = 0.0
-        
-        if col1_let == col2_let:
-            # Suma vertical (misma columna)
-            for r in range(row1_num, row2_num + 1):
-                if r <= ws.max_row:
-                    val = ws.cell(row=r, column=col1_idx).value
-                    if val is not None:
-                        if isinstance(val, str) and val.startswith('='):
-                            val = evaluate_openpyxl_formula(val, ws, col1_idx, r, visited)
-                        try:
-                            if val is not None:
-                                total += float(val)
-                        except (ValueError, TypeError):
-                            pass
-        elif row1_num == row2_num:
-            # Suma horizontal (misma fila)
-            r = row1_num
-            for c in range(col1_idx, col2_idx + 1):
-                if c <= ws.max_column:
-                    val = ws.cell(row=r, column=c).value
-                    if val is not None:
-                        if isinstance(val, str) and val.startswith('='):
-                            val = evaluate_openpyxl_formula(val, ws, c, r, visited)
-                        try:
-                            if val is not None:
-                                total += float(val)
-                        except (ValueError, TypeError):
-                            pass
+    # 1. Handle functions like SUM(...) or SUMA(...)
+    # Soportar =SUM(A1:A5), =SUMA(C5:C11), =SUM(C1:C3, C5:C6), =SUMA(C1; C2; C3)
+    def resolve_cell_or_range(term):
+        term = term.strip()
+        if not term:
+            return 0.0
+        if ':' in term:
+            parts = term.split(':')
+            m1 = re.match(r'^([A-Z]+)(\d+)$', parts[0].strip())
+            m2 = re.match(r'^([A-Z]+)(\d+)$', parts[1].strip())
+            if m1 and m2:
+                c1_idx = column_index_from_string(m1.group(1))
+                r1_num = int(m1.group(2))
+                c2_idx = column_index_from_string(m2.group(1))
+                r2_num = int(m2.group(2))
+                subtotal = 0.0
+                min_r, max_r = min(r1_num, r2_num), max(r1_num, r2_num)
+                min_c, max_c = min(c1_idx, c2_idx), max(c1_idx, c2_idx)
+                for r in range(min_r, min_r + (max_r - min_r + 1)):
+                    if r <= ws.max_row:
+                        for c in range(min_c, min_c + (max_c - min_c + 1)):
+                            if c <= ws.max_column:
+                                val = ws.cell(row=r, column=c).value
+                                if isinstance(val, str) and val.startswith('='):
+                                    val = evaluate_openpyxl_formula(val, ws, c, r, visited)
+                                try:
+                                    if val is not None:
+                                        subtotal += float(val)
+                                except (ValueError, TypeError):
+                                    pass
+                return subtotal
         else:
-            # Suma bidimensional (caja/rango)
-            for r in range(row1_num, row2_num + 1):
-                for c in range(col1_idx, col2_idx + 1):
-                    if r <= ws.max_row and c <= ws.max_column:
-                        val = ws.cell(row=r, column=c).value
+            m = re.match(r'^([A-Z]+)(\d+)$', term)
+            if m:
+                c_idx = column_index_from_string(m.group(1))
+                r_num = int(m.group(2))
+                if r_num <= ws.max_row and c_idx <= ws.max_column:
+                    val = ws.cell(row=r_num, column=c_idx).value
+                    if isinstance(val, str) and val.startswith('='):
+                        val = evaluate_openpyxl_formula(val, ws, c_idx, r_num, visited)
+                    try:
                         if val is not None:
-                            if isinstance(val, str) and val.startswith('='):
-                                val = evaluate_openpyxl_formula(val, ws, c, r, visited)
-                            try:
-                                total += float(val)
-                            except ValueError:
-                                pass
-                                
+                            return float(val)
+                    except (ValueError, TypeError):
+                        pass
+        try:
+            return float(term)
+        except (ValueError, TypeError):
+            return 0.0
+
+    # Match SUM / SUMA with arguments inside
+    func_match = re.match(r'^=(?:SUM|SUMA)\((.*)\)$', clean_formula)
+    if func_match:
+        inner = func_match.group(1)
+        # Dividir argumentos por coma o punto y coma
+        args = [arg.strip() for arg in re.split(r'[,;]', inner) if arg.strip()]
+        total = sum(resolve_cell_or_range(arg) for arg in args)
         if row_idx is not None:
             visited.discard((row_idx, col_idx))
         return total
-        
-    # Pattern 2: =X12-X34 or similar arithmetic expression
-    tokens = re.findall(r'([A-Z]+)(\d+)', formula)
+
+    # 2. Arithmetic expressions: e.g. =+C26+C18+C12, =C32+C30+C28, =+D34, =C10-C20
+    # Remover el signo '=' inicial
+    expr = clean_formula[1:].strip()
+    if expr.startswith('+'):
+        expr = expr[1:].strip()
+
+    # Encontrar todas las celdas o rangos referenciados en la expresión
+    tokens = re.findall(r'([A-Z]+)(\d+)', expr)
     if tokens:
-        expr = formula[1:] # remove '='
-        sorted_tokens = sorted(tokens, key=lambda t: len(t[0] + t[1]), reverse=True)
-        
+        # Reemplazar tokens de mayor longitud a menor longitud para evitar solapamientos
+        sorted_tokens = sorted(set(tokens), key=lambda t: len(t[0] + t[1]), reverse=True)
         for col_letter, row_str in sorted_tokens:
-            row_idx_ref = int(row_str)
-            if row_idx_ref <= ws.max_row:
-                c_idx = column_index_from_string(col_letter)
-                val = ws.cell(row=row_idx_ref, column=c_idx).value
+            token_str = f"{col_letter}{row_str}"
+            r_num = int(row_str)
+            c_idx = column_index_from_string(col_letter)
+            val_float = 0.0
+            if r_num <= ws.max_row and c_idx <= ws.max_column:
+                val = ws.cell(row=r_num, column=c_idx).value
                 if isinstance(val, str) and val.startswith('='):
-                    val = evaluate_openpyxl_formula(val, ws, c_idx, row_idx_ref, visited)
-                val_float = 0.0
+                    val = evaluate_openpyxl_formula(val, ws, c_idx, r_num, visited)
                 if val is not None:
                     try:
                         val_float = float(val)
-                    except ValueError:
-                        pass
-                token_str = f"{col_letter}{row_str}"
-                expr = expr.replace(token_str, str(val_float))
-            
-        expr = expr.replace('+-', '-').replace('--', '+')
+                    except (ValueError, TypeError):
+                        val_float = 0.0
+            # Reemplazar usando regex de límite de palabra/carácter
+            expr = re.sub(r'\b' + token_str + r'\b', f"({val_float})", expr)
+
+        # Reemplazar operadores duplicados
+        expr = expr.replace('+-', '-').replace('--', '+').replace('++', '+')
         if re.match(r'^[0-9. +\-*/()]+$', expr):
             try:
                 ret_val = eval(expr)
                 if row_idx is not None:
                     visited.discard((row_idx, col_idx))
-                return ret_val
-            except:
+                return float(ret_val)
+            except Exception:
                 pass
-                
+
     if row_idx is not None:
         visited.discard((row_idx, col_idx))
     return None

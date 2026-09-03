@@ -1,10 +1,52 @@
 import pandas as pd
 
-def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=None):
+def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=None, unit=None, is_miles=None):
     import openpyxl
     from io import BytesIO
 
     df = df.copy()
+
+    # Detectar si la unidad es en miles
+    if is_miles is None:
+        if unit is not None:
+            is_miles = any(m in str(unit).lower() for m in ["miles", "m$", "mch$"])
+        else:
+            try:
+                import streamlit as st
+                um_candidates = [
+                    st.session_state.get('unidad_medida'),
+                    st.session_state.get('unidad'),
+                    st.session_state.get('um_er'),
+                    st.session_state.get('um_cf'),
+                    st.session_state.get('um_bal'),
+                    st.session_state.get('um_pat'),
+                    st.session_state.get('um_ori'),
+                ]
+                for um in um_candidates:
+                    if um and any(m in str(um).lower() for m in ["miles", "m$", "mch$"]):
+                        is_miles = True
+                        break
+                if is_miles is None:
+                    scale = st.session_state.get('scale_factor', 1.0)
+                    if scale == 1000.0 or scale == 1000:
+                        is_miles = True
+            except Exception:
+                is_miles = False
+
+    if is_miles:
+        new_cols = []
+        for i, col in enumerate(df.columns):
+            col_str = str(col)
+            # Agregar \nM$ a columnas de fecha/período o numéricas (no primera col y no Nota)
+            if any(char.isdigit() for char in col_str) or (i > 0 and col_str.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"]):
+                if "M$" not in col_str:
+                    new_cols.append(f"{col_str}\nM$")
+                else:
+                    new_cols.append(col_str)
+            else:
+                new_cols.append(col_str)
+        df.columns = new_cols
+
     if len(df.columns) > 0:
         df.iloc[:, 0] = df.iloc[:, 0].fillna("").astype(str).replace({"nan": "", "None": ""})
 
@@ -88,7 +130,17 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             ]
         },
         {
-            'selector': 'th:not(:first-child), td:not(:first-child)',
+            'selector': 'th:not(:first-child)',
+            'props': [
+                ('white-space', 'pre-line !important'),
+                ('width', '150px !important'),
+                ('min-width', '150px !important'),
+                ('max-width', '250px !important'),
+                ('vertical-align', 'bottom !important')
+            ]
+        },
+        {
+            'selector': 'td:not(:first-child)',
             'props': [
                 ('white-space', 'nowrap !important'),
                 ('width', '150px !important'),

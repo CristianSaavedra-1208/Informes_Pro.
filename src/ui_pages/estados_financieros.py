@@ -197,7 +197,7 @@ def render(empresa_seleccionada, empresa_path):
                 
                 # Apply global corporate styles
                 from src.reporting.formatting import apply_corporate_style
-                styled_df = apply_corporate_style(preview_df, excel_bytes=st.session_state.get('balance_excel_binary'))
+                styled_df = apply_corporate_style(preview_df, excel_bytes=st.session_state.get('balance_excel_binary'), unit=unidad)
                 
                 st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
                 st.write("")
@@ -358,7 +358,7 @@ def render(empresa_seleccionada, empresa_path):
             import src.reporting.formatting
             importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_df = apply_corporate_style(display_df, excel_bytes=st.session_state.get('er_excel_binary'))
+            styled_df = apply_corporate_style(display_df, excel_bytes=st.session_state.get('er_excel_binary'), unit=unidad_medida)
             st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
             st.write("")
             
@@ -721,18 +721,60 @@ def render(empresa_seleccionada, empresa_path):
                             if nota_col_idx is None:
                                 nota_col_idx = val25_col_idx + 1 if val25_col_idx + 1 < val24_col_idx else name_col_idx + 1
                                 
+                            header_row_idx = 8
+                            for row in range(1, 15):
+                                v25 = ws_check.cell(row=row, column=val25_col_idx).value
+                                v24 = ws_check.cell(row=row, column=val24_col_idx).value
+                                v_name = ws_check.cell(row=row, column=name_col_idx).value
+                                v_str = f"{v25} {v24} {v_name}".lower()
+                                if any(k in v_str for k in ["flujos de efectivo procedentes", "cobros procedentes", "utilidad (pérdida)", "utilidad (perdida)", "ganancia (pérdida)", "resultado del ejercicio"]):
+                                    header_row_idx = row - 1
+                                    break
+                                elif any(k in v_str for k in ["actual", "anterior", "m$", "31-12", "31 de"]):
+                                    header_row_idx = row
+                                    
                             ex_cf.seek(0)
-                            df_raw = pd.read_excel(ex_cf)
+                            df_raw = pd.read_excel(ex_cf, header=None)
+                            df_data = df_raw.iloc[header_row_idx:].reset_index(drop=True)
                             
                             col_actual = str(periodo_actual)
                             col_comp = str(periodo_comp)
                             if col_actual == col_comp:
                                 col_comp = f"{col_comp} (Comp)"
                                 
-                            cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-                            preview_cf = df_raw.iloc[:, cols_to_keep].copy()
-                            preview_cf.columns = ["Descripción", "Nota", col_actual, col_comp]
-                            preview_cf = preview_cf.dropna(how='all', subset=["Descripción"])
+                            def is_cf_title_or_header_row(row_val):
+                                if pd.isna(row_val):
+                                    return True
+                                r_str = str(row_val).strip().lower()
+                                if r_str == "" or r_str == "nan":
+                                    return True
+                                title_patterns = [
+                                    "estados separados de flujos",
+                                    "estado de flujos de efectivo",
+                                    "por los ejercicios terminados",
+                                    "pacifico cable",
+                                    "db terra chile holdco",
+                                    "nota",
+                                    "m$"
+                                ]
+                                return any(pat in r_str for pat in title_patterns)
+
+                            has_nota = (nota_col_idx is not None and 
+                                        nota_col_idx != name_col_idx and 
+                                        nota_col_idx != val25_col_idx and 
+                                        nota_col_idx != val24_col_idx and
+                                        nota_col_idx <= ws_check.max_column)
+
+                            if has_nota:
+                                cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                preview_cf = df_data.iloc[:, cols_to_keep].copy()
+                                preview_cf.columns = ["Descripción", "Nota", col_actual, col_comp]
+                            else:
+                                cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                preview_cf = df_data.iloc[:, cols_to_keep].copy()
+                                preview_cf.columns = ["Descripción", col_actual, col_comp]
+
+                            preview_cf = preview_cf[~preview_cf["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
                             
                             st.session_state['flujo_preview_df'] = preview_cf
                             elapsed_time = time.time() - start_time
@@ -753,7 +795,7 @@ def render(empresa_seleccionada, empresa_path):
                 import src.reporting.formatting
                 importlib.reload(sys.modules['src.reporting.formatting'])
                 from src.reporting.formatting import apply_corporate_style
-                styled_cf = apply_corporate_style(display_cf, excel_bytes=st.session_state.get('flujo_excel_binary'))
+                styled_cf = apply_corporate_style(display_cf, excel_bytes=st.session_state.get('flujo_excel_binary'), unit=unidad_medida_cf)
                 st.markdown(styled_cf.to_html(index=False), unsafe_allow_html=True)
                 
             with tab_view2:
@@ -933,7 +975,7 @@ def render(empresa_seleccionada, empresa_path):
             import src.reporting.formatting
             importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'))
+            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'), unit=unidad_pat)
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")
@@ -1102,7 +1144,7 @@ def render(empresa_seleccionada, empresa_path):
             import src.reporting.formatting
             importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('ori_excel_binary'))
+            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('ori_excel_binary'), unit=st.session_state.get('um_er', 'M$'))
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")

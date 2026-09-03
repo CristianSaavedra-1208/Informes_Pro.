@@ -705,11 +705,55 @@ def render(empresa_seleccionada, empresa_path):
                             if nota_col_idx is None:
                                 nota_col_idx = val25_col_idx + 1 if val25_col_idx + 1 < val24_col_idx else name_col_idx + 1
                                 
+                            header_row_idx = 8
+                            for row in range(1, 15):
+                                v25 = ws_check.cell(row=row, column=val25_col_idx).value
+                                v24 = ws_check.cell(row=row, column=val24_col_idx).value
+                                v_name = ws_check.cell(row=row, column=name_col_idx).value
+                                v_str = f"{v25} {v24} {v_name}".lower()
+                                if any(k in v_str for k in ["flujos de efectivo procedentes", "cobros procedentes", "utilidad (pérdida)", "utilidad (perdida)", "ganancia (pérdida)", "resultado del ejercicio"]):
+                                    header_row_idx = row - 1
+                                    break
+                                elif any(k in v_str for k in ["actual", "anterior", "m$", "31-12", "31 de"]):
+                                    header_row_idx = row
+                                    
                             result_bytes.seek(0)
-                            df_raw = pd.read_excel(result_bytes)
-                            cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-                            preview_df = df_raw.iloc[:, cols_to_keep].copy()
-                            preview_df.columns = ["Descripción", col_actual, col_comp]
+                            df_raw = pd.read_excel(result_bytes, header=None)
+                            df_data = df_raw.iloc[header_row_idx:].reset_index(drop=True)
+                            
+                            def is_cf_title_or_header_row(row_val):
+                                if pd.isna(row_val):
+                                    return True
+                                r_str = str(row_val).strip().lower()
+                                if r_str == "" or r_str == "nan":
+                                    return True
+                                title_patterns = [
+                                    "estados separados de flujos",
+                                    "estado de flujos de efectivo",
+                                    "por los ejercicios terminados",
+                                    "pacifico cable",
+                                    "db terra chile holdco",
+                                    "nota",
+                                    "m$"
+                                ]
+                                return any(pat in r_str for pat in title_patterns)
+
+                            has_nota = (nota_col_idx is not None and 
+                                        nota_col_idx != name_col_idx and 
+                                        nota_col_idx != val25_col_idx and 
+                                        nota_col_idx != val24_col_idx and
+                                        nota_col_idx <= ws_check.max_column)
+
+                            if has_nota:
+                                cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                preview_df = df_data.iloc[:, cols_to_keep].copy()
+                                preview_df.columns = ["Descripción", "Nota", col_actual, col_comp]
+                            else:
+                                cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                preview_df = df_data.iloc[:, cols_to_keep].copy()
+                                preview_df.columns = ["Descripción", col_actual, col_comp]
+
+                            preview_df = preview_df[~preview_df["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
                         else: # Estado de Cambios en el Patrimonio o Estado de Resultados Integrales
                             result_bytes.seek(0)
                             if report_type == "Estado de Cambios en el Patrimonio":
@@ -734,7 +778,7 @@ def render(empresa_seleccionada, empresa_path):
                                 from src.reporting.word_export import WordExportEngine
                                 word_output = WordExportEngine.generate_classified_balance_word(
                                     df=preview_df,
-                                    title=f"Estado de Situación Financiera Consolidado - {grupo_name}",
+                                    title="Estado de Situación Financiera Consolidado",
                                     unit=unidad
                                 )
                                 word_bytes_out = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
@@ -743,7 +787,7 @@ def render(empresa_seleccionada, empresa_path):
                                 from src.reporting.word_export import generate_word_report
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
-                                    title=f"Estado de Resultados Consolidado - {grupo_name}",
+                                    title="Estado de Resultados Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
                                 )
                                 word_filename = f"ER_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -751,7 +795,7 @@ def render(empresa_seleccionada, empresa_path):
                                 from src.reporting.word_export import generate_word_report
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
-                                    title=f"Estado de Flujos de Efectivo Consolidado - {grupo_name}",
+                                    title="Estado de Flujos de Efectivo Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
                                 )
                                 word_filename = f"Flujo_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -759,7 +803,7 @@ def render(empresa_seleccionada, empresa_path):
                                 from src.reporting.word_export import generate_word_report
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
-                                    title=f"Estado de Cambios en el Patrimonio Consolidado - {grupo_name}",
+                                    title="Estado de Cambios en el Patrimonio Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
                                 )
                                 word_filename = f"Patrimonio_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -767,7 +811,7 @@ def render(empresa_seleccionada, empresa_path):
                                 from src.reporting.word_export import generate_word_report
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
-                                    title=f"Estado de Resultados Integrales Consolidado - {grupo_name}",
+                                    title="Estado de Resultados Integrales Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
                                 )
                                 word_filename = f"ORI_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -817,7 +861,7 @@ def render(empresa_seleccionada, empresa_path):
                     import src.reporting.formatting
                     importlib.reload(sys.modules['src.reporting.formatting'])
                     from src.reporting.formatting import apply_corporate_style
-                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary')).to_html(index=False), unsafe_allow_html=True)
+                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary'), unit=unidad).to_html(index=False), unsafe_allow_html=True)
                 except Exception as e:
                     st.dataframe(preview_df, height=500, use_container_width=True)
 

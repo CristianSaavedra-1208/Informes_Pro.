@@ -81,27 +81,32 @@ def move_element_before(target_p, new_element):
     idx = parent.index(target_p._p)
     parent.insert(idx, new_element)
 
-def populate_docx_table(table, df, numeric_cols):
+def populate_docx_table(table, df, numeric_cols, unit="M$"):
     """Rellena y da estilo corporativo a una tabla de Word en base a un DataFrame."""
     table.style = 'Normal Table'
     num_cols = len(df.columns)
     
     # Fila de cabecera
+    is_miles = any(m in str(unit).lower() for m in ["miles", "m$", "mch$"])
     hdr_cells = table.rows[0].cells
     for i, col_name in enumerate(df.columns):
-        hdr_cells[i].text = str(col_name)
+        header_text = str(col_name)
+        if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower() not in ["nota", "notas"])):
+            if "M$" not in header_text:
+                header_text = f"{header_text}\nM$"
+        hdr_cells[i].text = header_text
         set_cell_bg(hdr_cells[i], "1F4E78") # Azul corporativo
-        set_cell_margins(hdr_cells[i], top=70, bottom=70, left=100, right=100)
+        set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
         for p in hdr_cells[i].paragraphs:
-            p.paragraph_format.space_before = Pt(2)
-            p.paragraph_format.space_after = Pt(2)
-            p.paragraph_format.line_spacing = 1.0
-            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if i > 0 else WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = Pt(9.0)
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
             for run in p.runs:
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(255, 255, 255) # Blanco
                 run.font.name = 'Arial'
-                run.font.size = Pt(9)
+                run.font.size = Pt(8)
                 
     # Filas de datos
     for row_i, (_, row_vals) in enumerate(df.iterrows()):
@@ -109,12 +114,29 @@ def populate_docx_table(table, df, numeric_cols):
         first_cell_str = str(row_vals.iloc[0]).strip()
         first_cell_clean = first_cell_str.lower()
         
-        is_grand_total = any(k in first_cell_clean for k in ["total activos", "total patrimonio y pasivos", "patrimonio total", "ganancia (pérdida) del ejercicio", "resultado del ejercicio"])
-        is_subtotal = not is_grand_total and any(k in first_cell_clean for k in ["total", "sub total", "saldo final", "ganancia bruta", "resultado antes de", "procedente de operaciones"])
-        is_category_header = not is_subtotal and not is_grand_total and (
-            first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"] or
-            all(pd.isna(row_vals.iloc[col_i]) or str(row_vals.iloc[col_i]).strip() == "" for col_i in range(1, num_cols))
+        # Verificar si la fila contiene datos numéricos
+        has_data_values = any(
+            isinstance(row_vals.iloc[c], (int, float)) or 
+            (pd.notna(row_vals.iloc[c]) and str(row_vals.iloc[c]).strip() not in ["", "-", "nan", "None"] and any(ch.isdigit() for ch in str(row_vals.iloc[c])))
+            for c in range(1, num_cols)
         )
+        
+        # Clasificación precisa de tipo de fila contable
+        is_category_header = (not has_data_values) or (
+            any(k in first_cell_clean for k in ["(utilizados en)", "actividades de operación", "actividades de inversión", "actividades de financiación"]) and 
+            not any(k in first_cell_clean for k in ["total", "subtotal"]) and not has_data_values
+        ) or first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"]
+        
+        is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
+            "total activos", "total patrimonio y pasivos", "patrimonio total", 
+            "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo"
+        ])
+        
+        is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
+            "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
+            "procedentes de actividades de operación", "utilizados en actividades de inversión", 
+            "procedentes de actividades de financiación", "incremento (decremento) neto"
+        ])
 
         if is_grand_total:
             bg_color = "EBF2FA"
@@ -135,7 +157,7 @@ def populate_docx_table(table, df, numeric_cols):
                 if isinstance(val, (int, float)):
                     try:
                         if val == 0:
-                            text_val = "-"
+                            text_val = "0" if is_category_header else "-"
                         elif val < 0:
                             text_val = f"({abs(val):,.0f})".replace(",", ".")
                         else:
@@ -148,7 +170,7 @@ def populate_docx_table(table, df, numeric_cols):
             cell = row_cells[col_idx]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=40, bottom=40, left=100, right=100)
+            set_cell_margins(cell, top=35, bottom=35, left=60, right=60)
             
             if is_grand_total:
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
@@ -156,9 +178,9 @@ def populate_docx_table(table, df, numeric_cols):
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
 
             for p in cell.paragraphs:
-                p.paragraph_format.space_before = Pt(1.5)
-                p.paragraph_format.space_after = Pt(1.5)
-                p.paragraph_format.line_spacing = 1.0
+                p.paragraph_format.space_before = Pt(1)
+                p.paragraph_format.space_after = Pt(1)
+                p.paragraph_format.line_spacing = Pt(10.5)
                 
                 if col_idx in numeric_cols or isinstance(val, (int, float)) or col_idx > 0:
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -167,7 +189,7 @@ def populate_docx_table(table, df, numeric_cols):
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(8.5)
+                    run.font.size = Pt(8.0)
                     if is_grand_total or is_subtotal or is_category_header:
                         run.font.bold = True
                         if is_grand_total or is_category_header:
@@ -356,20 +378,43 @@ class WordTemplateEngine:
             val25_col_idx = date_cols[0]
             val24_col_idx = date_cols[1]
             
+        header_row_idx = 8
+        for row in range(1, 15):
+            v25 = ws_check.cell(row=row, column=val25_col_idx).value
+            v24 = ws_check.cell(row=row, column=val24_col_idx).value
+            v_name = ws_check.cell(row=row, column=name_col_idx).value
+            v_str = f"{v25} {v24} {v_name}".lower()
+            if any(k in v_str for k in ["flujos de efectivo procedentes", "cobros procedentes", "utilidad (pérdida)", "utilidad (perdida)", "ganancia (pérdida)", "resultado del ejercicio"]):
+                header_row_idx = row - 1
+                break
+            elif any(k in v_str for k in ["actual", "anterior", "m$", "31-12", "31 de"]):
+                header_row_idx = row
+                
         result_bytes.seek(0)
-        df_raw = pd.read_excel(result_bytes)
-        cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-        preview_df = df_raw.iloc[:, cols_to_keep].copy()
-        preview_df.columns = ["Descripción", col_actual, col_comp]
-        preview_df = preview_df.dropna(how='all', subset=["Descripción"]).reset_index(drop=True)
+        df_raw = pd.read_excel(result_bytes, header=None)
+        df_data = df_raw.iloc[header_row_idx:].reset_index(drop=True)
         
-        clean_rows = []
-        for _, r in preview_df.iterrows():
-            desc = str(r["Descripción"]).strip().lower()
-            if any(t in desc for t in ["estados separados", "por los ejercicios terminados"]):
-                continue
-            clean_rows.append(r)
-        preview_df = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else preview_df
+        def is_cf_title_or_header_row(row_val):
+            if pd.isna(row_val):
+                return True
+            r_str = str(row_val).strip().lower()
+            if r_str == "" or r_str == "nan":
+                return True
+            title_patterns = [
+                "estados separados de flujos",
+                "estado de flujos de efectivo",
+                "por los ejercicios terminados",
+                "pacifico cable",
+                "db terra chile holdco",
+                "nota",
+                "m$"
+            ]
+            return any(pat in r_str for pat in title_patterns)
+
+        cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+        preview_df = df_data.iloc[:, cols_to_keep].copy()
+        preview_df.columns = ["Descripción", col_actual, col_comp]
+        preview_df = preview_df[~preview_df["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
 
         return preview_df
 
@@ -650,7 +695,7 @@ class WordTemplateEngine:
         )
         return bal_df, pl_df, result_bytes_bal, result_bytes_er
 
-    def process(self, empresa_activa, periodo_actual, periodo_comp, scale_factor=1.0, use_ifrs_auto=True):
+    def process(self, empresa_activa, periodo_actual, periodo_comp, scale_factor=1.0, use_ifrs_auto=True, include_headers=True):
         doc = DocxTemplate(self.template_bytes_io)
         
         is_consolidated = empresa_activa.startswith("[GRUPO]")
@@ -796,15 +841,26 @@ class WordTemplateEngine:
                 code = tag_content
                 override_period = None
             
+            # Normalizar código para detectar si es solo tabla o con encabezado completo
+            code_upper = code.upper()
+            is_only_table = (not include_headers) or code_upper.startswith("#TABLA_") or code_upper.endswith("_TABLA")
+            base_code_clean = code_upper
+            if base_code_clean.startswith("#TABLA_"):
+                base_code_clean = "#" + base_code_clean.replace("#TABLA_", "")
+            elif base_code_clean.endswith("_TABLA"):
+                base_code_clean = base_code_clean.replace("_TABLA", "")
+            
             # --- CASO REPORTES PRINCIPALES ---
-            if code in ["#BALANCE", "#ER", "#EFE", "#ORI", "#PATRIMONIO"]:
+            if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#EFE", "#ORI", "#PATRIMONIO"]:
                 # Generar reporte a DataFrame
                 preview_df = None
+                report_name = ""
                 
                 # Seleccionar comparativo dinámico o manual (IFRS: Balance, EFE y Patrimonio usan cierre anual anterior; ER y ORI usan mismo periodo anterior)
-                comp_period = override_period if override_period else (periodo_comp_balance if code in ["#BALANCE", "#EFE", "#PATRIMONIO"] else periodo_comp_resultados)
+                comp_period = override_period if override_period else (periodo_comp_balance if base_code_clean in ["#BALANCE", "#ESF", "#EFE", "#PATRIMONIO"] else periodo_comp_resultados)
                 
-                if code == "#BALANCE":
+                if base_code_clean in ["#BALANCE", "#ESF"]:
+                    report_name = "ESTADO DE SITUACIÓN FINANCIERA CONSOLIDADO" if is_consolidated else "ESTADO DE SITUACIÓN FINANCIERA CLASIFICADO"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
                         db = SessionLocal()
@@ -885,7 +941,8 @@ class WordTemplateEngine:
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_balance_preview(result_bytes, col_actual, col_comp)
                         
-                elif code == "#ER":
+                elif base_code_clean == "#ER":
+                    report_name = "ESTADO DE RESULTADOS CONSOLIDADO" if is_consolidated else "ESTADO DE RESULTADOS CLASIFICADOS"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
                         db = SessionLocal()
@@ -952,7 +1009,8 @@ class WordTemplateEngine:
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_er_preview(result_bytes, col_actual, col_comp)
                         
-                elif code == "#ORI":
+                elif base_code_clean == "#ORI":
+                    report_name = "ESTADO DE RESULTADOS INTEGRALES CONSOLIDADO" if is_consolidated else "ESTADO DE RESULTADOS INTEGRALES"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
                         db = SessionLocal()
@@ -980,7 +1038,7 @@ class WordTemplateEngine:
                             df_hoja_comp_sec = df_hoja_comp.loc[idx_er_comp[0]+1:] if not idx_er_comp.empty else df_hoja_comp
                             df_hoja_comp_clean = df_hoja_comp_sec[df_hoja_comp_sec['Balance clasificado'].notna() & (df_hoja_comp_sec['Balance clasificado'].str.strip() != "")]
                             pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean.iterrows()}
-                            pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
+                            pl_df_wide = pd.DataFrame(pl_dict_comp)
                             
                         template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
                         if not os.path.exists(template_er_path):
@@ -1015,7 +1073,8 @@ class WordTemplateEngine:
                     else:
                         preview_df = None
                         
-                elif code == "#PATRIMONIO":
+                elif base_code_clean == "#PATRIMONIO":
+                    report_name = "ESTADO DE CAMBIOS EN EL PATRIMONIO CONSOLIDADO" if is_consolidated else "ESTADO DE CAMBIOS EN EL PATRIMONIO"
                     template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
                     if not os.path.exists(template_pat_path):
                         template_pat_path = os.path.join("templates", "Estado de Cambios en el Patrimonio.xlsx")
@@ -1062,7 +1121,8 @@ class WordTemplateEngine:
                     else:
                         preview_df = None
                         
-                elif code == "#EFE":
+                elif base_code_clean == "#EFE":
+                    report_name = "ESTADO DE FLUJOS DE EFECTIVO CONSOLIDADO" if is_consolidated else "ESTADO DE FLUJOS DE EFECTIVO"
                     cf_filename = "Estado de Flujos de Efectivo.xlsx"
                     template_cf_path = os.path.join(empresa_path, cf_filename)
                     if not os.path.exists(template_cf_path):
@@ -1114,10 +1174,57 @@ class WordTemplateEngine:
                     preview_df = self._extract_cf_preview(result_bytes, col_actual, col_comp)
                     
                 if preview_df is not None:
+                    # Inyectar encabezado institucional superior si no es solo tabla
+                    if not is_only_table:
+                        # 1. Nombre de la Entidad
+                        p_ent = doc.add_paragraph()
+                        p_ent.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p_ent.paragraph_format.space_before = Pt(0)
+                        p_ent.paragraph_format.space_after = Pt(1)
+                        r_ent = p_ent.add_run(empresa_activa.replace("[GRUPO] ", "").upper())
+                        r_ent.font.name = 'Arial'
+                        r_ent.font.size = Pt(10)
+                        r_ent.font.bold = True
+                        r_ent.font.color.rgb = RGBColor(31, 78, 120)
+                        move_element_before(p, p_ent._p)
+
+                        # 2. Título formal del Reporte
+                        p_tit = doc.add_paragraph()
+                        p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p_tit.paragraph_format.space_before = Pt(1)
+                        p_tit.paragraph_format.space_after = Pt(1)
+                        r_tit = p_tit.add_run(report_name.upper())
+                        r_tit.font.name = 'Arial'
+                        r_tit.font.size = Pt(10)
+                        r_tit.font.bold = True
+                        move_element_before(p, p_tit._p)
+
+                        # 3. Período y Unidad
+                        col_dates = [str(c) for c in preview_df.columns if any(char.isdigit() for char in str(c))]
+                        period_str = f"Al {col_dates[0]} y {col_dates[1]}" if len(col_dates) >= 2 else (f"Al {col_dates[0]}" if col_dates else "")
+                        unit_label = "M$ (Miles de pesos)" if scale_factor == 1000.0 else "Ch$ (Pesos)"
+                        
+                        p_sub = doc.add_paragraph()
+                        p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p_sub.paragraph_format.space_before = Pt(1)
+                        p_sub.paragraph_format.space_after = Pt(2)
+                        if period_str:
+                            r_per = p_sub.add_run(f"{period_str}\n")
+                            r_per.font.name = 'Arial'
+                            r_per.font.size = Pt(8.5)
+                            r_per.font.italic = True
+                        r_unit = p_sub.add_run(f"(Expresado en {unit_label})")
+                        r_unit.font.name = 'Arial'
+                        r_unit.font.size = Pt(8)
+                        r_unit.font.italic = True
+                        r_unit.font.color.rgb = RGBColor(90, 90, 90)
+                        move_element_before(p, p_sub._p)
+
                     # Inyectar tabla en la posición de p
+                    unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
                     tbl = doc.add_table(rows=len(preview_df) + 1, cols=len(preview_df.columns))
                     numeric_cols = preview_df.select_dtypes(include=['number']).columns.tolist()
-                    populate_docx_table(tbl, preview_df, numeric_cols)
+                    populate_docx_table(tbl, preview_df, numeric_cols, unit=unit_str)
                     
                     move_element_before(p, tbl._tbl)
                     paragraphs_to_delete.append(p)

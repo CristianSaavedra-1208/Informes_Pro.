@@ -66,8 +66,23 @@ def generate_excel_report(df, title="Reporte Financiero", subtitle="Expresado en
     """
     output = io.BytesIO()
     
+    is_miles = any(m in str(subtitle).lower() for m in ["miles", "m$", "mch$"])
+    df_to_export = df.copy()
+    if is_miles:
+        new_cols = []
+        for i, col in enumerate(df_to_export.columns):
+            col_str = str(col)
+            if any(char.isdigit() for char in col_str) or (i > 0 and col_str.lower() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro", "código"]):
+                if "M$" not in col_str:
+                    new_cols.append(f"{col_str}\nM$")
+                else:
+                    new_cols.append(col_str)
+            else:
+                new_cols.append(col_str)
+        df_to_export.columns = new_cols
+
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name="Reporte", index=False, startrow=4)
+        df_to_export.to_excel(writer, sheet_name="Reporte", index=False, startrow=4)
         worksheet = writer.sheets["Reporte"]
         
         # Inserción de Cabeceras
@@ -99,8 +114,11 @@ def generate_excel_report(df, title="Reporte Financiero", subtitle="Expresado en
             column = col[0].column_letter # Get the column name
             for cell in col:
                 try: 
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(cell.value)
+                    # Consider line breaks when calculating width
+                    lines = str(cell.value).split("\n")
+                    for l in lines:
+                        if len(l) > max_length:
+                            max_length = len(l)
                 except:
                     pass
             adjusted_width = (max_length + 5)
@@ -110,10 +128,11 @@ def generate_excel_report(df, title="Reporte Financiero", subtitle="Expresado en
             worksheet.column_dimensions[column].width = adjusted_width
 
         # Pintar cabeceras de la tabla (Fila 5)
+        worksheet.row_dimensions[5].height = 28 if is_miles else 20
         for cell in worksheet[5]:
             cell.fill = blue_fill
             cell.font = white_font
-            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             cell.border = thin_border
             
         # Poner bordes al resto de la tabla

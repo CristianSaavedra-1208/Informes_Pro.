@@ -77,15 +77,24 @@ def render(empresa_seleccionada, empresa_path):
         * `{{PERIODO_COMPARATIVO}}` : Período comparativo formateado (ej. *31 de Diciembre de 2024* o vacío si no se selecciona).
         * `{{UTILIDAD_NETA}}` : Utilidad neta formateada con el factor de escala seleccionado.
         
-        #### Tablas de Reportes Principales:
-        Inserta la etiqueta en una línea sola para inyectar la tabla completa:
-        * `{{#BALANCE}}` : Inyecta el Estado de Situación Financiera.
-        * `{{#ER}}` : Inyecta el Estado de Resultados.
-        * `{{#EFE}}` : Inyecta el Estado de Flujos de Efectivo.
-        * `{{#PATRIMONIO}}` : Inyecta el Estado de Cambios en el Patrimonio.
-        * `{{#ORI}}` : Inyecta el Estado de Resultados Integrales.
+        #### 📊 Reportes Principales:
+        Inserta la etiqueta en un párrafo individual:
         
-        #### Notas Explicativas:
+        **Opción A: Con Encabezado Institucional Completo** (Empresa, Título formal, Período, Unidad y Tabla):
+        * `{{#BALANCE}}` (o `{{#ESF}}`) : Balance Clasificado completo.
+        * `{{#ER}}` : Estado de Resultados completo.
+        * `{{#EFE}}` : Estado de Flujos de Efectivo completo.
+        * `{{#PATRIMONIO}}` : Estado de Cambios en el Patrimonio completo.
+        * `{{#ORI}}` : Estado de Resultados Integrales completo.
+        
+        **Opción B: Solo la Tabla** (Sin encabezado superior, para cuando uses tus propios títulos):
+        * `{{#TABLA_BALANCE}}` (o `{{#BALANCE_TABLA}}`) : Únicamente la tabla de Balance.
+        * `{{#TABLA_ER}}` (o `{{#ER_TABLA}}`) : Únicamente la tabla de Resultados.
+        * `{{#TABLA_EFE}}` (o `{{#EFE_TABLA}}`) : Únicamente la tabla de Flujos.
+        * `{{#TABLA_PATRIMONIO}}` (o `{{#PATRIMONIO_TABLA}}`) : Únicamente la tabla de Patrimonio.
+        * `{{#TABLA_ORI}}` (o `{{#ORI_TABLA}}`) : Únicamente la tabla de ORI.
+        
+        #### 📑 Notas Explicativas:
         Inserta la etiqueta de la nota para inyectar su respectiva explicación de texto y cuadros asociados:
         * `{{#N04}}` : Efectivo y Equivalentes.
         * `{{#N06}}` : Deudores Comerciales.
@@ -152,13 +161,22 @@ def render(empresa_seleccionada, empresa_path):
 
     st.write("")
     
-    # Checkbox para habilitar Modo Inteligente IFRS
-    use_ifrs_auto = st.checkbox(
-        "Reglas comparativas IFRS automáticas", 
-        value=True, 
-        help="Si está activo: el Balance comparará con el cierre de diciembre del año anterior, y el Estado de Resultados / Flujo de Efectivo / Notas compararán con el mismo mes del año anterior. Si se desactiva: se utilizará la opción del selector 'Período Comparativo' para todos los rubros.",
-        key="rep_corp_ifrs_auto"
-    )
+    # Opciones de configuración
+    col_opt1, col_opt2 = st.columns([1, 1])
+    with col_opt1:
+        use_ifrs_auto = st.checkbox(
+            "Reglas comparativas IFRS automáticas", 
+            value=True, 
+            help="Si está activo: el Balance comparará con el cierre de diciembre del año anterior, y el Estado de Resultados / Flujo de Efectivo / Notas compararán con el mismo mes del año anterior. Si se desactiva: se utilizará la opción del selector 'Período Comparativo' para todos los rubros.",
+            key="rep_corp_ifrs_auto"
+        )
+    with col_opt2:
+        incluir_encabezados = st.checkbox(
+            "Incluir encabezados institucionales en tablas", 
+            value=True, 
+            help="Si está activo: añade automáticamente el bloque superior centrado (Nombre Empresa, Título del Estado, Períodos y Unidad) antes de cada tabla. Si se desmarca: se generarán las tablas limpias sin encabezado superior.",
+            key="rep_corp_incluir_encabezados"
+        )
     
     st.write("")
     
@@ -199,7 +217,8 @@ def render(empresa_seleccionada, empresa_path):
                         periodo_actual=periodo_actual,
                         periodo_comp=periodo_comp,
                         scale_factor=scale_factor,
-                        use_ifrs_auto=use_ifrs_auto
+                        use_ifrs_auto=use_ifrs_auto,
+                        include_headers=incluir_encabezados
                     )
                     
                     out_bytes = output_buffer.getvalue() if hasattr(output_buffer, 'getvalue') else output_buffer

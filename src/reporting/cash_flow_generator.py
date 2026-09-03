@@ -307,28 +307,35 @@ class CashFlowGenerator:
                 nm = cell_name.strip()
                 nm_norm = normalize_str(nm)
                 
+                c25_val = ws.cell(row=row, column=val25_col_idx).value
+                c24_val = ws.cell(row=row, column=val24_col_idx).value
+                has_f25 = isinstance(c25_val, str) and c25_val.strip().startswith('=')
+                has_f24 = isinstance(c24_val, str) and c24_val.strip().startswith('=')
+                
                 # Inyección del periodo actual (val25_col_idx)
                 if nm in agrupacion_flujo_final:
                     ws.cell(row=row, column=val25_col_idx).value = agrupacion_flujo_final[nm] / scale_factor
                 elif nm_norm in norm_utilidad_labels and method == "Indirecto":
-                    ws.cell(row=row, column=val25_col_idx).value = net_income / scale_factor
-                elif nm == "Saldo inicial de efectivo y equivalentes al efectivo":
+                    if not has_f25:
+                        ws.cell(row=row, column=val25_col_idx).value = net_income / scale_factor
+                elif "saldo inicial" in nm_norm:
                     ws.cell(row=row, column=val25_col_idx).value = cash_prior / scale_factor
-                elif nm == "Saldo final de efectivo y equivalentes al efectivo":
+                elif "saldo final" in nm_norm:
                     ws.cell(row=row, column=val25_col_idx).value = cash_actual / scale_factor
-                elif nm == "Incremento (decremento) neto en efectivo y equivalentes al efectivo":
+                elif "incremento" in nm_norm and "neto" in nm_norm:
                     ws.cell(row=row, column=val25_col_idx).value = (cash_actual - cash_prior) / scale_factor
 
                 # Inyección del periodo comparativo (val24_col_idx)
                 if nm in agrupacion_flujo_comp_final:
                     ws.cell(row=row, column=val24_col_idx).value = agrupacion_flujo_comp_final[nm] / scale_factor
                 elif nm_norm in norm_utilidad_labels and method == "Indirecto":
-                    ws.cell(row=row, column=val24_col_idx).value = net_income_comp / scale_factor
-                elif nm == "Saldo inicial de efectivo y equivalentes al efectivo":
+                    if not has_f24:
+                        ws.cell(row=row, column=val24_col_idx).value = net_income_comp / scale_factor
+                elif "saldo inicial" in nm_norm:
                     ws.cell(row=row, column=val24_col_idx).value = cash_prior_comp / scale_factor
-                elif nm == "Saldo final de efectivo y equivalentes al efectivo":
+                elif "saldo final" in nm_norm:
                     ws.cell(row=row, column=val24_col_idx).value = cash_actual_comp / scale_factor
-                elif nm == "Incremento (decremento) neto en efectivo y equivalentes al efectivo":
+                elif "incremento" in nm_norm and "neto" in nm_norm:
                     ws.cell(row=row, column=val24_col_idx).value = (cash_actual_comp - cash_prior_comp) / scale_factor
 
         # Reemplazar cabeceras de fechas en el excel si están especificadas

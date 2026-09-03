@@ -130,9 +130,14 @@ class WordExportEngine:
         table.style = 'Normal Table'
 
         # Encabezados de tabla
+        is_miles = any(m in str(unit).lower() for m in ["miles", "m$", "mch$"])
         hdr_cells = table.rows[0].cells
         for i, col_name in enumerate(df.columns):
-            hdr_cells[i].text = str(col_name)
+            header_text = str(col_name)
+            if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower() not in ["nota", "notas"])):
+                if "M$" not in header_text:
+                    header_text = f"{header_text}\nM$"
+            hdr_cells[i].text = header_text
             set_cell_bg(hdr_cells[i], "1F4E78") # Azul Corporativo
             set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
             
@@ -155,13 +160,26 @@ class WordExportEngine:
             first_cell_str = str(row.iloc[0]).strip()
             first_cell_clean = first_cell_str.lower()
             
-            # Clasificación de tipo de fila contable
-            is_grand_total = any(k in first_cell_clean for k in ["total activos", "total patrimonio y pasivos", "patrimonio total", "ganancia (pérdida) del ejercicio", "resultado del ejercicio"])
-            is_subtotal = not is_grand_total and any(k in first_cell_clean for k in ["total", "sub total", "saldo final", "totales"])
-            is_category_header = not is_subtotal and not is_grand_total and (
-                first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"] or
-                all(pd.isna(row.iloc[col_i]) or str(row.iloc[col_i]).strip() == "" for col_i in range(1, num_cols))
+            # Verificar si la fila contiene datos numéricos
+            has_data_values = any(
+                isinstance(row.iloc[c], (int, float)) or 
+                (pd.notna(row.iloc[c]) and str(row.iloc[c]).strip() not in ["", "-", "nan", "None"] and any(ch.isdigit() for ch in str(row.iloc[c])))
+                for c in range(1, num_cols)
             )
+            
+            # Clasificación precisa de tipo de fila contable
+            is_category_header = (not has_data_values) or any(k in first_cell_clean for k in ["(utilizados en)", "actividades de operación", "actividades de inversión", "actividades de financiación"]) and not any(k in first_cell_clean for k in ["total", "subtotal"]) and not has_data_values or first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"]
+            
+            is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
+                "total activos", "total patrimonio y pasivos", "patrimonio total", 
+                "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo", "totales"
+            ])
+            
+            is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
+                "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
+                "procedentes de actividades de operación", "utilizados en actividades de inversión", 
+                "procedentes de actividades de financiación", "incremento (decremento) neto"
+            ])
 
             # Colores de fondo
             if is_grand_total:
@@ -181,7 +199,9 @@ class WordExportEngine:
                 else:
                     if isinstance(val, (int, float)):
                         try:
-                            if val < 0:
+                            if val == 0:
+                                text_val = "0" if is_category_header else "-"
+                            elif val < 0:
                                 text_val = f"({abs(val):,.0f})".replace(",", ".")
                             else:
                                 text_val = f"{val:,.0f}".replace(",", ".")
@@ -193,18 +213,18 @@ class WordExportEngine:
                 cell = row_cells[i]
                 cell.text = text_val
                 set_cell_bg(cell, bg_color)
-                set_cell_margins(cell, top=8, bottom=8, left=50, right=50)
+                set_cell_margins(cell, top=35, bottom=35, left=60, right=60)
                 
-                # Aplicar bordes contables
+                # Aplicar bordes contables solo a totales y subtotales (nunca a encabezados de categoría)
                 if is_grand_total:
                     set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
                 elif is_subtotal:
                     set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
                 
                 for p in cell.paragraphs:
-                    p.paragraph_format.space_before = Pt(0)
-                    p.paragraph_format.space_after = Pt(0)
-                    p.paragraph_format.line_spacing = Pt(8.8)
+                    p.paragraph_format.space_before = Pt(1)
+                    p.paragraph_format.space_after = Pt(1)
+                    p.paragraph_format.line_spacing = Pt(10.5)
                     
                     if col_name in numeric_cols or i > 0 or isinstance(val, (int, float)):
                         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -213,7 +233,7 @@ class WordExportEngine:
                         
                     for run in p.runs:
                         run.font.name = 'Arial'
-                        run.font.size = Pt(7.5)
+                        run.font.size = Pt(8.0)
                         if is_grand_total or is_subtotal or is_category_header:
                             run.font.bold = True
                             if is_grand_total or is_category_header:
@@ -445,16 +465,21 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
     table = doc.add_table(rows=1, cols=num_cols)
     table.style = 'Normal Table'
 
+    is_miles = any(m in str(subtitle).lower() for m in ["miles", "m$", "mch$"]) or any(m in str(kwargs.get('unit', '')).lower() for m in ["miles", "m$", "mch$"])
     hdr_cells = table.rows[0].cells
     for i, col_name in enumerate(df.columns):
-        hdr_cells[i].text = str(col_name)
+        header_text = str(col_name)
+        if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower() not in ["nota", "notas"])):
+            if "M$" not in header_text:
+                header_text = f"{header_text}\nM$"
+        hdr_cells[i].text = header_text
         set_cell_bg(hdr_cells[i], "1F4E78") # Azul Corporativo
-        set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
+        set_cell_margins(hdr_cells[i], top=20, bottom=20, left=60, right=60)
         
         for paragraph in hdr_cells[i].paragraphs:
             paragraph.paragraph_format.space_before = Pt(0)
             paragraph.paragraph_format.space_after = Pt(0)
-            paragraph.paragraph_format.line_spacing = Pt(9.0)
+            paragraph.paragraph_format.line_spacing = Pt(9.5)
             paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
             for run in paragraph.runs:
                 run.font.bold = True
@@ -468,13 +493,36 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
         first_cell_str = str(row.iloc[0]).strip()
         first_cell_clean = first_cell_str.lower()
         
-        is_grand_total = any(k in first_cell_clean for k in ["ganancia (pérdida) del ejercicio", "resultado del ejercicio", "total patrimonio", "total activos", "efectivo y equivalentes al efectivo al final del periodo"])
-        is_subtotal = not is_grand_total and any(k in first_cell_clean for k in ["total", "sub total", "saldo final", "ganancia bruta", "resultado antes de", "flujos de efectivo procedentes de"])
+        # Verificar si la fila contiene datos numéricos
+        has_data_values = any(
+            isinstance(row.iloc[c], (int, float)) or 
+            (pd.notna(row.iloc[c]) and str(row.iloc[c]).strip() not in ["", "-", "nan", "None"] and any(ch.isdigit() for ch in str(row.iloc[c])))
+            for c in range(1, num_cols)
+        )
+        
+        # Clasificación precisa de tipo de fila contable
+        is_category_header = (not has_data_values) or (
+            any(k in first_cell_clean for k in ["(utilizados en)", "actividades de operación", "actividades de inversión", "actividades de financiación"]) and 
+            not any(k in first_cell_clean for k in ["total", "subtotal"]) and not has_data_values
+        ) or first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"]
+        
+        is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
+            "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "total patrimonio", "total activos", 
+            "saldo final de efectivo", "efectivo y equivalentes al efectivo al final del periodo"
+        ])
+        
+        is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
+            "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
+            "procedentes de actividades de operación", "utilizados en actividades de inversión", 
+            "procedentes de actividades de financiación", "incremento (decremento) neto"
+        ])
 
         if is_grand_total:
             bg_color = "EBF2FA"
         elif is_subtotal:
             bg_color = "F4F7FA"
+        elif is_category_header:
+            bg_color = "F9FAFB"
         else:
             is_even = (index % 2 == 0)
             bg_color = "FFFFFF" if is_even else "F9FAFB"
@@ -486,7 +534,9 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
             else:
                 if isinstance(val, (int, float)):
                     try:
-                        if val < 0:
+                        if val == 0:
+                            text_val = "0" if is_category_header else "-"
+                        elif val < 0:
                             text_val = f"({abs(val):,.0f})".replace(",", ".")
                         else:
                             text_val = f"{val:,.0f}".replace(",", ".")
@@ -498,17 +548,18 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
             cell = row_cells[i]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=8, bottom=8, left=50, right=50)
+            set_cell_margins(cell, top=35, bottom=35, left=60, right=60)
             
+            # Aplicar bordes contables solo a totales y subtotales (nunca a encabezados de categoría)
             if is_grand_total:
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
             elif is_subtotal:
                 set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
             
             for p in row_cells[i].paragraphs:
-                p.paragraph_format.space_before = Pt(0)
-                p.paragraph_format.space_after = Pt(0)
-                p.paragraph_format.line_spacing = Pt(8.8)
+                p.paragraph_format.space_before = Pt(1)
+                p.paragraph_format.space_after = Pt(1)
+                p.paragraph_format.line_spacing = Pt(10.5)
                 
                 if col_name in numeric_cols or isinstance(val, (int, float)) or i > 0:
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -517,10 +568,11 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(7.5)
-                    if is_grand_total or is_subtotal:
+                    run.font.size = Pt(8.0)
+                    if is_grand_total or is_subtotal or is_category_header:
                         run.font.bold = True
-                        run.font.color.rgb = RGBColor(15, 45, 80)
+                        if is_grand_total or is_category_header:
+                            run.font.color.rgb = RGBColor(15, 45, 80)
 
     apply_table_column_widths(table, num_cols, total_width_inches=7.1)
 
