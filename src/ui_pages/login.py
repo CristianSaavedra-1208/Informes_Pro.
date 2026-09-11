@@ -80,5 +80,3 @@ def render_login():
                         st.rerun()
                     else:
                         st.error("❌ Usuario o contraseña incorrectos. Verifica tus credenciales.")
-                        
-        st.info("💡 **Cuentas por defecto:** Admin: `admin` (`admin123`) | Contable: `analista_contable` (`contable123`) | Reportes: `analista_reportes` (`reportes123`) | Auditor: `auditor_lector` (`auditor123`)")

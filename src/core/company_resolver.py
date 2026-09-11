@@ -195,7 +195,9 @@ class CompanyResolver:
                 if t_file.endswith(".xlsx"):
                     shutil.copy2(os.path.join(templates_dir, t_file), os.path.join(target_dir, t_file))
                     
-        global_master_dir = os.path.join(EMPRESAS_DIR, "Pacifico SpA")
+        global_master_dir = os.path.join(EMPRESAS_DIR, "Pacifico Cable SpA")
+        if not os.path.exists(global_master_dir):
+            global_master_dir = os.path.join(EMPRESAS_DIR, "Pacifico SpA")
         if os.path.exists(global_master_dir):
             for master_f in ["plan_cuentas.xlsx", "map_balance.xlsx", "map_pl.xlsx"]:
                 src_master = os.path.join(global_master_dir, master_f)

@@ -36,7 +36,7 @@ def render(empresa_seleccionada, empresa_path):
         source_file = os.path.join(empresa_path, file_name)
         if os.path.exists(source_file):
             for co in real_empresas:
-                if co == "Pacifico SpA":
+                if co == os.path.basename(empresa_path):
                     continue
                 dest_dir = os.path.join(os.path.dirname(empresa_path), co)
                 if os.path.isdir(dest_dir):

@@ -4,8 +4,8 @@ import os
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 
 def render(empresa_seleccionada, empresa_path):
-    # Vista simplificada exclusiva para el rol Analista de Reportes
-    if st.session_state.get('auth_role') == "Analista de Reportes":
+    # Vista simplificada exclusiva para el rol Analista de Reportes y Supervisor
+    if st.session_state.get('auth_role') in ["Analista de Reportes", "Supervisor"]:
         st.title("🔑 Mi Perfil y Contraseña")
         st.write(f"Usuario: **{st.session_state.get('auth_name')}** (`{st.session_state.get('auth_user')}`)")
         st.write(f"Rol: `{st.session_state.get('auth_role')}`")
@@ -202,7 +202,7 @@ def render(empresa_seleccionada, empresa_path):
                         nu_name = st.text_input("Nombre Completo:", placeholder="ej: Juan González")
                         nu_email = st.text_input("Correo Electrónico:", placeholder="ej: jgonzalez@empresa.cl")
                         nu_pass = st.text_input("Contraseña:", type="password", placeholder="••••••••")
-                        nu_role = st.selectbox("Rol Asignado:", ["Administrador", "Analista Contable", "Analista de Reportes", "Auditor Lector"])
+                        nu_role = st.selectbox("Rol Asignado:", ["Administrador", "Supervisor", "Analista Contable", "Analista de Reportes", "Auditor Lector"])
                         
                         btn_nu = st.form_submit_button("👤 Guardar Usuario", type="primary", use_container_width=True)
                         if btn_nu:
@@ -241,7 +241,7 @@ def render(empresa_seleccionada, empresa_path):
                     
                     with act_col1:
                         with st.expander("🎭 Cambiar Rol", expanded=True):
-                            roles_all = ["Administrador", "Analista Contable", "Analista de Reportes", "Auditor Lector"]
+                            roles_all = ["Administrador", "Supervisor", "Analista Contable", "Analista de Reportes", "Auditor Lector"]
                             curr_idx = roles_all.index(user_info['rol']) if user_info['rol'] in roles_all else 1
                             is_admin_user = (sel_user == "admin")
                             new_role = st.selectbox(

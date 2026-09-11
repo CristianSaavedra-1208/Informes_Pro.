@@ -199,7 +199,7 @@ def main():
         user_role = st.session_state.get('auth_role', 'Analista Contable')
 
         global_opt = "🌐 [GLOBAL] Configuración General"
-        if user_role == "Analista de Reportes":
+        if user_role in ["Analista de Reportes", "Supervisor"]:
             empresas = real_empresas
             if "GLOBAL" in str(st.session_state.get('empresa_activa', '')) or 'empresa_activa' not in st.session_state:
                 st.session_state['empresa_activa'] = real_empresas[0] if real_empresas else ""
@@ -270,8 +270,25 @@ def main():
             st.session_state.pop(k, None)
         st.session_state['_active_empresa_cache_tag'] = empresa_seleccionada
 
+    def get_master_empresa_dir(base_dir, real_cos):
+        candidates = ["Pacifico Cable SpA", "Pacifico SpA", "Db Terra Chile Holdco SpA", "Db Terra Chile Parent SpA"]
+        for cand in candidates:
+            p = os.path.join(base_dir, cand)
+            if os.path.exists(p) and os.path.exists(os.path.join(p, "map_balance.xlsx")):
+                return p
+        for co in real_cos:
+            if not co.startswith("[GRUPO]"):
+                p = os.path.join(base_dir, co)
+                if os.path.exists(os.path.join(p, "map_balance.xlsx")):
+                    return p
+        if real_cos:
+            return os.path.join(base_dir, real_cos[0])
+        return os.path.join(base_dir, "default")
+
+    master_empresa_path = get_master_empresa_dir(empresas_dir, real_empresas)
+
     if "GLOBAL" in empresa_seleccionada:
-        empresa_path = os.path.join(empresas_dir, "Pacifico SpA")
+        empresa_path = master_empresa_path
     else:
         empresa_path = os.path.join(empresas_dir, empresa_seleccionada)
 
@@ -280,7 +297,7 @@ def main():
         plan_path = os.path.join(empresa_path, "plan_cuentas.xlsx")
         if not os.path.exists(plan_path):
             # Fallback automático al Plan de Cuentas Global Maestro
-            plan_path = os.path.join(empresas_dir, "Pacifico SpA", "plan_cuentas.xlsx")
+            plan_path = os.path.join(master_empresa_path, "plan_cuentas.xlsx")
         if os.path.exists(plan_path):
             try:
                 df_plan = read_excel_cached(plan_path, dtype=str)
@@ -301,6 +318,8 @@ def main():
 
     if 'map_balance_df' not in st.session_state:
         map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+        if not os.path.exists(map_bal_path):
+            map_bal_path = os.path.join(master_empresa_path, "map_balance.xlsx")
         if os.path.exists(map_bal_path):
             try:
                 df_bal = read_excel_cached(map_bal_path, dtype=str, engine='openpyxl')
@@ -309,7 +328,7 @@ def main():
                 # Sanar columna de flujo de efectivo si falta por completo
                 cf_col = next((c for c in df_bal.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), None)
                 if not cf_col:
-                    ref_path = os.path.join("data", "empresas", "Pacifico SpA", "map_balance.xlsx")
+                    ref_path = os.path.join(master_empresa_path, "map_balance.xlsx")
                     if os.path.exists(ref_path):
                         ref_df = pd.read_excel(ref_path, dtype=str)
                         ref_cf_col = next((c for c in ref_df.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), "Clasificación Flujo Efectivo")
@@ -349,6 +368,8 @@ def main():
 
     if 'map_pl_df' not in st.session_state:
         map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
+        if not os.path.exists(map_pl_path):
+            map_pl_path = os.path.join(master_empresa_path, "map_pl.xlsx")
         if os.path.exists(map_pl_path):
             try:
                 df_pl = read_excel_cached(map_pl_path, dtype=str)
@@ -427,7 +448,7 @@ def main():
     
     # Operaciones dinámicas
     operaciones_list = []
-    if user_role not in ["Auditor Lector", "Analista de Reportes"]:
+    if user_role not in ["Auditor Lector", "Analista de Reportes", "Supervisor"]:
         if es_grupo:
             operaciones_list = [
                 st.Page(run_map, title="Clasificación Cuentas", icon=":material/format_list_bulleted:"),
@@ -447,16 +468,22 @@ def main():
     else:
         reportes_list.append(st.Page(run_estados, title="Estados Fin. Individuales", icon=":material/bar_chart:"))
         
-    reportes_list.extend([
-        st.Page(run_informes, title="Informes & Notas", icon=":material/description:"),
-        st.Page(run_val, title="Validaciones", icon=":material/check_circle:"),
-        st.Page(run_reporte_corp, title="Reportes Word", icon=":material/file_download:"),
-        st.Page(run_audit, title="Auditoría", icon=":material/search:")
-    ])
+    if user_role == "Supervisor":
+        reportes_list.extend([
+            st.Page(run_reporte_corp, title="Reportes Word", icon=":material/file_download:"),
+            st.Page(run_audit, title="Auditoría", icon=":material/search:")
+        ])
+    else:
+        reportes_list.extend([
+            st.Page(run_informes, title="Informes & Notas", icon=":material/description:"),
+            st.Page(run_val, title="Validaciones", icon=":material/check_circle:"),
+            st.Page(run_reporte_corp, title="Reportes Word", icon=":material/file_download:"),
+            st.Page(run_audit, title="Auditoría", icon=":material/search:")
+        ])
     
     # Administración dinámicas
     admin_list = []
-    if user_role != "Analista de Reportes":
+    if user_role not in ["Analista de Reportes", "Supervisor"]:
         admin_list = [
             st.Page(run_cierre, title="Históricos", icon=":material/schedule:"),
             st.Page(run_param, title="Parámetros", icon=":material/settings:")
@@ -467,7 +494,7 @@ def main():
     if user_role == "Administrador":
         if is_global_env:
             admin_list.append(st.Page(run_conf, title="Roles & Settings", icon=":material/group:"))
-    elif user_role == "Analista de Reportes":
+    elif user_role in ["Analista de Reportes", "Supervisor"]:
         admin_list.append(st.Page(run_conf, title="Perfil y Clave", icon=":material/key:"))
 
     pages = {}

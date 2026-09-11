@@ -83,6 +83,7 @@ def init_db():
         import hashlib
         default_users = [
             ("admin", "admin123", "Administrador del Sistema", "admin@informespro.cl", "Administrador"),
+            ("supervisor", "supervisor123", "Supervisor", "supervisor@informespro.cl", "Supervisor"),
             ("analista_contable", "contable123", "Analista Contable", "contable@informespro.cl", "Analista Contable"),
             ("analista_reportes", "reportes123", "Analista de Reportes", "reportes@informespro.cl", "Analista de Reportes"),
             ("auditor_lector", "auditor123", "Auditor Lector", "auditor@informespro.cl", "Auditor Lector"),

@@ -39,24 +39,27 @@ def render(empresa_seleccionada, empresa_path):
         periodos_hist3 = sorted([r[0] for r in per_recs3], reverse=True)
         if not periodos_hist3: periodos_hist3 = ["2026-12", "2025-12"]
         
-        col_p_act, col_p_comp = st.columns(2)
-        periodo_act_g = col_p_act.selectbox("Periodo Actual", periodos_hist3, key="per_act_g", format_func=format_periodo)
-        periodo_comp_g = col_p_comp.selectbox("Periodo Comparativo (Opcional)", ["Ninguno"] + periodos_hist3, key="per_comp_g", format_func=format_periodo)
-        
-        report_type = st.radio("Tipo de Reporte a Generar", [
-            "Balance Clasificado", 
-            "Estado de Resultados", 
-            "Estado de Flujos de Efectivo",
-            "Estado de Cambios en el Patrimonio",
-            "Estado de Resultados Integrales"
-        ])
-        
-        metodo_flujo = "Directo"
-        if report_type == "Estado de Flujos de Efectivo":
-            metodo_flujo = st.radio("Método del Flujo de Efectivo", ["Directo", "Indirecto"], horizontal=True, key="metodo_cf_g")
+        with st.form("form_emision_consolidada"):
+            col_p_act, col_p_comp = st.columns(2)
+            periodo_act_g = col_p_act.selectbox("Periodo Actual", periodos_hist3, key="per_act_g", format_func=format_periodo)
+            periodo_comp_g = col_p_comp.selectbox("Periodo Comparativo (Opcional)", ["Ninguno"] + periodos_hist3, key="per_comp_g", format_func=format_periodo)
             
-        unidad = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True)
-        scale_factor = 1000.0 if "M$" in unidad else 1.0
+            report_type = st.radio("Tipo de Reporte a Generar", [
+                "Balance Clasificado", 
+                "Estado de Resultados", 
+                "Estado de Flujos de Efectivo",
+                "Estado de Cambios en el Patrimonio",
+                "Estado de Resultados Integrales"
+            ], key="cons_report_type_radio")
+            
+            metodo_flujo = "Directo"
+            if report_type == "Estado de Flujos de Efectivo":
+                metodo_flujo = st.radio("Método del Flujo de Efectivo", ["Directo", "Indirecto"], horizontal=True, key="metodo_cf_g")
+                
+            unidad = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="cons_unidad_radio")
+            scale_factor = 1000.0 if "M$" in unidad else 1.0
+
+            submit_cons_btn = st.form_submit_button("🚀 Generar Reporte Consolidado", type="primary", use_container_width=True)
 
         # --- SECCIÓN DE AJUSTES DE DEPURACIÓN DEL FLUJO CONSOLIDADO ---
         from src.models.database import SessionLocal
@@ -166,7 +169,7 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.info("No hay ajustes de depuración registrados para este periodo.")
         
-        if st.button("🚀 Generar Reporte Consolidado", type="primary"):
+        if submit_cons_btn:
             if report_type == "Balance Clasificado" and not os.path.exists(os.path.join(grupo_folder, "Balance clasificado.xlsx")):
                 st.error("Sube la plantilla de Balance primero.")
             elif report_type == "Estado de Resultados" and not os.path.exists(os.path.join(grupo_folder, "Estado de Resultados Clasificados.xlsx")):
@@ -774,12 +777,14 @@ def render(empresa_seleccionada, empresa_path):
                             
                         # Generar versión Word
                         try:
+                            cons_excel_bytes = result_bytes.getvalue()
                             if report_type == "Balance Clasificado":
                                 from src.reporting.word_export import WordExportEngine
                                 word_output = WordExportEngine.generate_classified_balance_word(
                                     df=preview_df,
                                     title="Estado de Situación Financiera Consolidado",
-                                    unit=unidad
+                                    unit=unidad,
+                                    excel_bytes=cons_excel_bytes
                                 )
                                 word_bytes_out = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
                                 word_filename = f"Balance_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -788,7 +793,8 @@ def render(empresa_seleccionada, empresa_path):
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
                                     title="Estado de Resultados Consolidado",
-                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
+                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
+                                    excel_bytes=cons_excel_bytes
                                 )
                                 word_filename = f"ER_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             elif report_type == "Estado de Flujos de Efectivo":
@@ -796,7 +802,8 @@ def render(empresa_seleccionada, empresa_path):
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
                                     title="Estado de Flujos de Efectivo Consolidado",
-                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
+                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
+                                    excel_bytes=cons_excel_bytes
                                 )
                                 word_filename = f"Flujo_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             elif report_type == "Estado de Cambios en el Patrimonio":
@@ -804,7 +811,8 @@ def render(empresa_seleccionada, empresa_path):
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
                                     title="Estado de Cambios en el Patrimonio Consolidado",
-                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
+                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
+                                    excel_bytes=cons_excel_bytes
                                 )
                                 word_filename = f"Patrimonio_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             else: # Estado de Resultados Integrales
@@ -812,7 +820,8 @@ def render(empresa_seleccionada, empresa_path):
                                 word_bytes_out = generate_word_report(
                                     df=preview_df,
                                     title="Estado de Resultados Integrales Consolidado",
-                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})"
+                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
+                                    excel_bytes=cons_excel_bytes
                                 )
                                 word_filename = f"ORI_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                         except Exception as ex_w:

@@ -100,10 +100,12 @@ def render(empresa_seleccionada, empresa_path):
             if 'map_balance_df' not in st.session_state: miss.append('map_balance_df (Mapeo)')
             st.warning(f"⚠️ Debes importar el Trial Balance (8 columnas) para el periodo {periodo_actual} y haber configurado tu Mapeo de Balance previamente. (Falta: {', '.join(miss)})")
         else:
-            unidad = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="um_bal")
-            scale_factor = 1000.0 if "M$" in unidad else 1.0
+            with st.form("form_run_balance"):
+                unidad = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="um_bal")
+                scale_factor = 1000.0 if "M$" in unidad else 1.0
+                btn_run_balance = st.form_submit_button("🚀 Procesar Plantilla Balance Clasificado", type="primary", use_container_width=True)
 
-            if st.button("🚀 Procesar Plantilla Balance Clasificado", type="primary", key="btn_run_balance"):
+            if btn_run_balance:
                 with st.spinner("Mapeando cuentas, inyectando saldos (Actual y Comparativo) y calculando P&L implícito..."):
                     import time
                     start_time = time.time()
@@ -177,7 +179,8 @@ def render(empresa_seleccionada, empresa_path):
                                 df=preview_df, 
                                 title="Estado de Situación Financiera Clasificado",
                                 unit=unidad,
-                                entity_name=empresa_seleccionada.replace('[GRUPO] ', '')
+                                entity_name=empresa_seleccionada.replace('[GRUPO] ', ''),
+                                excel_bytes=excel_output.getvalue()
                             )
                             
                             st.session_state['preview_df'] = preview_df
@@ -285,10 +288,12 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.warning("⚠️ El archivo base 'Estado de Resultados Clasificados.xlsx' no se encuentra en el directorio raíz.")
                 
-        unidad_medida = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="um_er")
-        scale_factor = 1000.0 if unidad_medida.startswith("M$") else 1.0
+        with st.form("form_run_er"):
+            unidad_medida = st.radio("Unidad de Medida", ["M$ (Miles de pesos)", "Ch$ (Pesos)"], horizontal=True, key="um_er")
+            scale_factor = 1000.0 if unidad_medida.startswith("M$") else 1.0
+            btn_run_er = st.form_submit_button("🚀 Ejecutar E.R. Clasificados", type="primary", use_container_width=True)
 
-        if st.button("🚀 Ejecutar E.R. Clasificados", type="primary"):
+        if btn_run_er:
             from src.core.sabana_builder import build_pl_sabana
             
             # Obtener o derivar P&L actual
@@ -455,7 +460,12 @@ def render(empresa_seleccionada, empresa_path):
             with col_ex2:
                 try:
                     from src.reporting.word_export import generate_word_report
-                    final_docx = generate_word_report(st.session_state['er_preview_df'], title="Estado de Resultados Clasificados", subtitle=f"Expresado en {unidad_medida}")
+                    final_docx = generate_word_report(
+                        st.session_state['er_preview_df'], 
+                        title="Estado de Resultados Clasificados", 
+                        subtitle=f"Expresado en {unidad_medida}",
+                        excel_bytes=st.session_state.get('er_excel_binary')
+                    )
                     st.download_button(
                         label="📄 Descargar E.R. en Word",
                         data=final_docx,
@@ -612,7 +622,10 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.info("No hay ajustes de depuración registrados para este periodo.")
 
-        if st.button("🚀 Ejecutar Flujo de Efectivo", type="primary"):
+        with st.form("form_run_flujo"):
+            btn_run_flujo = st.form_submit_button("🚀 Ejecutar Flujo de Efectivo", type="primary", use_container_width=True)
+
+        if btn_run_flujo:
             if 'tb_df' not in st.session_state or 'map_balance_df' not in st.session_state:
                 st.warning("⚠️ Debes importar un Trial Balance y haber configurado tu Mapeo de Balance antes de correr este reporte.")
             else:
@@ -846,7 +859,12 @@ def render(empresa_seleccionada, empresa_path):
             with col_cf3:
                 try:
                     from src.reporting.word_export import generate_word_report
-                    final_docx_cf = generate_word_report(st.session_state['flujo_preview_df'], title="Estado de Flujos de Efectivo", subtitle=f"Expresado en {unidad_medida_cf}")
+                    final_docx_cf = generate_word_report(
+                        st.session_state['flujo_preview_df'], 
+                        title="Estado de Flujos de Efectivo", 
+                        subtitle=f"Expresado en {unidad_medida_cf}",
+                        excel_bytes=st.session_state.get('flujo_excel_binary')
+                    )
                     st.download_button(
                         label="📄 Descargar Flujo en Word",
                         data=final_docx_cf,
@@ -876,7 +894,10 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.warning("⚠️ No se encontró la plantilla 'Estado de Cambios en el Patrimonio.xlsx'.")
         
-        if st.button("🚀 Ejecutar Cambios en el Patrimonio", type="primary"):
+        with st.form("form_run_patrimonio"):
+            btn_run_patrimonio = st.form_submit_button("🚀 Ejecutar Cambios en el Patrimonio", type="primary", use_container_width=True)
+
+        if btn_run_patrimonio:
             scale_factor = 1000.0 if "M$" in st.session_state.get('um_bal', 'M$') else 1.0
             # Auto-generar Balance si no está en sesión
             if 'preview_df' not in st.session_state or st.session_state['preview_df'] is None:
@@ -992,7 +1013,11 @@ def render(empresa_seleccionada, empresa_path):
             with col_pt2:
                 try:
                     from src.reporting.word_export import generate_word_report
-                    final_docx_pat = generate_word_report(st.session_state['pat_preview_df'], title="Estado de Cambios en el Patrimonio")
+                    final_docx_pat = generate_word_report(
+                        st.session_state['pat_preview_df'], 
+                        title="Estado de Cambios en el Patrimonio",
+                        excel_bytes=st.session_state.get('pat_excel_binary')
+                    )
                     st.download_button(
                         label="📄 Descargar Patrimonio en Word",
                         data=final_docx_pat,
@@ -1022,7 +1047,10 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.warning("⚠️ No se encontró la plantilla 'Estado de Resultados Integrales.xlsx'.")
         
-        if st.button("🚀 Ejecutar Resultados Integrales", type="primary"):
+        with st.form("form_run_ori"):
+            btn_run_ori = st.form_submit_button("🚀 Ejecutar Resultados Integrales", type="primary", use_container_width=True)
+
+        if btn_run_ori:
             scale_factor = 1000.0 if "M$" in st.session_state.get('um_er', 'M$') else 1.0
             # Auto-generar ER si no está en sesión
             if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
@@ -1161,7 +1189,11 @@ def render(empresa_seleccionada, empresa_path):
             with col_pt2:
                 try:
                     from src.reporting.word_export import generate_word_report
-                    final_docx_ori = generate_word_report(st.session_state['ori_preview_df'], title="Estado de Resultados Integrales")
+                    final_docx_ori = generate_word_report(
+                        st.session_state['ori_preview_df'], 
+                        title="Estado de Resultados Integrales",
+                        excel_bytes=st.session_state.get('ori_excel_binary')
+                    )
                     st.download_button(
                         label="📄 Descargar O.R.I. en Word",
                         data=final_docx_ori,

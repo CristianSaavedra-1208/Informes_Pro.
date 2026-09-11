@@ -219,12 +219,25 @@ class ERGenerator:
                     else:
                         ws.cell(row=row, column=val24_col_idx).value = 0.0
 
-                # B) Subtotal
+                # B) Subtotal o Fórmulas
                 else:
+                    c25_orig = ws.cell(row=row, column=val25_col_idx).value
+                    c24_orig = ws.cell(row=row, column=val24_col_idx).value
+                    
+                    has_formula_25 = isinstance(c25_orig, str) and c25_orig.strip().startswith("=")
+                    has_formula_24 = isinstance(c24_orig, str) and c24_orig.strip().startswith("=")
+                    has_constant_25 = isinstance(c25_orig, (int, float)) and not (isinstance(c25_orig, bool))
+                    
+                    # Si ya tiene fórmula o constante en la plantilla, preservarla tal cual
+                    if has_formula_25 or has_formula_24 or has_constant_25:
+                        continue
+                        
                     def is_subtotal_row(label):
                         if not label:
                             return False
                         norm = sanitize(label)
+                        if any(term in norm for term in ["atribuible a", "controladora", "no controladora", "inversion", "unidad de reajuste", "impuestos a las ganancias", "impuesto a las ganancias", "arriendo"]):
+                            return False
                         subtotals = {
                             "ganancia bruta", 
                             "ganancia antes de impuesto",
@@ -244,11 +257,7 @@ class ERGenerator:
                         if norm in subtotals:
                             return True
                         is_sub = any(word in norm for word in ["ganancia", "perdida", "antes de impuesto", "antes del impuesto"])
-                        if is_sub:
-                            if any(term in norm for term in ["inversion", "unidad de reajuste", "impuestos a las ganancias", "impuesto a las ganancias", "arriendo"]):
-                                return False
-                            return True
-                        return False
+                        return is_sub
 
                     es_subtotal = is_subtotal_row(cell_name)
                     if es_subtotal and clasif_secreta not in resultados_2025 and (not resultados_comp or clasif_secreta not in resultados_comp):

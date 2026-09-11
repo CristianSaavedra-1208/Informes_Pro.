@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
+from src.reporting.adjustments_export import generate_adjustments_excel, get_adjustments_dataset
 
 def get_all_note_options(rubro_name: str) -> list:
     """
@@ -686,6 +687,89 @@ def render(empresa_seleccionada, empresa_path):
                 ).all()
                 
                 if asientos_resumen:
+                    # --- PANEL DE EXPORTACIÓN PARA AUDITORÍA ---
+                    with st.expander("📥 **Exportar Libro de Ajustes a Excel (Papel de Trabajo de Auditoría)**", expanded=False):
+                        st.markdown(
+                            "Emite el **Libro Diario de Ajustes y Eliminaciones** en formato contable oficial (Excel), "
+                            "con trazabilidad completa de folios, partidas dobles cuadradas y hojas resumen para auditoría."
+                        )
+                        col_exp1, col_exp2 = st.columns([2, 3])
+                        modo_export = col_exp1.radio(
+                            "Alcance de la Exportación:",
+                            options=[
+                                "📅 Mes Específico",
+                                "📆 Rango de Períodos",
+                                "🌐 Historial Completo (Todos los Períodos)",
+                                "🔖 Comprobante Específico"
+                            ],
+                            key=f"rad_modo_exp_{sel_grupo}"
+                        )
+
+                        export_bytes = None
+                        file_name_export = "Libro_Ajustes_Consolidacion.xlsx"
+
+                        periodos_todos = sorted(list(set(r.periodo for r in asientos_resumen)))
+
+                        if modo_export == "📅 Mes Específico":
+                            periodos_desc = sorted(periodos_todos, reverse=True)
+                            idx_def = periodos_desc.index(periodo_a) if periodo_a in periodos_desc else 0
+                            sel_mes_exp = col_exp2.selectbox(
+                                "Seleccionar Período / Mes a Exportar:",
+                                options=periodos_desc,
+                                format_func=format_periodo,
+                                index=idx_def,
+                                key=f"sel_mes_exp_{sel_grupo}"
+                            )
+                            if col_exp2.button("📊 Preparar Excel del Mes", key=f"btn_gen_mes_{sel_grupo}", type="primary"):
+                                export_bytes = generate_adjustments_excel(sel_grupo, filter_mode="SINGLE_MONTH", periodo=sel_mes_exp)
+                                file_name_export = f"Libro_Ajustes_{sel_mes_exp}.xlsx"
+
+                        elif modo_export == "📆 Rango de Períodos":
+                            col_r1, col_r2 = col_exp2.columns(2)
+                            p_desde = col_r1.selectbox("Desde Período:", options=periodos_todos, format_func=format_periodo, index=0, key=f"p_desde_{sel_grupo}")
+                            p_hasta = col_r2.selectbox("Hasta Período:", options=periodos_todos, format_func=format_periodo, index=len(periodos_todos)-1, key=f"p_hasta_{sel_grupo}")
+                            if col_exp2.button("📊 Preparar Excel del Rango", key=f"btn_gen_range_{sel_grupo}", type="primary"):
+                                export_bytes = generate_adjustments_excel(sel_grupo, filter_mode="RANGE", periodo_inicio=p_desde, periodo_fin=p_hasta)
+                                file_name_export = f"Libro_Ajustes_{p_desde}_al_{p_hasta}.xlsx"
+
+                        elif modo_export == "🌐 Historial Completo (Todos los Períodos)":
+                            col_exp2.info(f"Se incluirán todos los períodos registrados ({len(asientos_resumen)} comprobantes).")
+                            if col_exp2.button("📊 Preparar Excel Histórico Completo", key=f"btn_gen_all_{sel_grupo}", type="primary"):
+                                export_bytes = generate_adjustments_excel(sel_grupo, filter_mode="ALL")
+                                file_name_export = f"Libro_Ajustes_Historial_Completo_{sel_grupo}.xlsx"
+
+                        elif modo_export == "🔖 Comprobante Específico":
+                            comp_map = {}
+                            for r in asientos_resumen:
+                                code_str = getattr(r, 'asiento_codigo', None) or f"AST-{r.periodo}"
+                                # Formato legible: [AST-202503-001] (Marzo 2025) Eliminación Inversión — Glosa explicativa
+                                lbl = f"[{code_str}] ({format_periodo(r.periodo)}) {r.columna_ajuste} — {r.glosa}"
+                                comp_map[lbl] = (code_str, r.periodo)
+                            
+                            sel_lbl = col_exp2.selectbox(
+                                "Seleccionar Comprobante (Folio, Período y Nombre/Glosa):", 
+                                options=list(comp_map.keys()), 
+                                key=f"sel_comp_code_exp_{sel_grupo}"
+                            )
+                            if col_exp2.button("📊 Preparar Excel del Comprobante", key=f"btn_gen_comp_{sel_grupo}", type="primary"):
+                                chosen_code, chosen_periodo = comp_map[sel_lbl]
+                                export_bytes = generate_adjustments_excel(
+                                    sel_grupo, 
+                                    filter_mode="SINGLE_VOUCHER", 
+                                    voucher_codigo=chosen_code,
+                                    periodo=chosen_periodo
+                                )
+                                file_name_export = f"Comprobante_{chosen_code}.xlsx"
+
+                        if export_bytes:
+                            st.download_button(
+                                label="📥 Descargar Archivo Excel de Ajustes",
+                                data=export_bytes,
+                                file_name=file_name_export,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"btn_dl_exp_final_{sel_grupo}"
+                            )
+
                     # --- BARRA DE FILTROS SUPERIOR ---
                     st.write("#### 🔍 Filtros y Búsqueda de Comprobantes")
                     col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 3, 1.5])
@@ -872,7 +956,7 @@ def render(empresa_seleccionada, empresa_path):
                                     if is_chosen_locked:
                                         st.warning(f"🔒 **Comprobante en Período Cerrado ({format_periodo(chosen.periodo)})**: Este comprobante está bloqueado contra modificaciones directas. Puedes usar la opción **'📋 Copiar al Borrador'** para llevarlo a un período abierto.")
                                     
-                                    col_act1, col_act2, col_act3 = st.columns(3)
+                                    col_act1, col_act2, col_act3, col_act4 = st.columns(4)
                                     
                                     col_act1.button(
                                         "✏️ Cargar para Editar", 
@@ -902,6 +986,24 @@ def render(empresa_seleccionada, empresa_path):
                                         disabled=is_chosen_locked,
                                         key=f"btn_del_{p_key}_{idx_c}"
                                     )
+
+                                    try:
+                                        voucher_excel_bytes = generate_adjustments_excel(
+                                            sel_grupo, 
+                                            filter_mode="SINGLE_VOUCHER", 
+                                            voucher_codigo=codigo_actual if codigo_actual != "N/A" else None,
+                                            periodo=chosen.periodo if codigo_actual == "N/A" else None
+                                        )
+                                        col_act4.download_button(
+                                            "📥 Exportar en Excel",
+                                            data=voucher_excel_bytes,
+                                            file_name=f"Comprobante_{codigo_actual}.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            use_container_width=True,
+                                            key=f"btn_dl_single_{p_key}_{idx_c}"
+                                        )
+                                    except Exception:
+                                        pass
                 else:
                     if "last_sel_comp" in st.session_state:
                         del st.session_state["last_sel_comp"]

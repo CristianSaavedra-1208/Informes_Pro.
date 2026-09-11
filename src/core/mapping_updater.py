@@ -164,7 +164,7 @@ def save_manual_mapping(
             empresas_dir = os.path.dirname(empresa_path) # data/empresas
             real_empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
             for co in real_empresas:
-                if co == "Pacifico SpA":
+                if co == os.path.basename(empresa_path):
                     continue
                 dest_dir = os.path.join(empresas_dir, co)
                 if tipo_mapeo == "Balance":

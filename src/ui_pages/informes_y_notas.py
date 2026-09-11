@@ -552,12 +552,12 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                                 elements.append((el_type, el_val, sheet_name))
                     
                     from src.reporting.word_export import WordExportEngine
-                    elements_for_word = [(item[0], item[1]) for item in elements]
                     word_nota_out = WordExportEngine.generate_notes_word(
-                        elements=elements_for_word,
+                        elements=elements,
                         title=selected_label,
                         unit=unidad_nota,
-                        note_code=selected_id
+                        note_code=selected_id,
+                        excel_bytes=excel_eval_out.getvalue()
                     )
                     
                     excel_nota_out.seek(0)

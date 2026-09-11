@@ -81,11 +81,21 @@ def move_element_before(target_p, new_element):
     idx = parent.index(target_p._p)
     parent.insert(idx, new_element)
 
-def populate_docx_table(table, df, numeric_cols, unit="M$"):
-    """Rellena y da estilo corporativo a una tabla de Word en base a un DataFrame."""
+def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
+    """Rellena y da estilo corporativo a una tabla de Word idéntico a la pantalla."""
     table.style = 'Normal Table'
     num_cols = len(df.columns)
     
+    # Configuración de espaciados según si es balance clasificado (modo compacto 1 página)
+    pad_top = 15 if is_balance else 30
+    pad_bottom = 15 if is_balance else 30
+    pad_lr = 40 if is_balance else 50
+    p_spacing = Pt(8.0) if is_balance else Pt(10.0)
+    base_font_size = 7.0 if is_balance else 8.0
+    hdr_font_size = 7.5 if is_balance else 8.5
+    hdr_pad_v = 12 if is_balance else 20
+    hdr_line_spacing = Pt(8.0) if is_balance else Pt(9.5)
+
     # Fila de cabecera
     is_miles = any(m in str(unit).lower() for m in ["miles", "m$", "mch$"])
     hdr_cells = table.rows[0].cells
@@ -95,18 +105,19 @@ def populate_docx_table(table, df, numeric_cols, unit="M$"):
             if "M$" not in header_text:
                 header_text = f"{header_text}\nM$"
         hdr_cells[i].text = header_text
-        set_cell_bg(hdr_cells[i], "1F4E78") # Azul corporativo
-        set_cell_margins(hdr_cells[i], top=15, bottom=15, left=50, right=50)
+        set_cell_bg(hdr_cells[i], "FFFFFF")
+        set_cell_margins(hdr_cells[i], top=hdr_pad_v, bottom=hdr_pad_v, left=pad_lr, right=pad_lr)
+        set_cell_borders(hdr_cells[i], top={'val': 'single', 'sz': '12', 'color': '000000'}, bottom={'val': 'single', 'sz': '12', 'color': '000000'})
         for p in hdr_cells[i].paragraphs:
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after = Pt(0)
-            p.paragraph_format.line_spacing = Pt(9.0)
+            p.paragraph_format.line_spacing = hdr_line_spacing
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
             for run in p.runs:
                 run.font.bold = True
-                run.font.color.rgb = RGBColor(255, 255, 255) # Blanco
+                run.font.color.rgb = RGBColor(0, 0, 0)
                 run.font.name = 'Arial'
-                run.font.size = Pt(8)
+                run.font.size = Pt(hdr_font_size)
                 
     # Filas de datos
     for row_i, (_, row_vals) in enumerate(df.iterrows()):
@@ -121,7 +132,6 @@ def populate_docx_table(table, df, numeric_cols, unit="M$"):
             for c in range(1, num_cols)
         )
         
-        # Clasificación precisa de tipo de fila contable
         is_category_header = (not has_data_values) or (
             any(k in first_cell_clean for k in ["(utilizados en)", "actividades de operación", "actividades de inversión", "actividades de financiación"]) and 
             not any(k in first_cell_clean for k in ["total", "subtotal"]) and not has_data_values
@@ -135,18 +145,11 @@ def populate_docx_table(table, df, numeric_cols, unit="M$"):
         is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
             "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
             "procedentes de actividades de operación", "utilizados en actividades de inversión", 
-            "procedentes de actividades de financiación", "incremento (decremento) neto"
+            "procedentes de actividades de financiación"
         ])
 
-        if is_grand_total:
-            bg_color = "EBF2FA"
-        elif is_subtotal:
-            bg_color = "F4F7FA"
-        elif is_category_header:
-            bg_color = "F9FAFB"
-        else:
-            is_even = (row_i % 2 == 0)
-            bg_color = "FFFFFF" if is_even else "F9FAFB"
+        is_even = (row_i % 2 == 1)
+        bg_color = "E3F0FE" if is_even else "FFFFFF"
 
         for col_idx, col_name in enumerate(df.columns):
             val = row_vals[col_name]
@@ -170,17 +173,19 @@ def populate_docx_table(table, df, numeric_cols, unit="M$"):
             cell = row_cells[col_idx]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=35, bottom=35, left=60, right=60)
+            set_cell_margins(cell, top=pad_top, bottom=pad_bottom, left=pad_lr, right=pad_lr)
             
             if is_grand_total:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
+                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'double', 'sz': '12', 'color': '000000'})
             elif is_subtotal:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
+                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'single', 'sz': '6', 'color': '000000'})
+            else:
+                set_cell_borders(cell, top=None, bottom=None)
 
             for p in cell.paragraphs:
-                p.paragraph_format.space_before = Pt(1)
-                p.paragraph_format.space_after = Pt(1)
-                p.paragraph_format.line_spacing = Pt(10.5)
+                p.paragraph_format.space_before = Pt(0) if is_balance else Pt(0.5)
+                p.paragraph_format.space_after = Pt(0) if is_balance else Pt(0.5)
+                p.paragraph_format.line_spacing = p_spacing
                 
                 if col_idx in numeric_cols or isinstance(val, (int, float)) or col_idx > 0:
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -189,11 +194,10 @@ def populate_docx_table(table, df, numeric_cols, unit="M$"):
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(8.0)
+                    run.font.size = Pt(base_font_size)
                     if is_grand_total or is_subtotal or is_category_header:
                         run.font.bold = True
-                        if is_grand_total or is_category_header:
-                            run.font.color.rgb = RGBColor(15, 45, 80)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
 
     apply_table_column_widths(table, num_cols, total_width_inches=6.8)
 
@@ -220,15 +224,8 @@ def populate_notes_docx_table(table, chunk_df):
         is_grand_total = any(x in first_cell_val for x in ["total general", "total final", "saldo final", "total patrimonio", "total activos"])
         is_subtotal = not is_grand_total and any(x in first_cell_val for x in ["total", "sub total", "subtotal", "ganancia bruta"])
         
-        if in_header:
-            bg_color = "1F4E78"
-        elif is_grand_total:
-            bg_color = "EBF2FA"
-        elif is_subtotal:
-            bg_color = "F4F7FA"
-        else:
-            is_even = (row_i % 2 == 0)
-            bg_color = "FFFFFF" if is_even else "F9FAFB"
+        is_even = (row_i % 2 == 1)
+        bg_color = "FFFFFF" if in_header else ("E3F0FE" if is_even else "FFFFFF")
             
         for col_idx, col_name in enumerate(chunk_df.columns):
             val = row[col_name]
@@ -251,17 +248,21 @@ def populate_notes_docx_table(table, chunk_df):
             cell = row_cells[col_idx]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=40, bottom=40, left=100, right=100)
+            set_cell_margins(cell, top=30, bottom=30, left=50, right=50)
             
-            if is_grand_total:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'double', 'sz': '12'})
+            if in_header:
+                set_cell_borders(cell, top={'val': 'single', 'sz': '12', 'color': '000000'}, bottom={'val': 'single', 'sz': '12', 'color': '000000'})
+            elif is_grand_total:
+                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'double', 'sz': '12', 'color': '000000'})
             elif is_subtotal:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6'}, bottom={'val': 'single', 'sz': '6'})
+                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'single', 'sz': '6', 'color': '000000'})
+            else:
+                set_cell_borders(cell, top=None, bottom=None)
                 
             for p in cell.paragraphs:
-                p.paragraph_format.space_before = Pt(1.5)
-                p.paragraph_format.space_after = Pt(1.5)
-                p.paragraph_format.line_spacing = 1.0
+                p.paragraph_format.space_before = Pt(0.5)
+                p.paragraph_format.space_after = Pt(0.5)
+                p.paragraph_format.line_spacing = Pt(10.0)
                 
                 if col_idx > 0 or col_idx in numeric_cols or isinstance(val, (int, float)):
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -271,12 +272,9 @@ def populate_notes_docx_table(table, chunk_df):
                 for run in p.runs:
                     run.font.name = 'Arial'
                     run.font.size = Pt(8.5)
-                    if in_header:
+                    if in_header or is_grand_total or is_subtotal:
                         run.font.bold = True
-                        run.font.color.rgb = RGBColor(255, 255, 255)
-                    elif is_grand_total or is_subtotal:
-                        run.font.bold = True
-                        run.font.color.rgb = RGBColor(15, 45, 80)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
                         
     apply_table_column_widths(table, num_cols, total_width_inches=6.8)
 
@@ -491,18 +489,51 @@ class WordTemplateEngine:
                         break
         date_cols = sorted(list(set(date_cols)))
         
-        val25_col_idx = 2
-        val24_col_idx = 3
+        val25_col_idx = 3
+        val24_col_idx = 4
         if len(date_cols) >= 2:
             val25_col_idx = date_cols[0]
             val24_col_idx = date_cols[1]
             
-        result_bytes.seek(0)
-        df_raw = pd.read_excel(result_bytes)
-        cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-        preview_df = df_raw.iloc[:, cols_to_keep].copy()
-        preview_df.columns = ["Clasificación", col_actual, col_comp]
-        preview_df = preview_df.dropna(how='all', subset=["Clasificación"]).reset_index(drop=True)
+        nota_col_idx = None
+        for col in range(1, ws_check.max_column + 1):
+            for row in range(1, 10):
+                val = ws_check.cell(row=row, column=col).value
+                if val and str(val).strip().lower() == "nota":
+                    nota_col_idx = col
+                    break
+                    
+        start_row = 1
+        for r in range(1, 15):
+            val = ws_check.cell(row=r, column=name_col_idx).value
+            if val and any(k in str(val).lower() for k in ["ingresos", "costo", "ganancia", "resultado", "actividades"]):
+                start_row = r
+                break
+
+        rows_data = []
+        for r in range(start_row, ws_check.max_row + 1):
+            name_val = ws_check.cell(row=r, column=name_col_idx).value
+            v25 = ws_check.cell(row=r, column=val25_col_idx).value
+            v24 = ws_check.cell(row=r, column=val24_col_idx).value
+            
+            # Si la fila es completamente vacía, verificar si hay más contenido abajo
+            if name_val is None and v25 is None and v24 is None:
+                has_more = any(ws_check.cell(row=r_next, column=name_col_idx).value is not None for r_next in range(r + 1, ws_check.max_row + 1))
+                if not has_more:
+                    break
+                name_val = ""
+                
+            row_dict = {
+                "Clasificación": str(name_val).strip() if name_val is not None else "",
+                col_actual: v25,
+                col_comp: v24
+            }
+            if nota_col_idx is not None:
+                row_dict["Nota"] = ws_check.cell(row=r, column=nota_col_idx).value or ""
+                
+            rows_data.append(row_dict)
+            
+        preview_df = pd.DataFrame(rows_data)
         return preview_df
 
     def _extract_ori_preview(self, result_bytes, col_actual, col_comp):
@@ -1174,16 +1205,19 @@ class WordTemplateEngine:
                     preview_df = self._extract_cf_preview(result_bytes, col_actual, col_comp)
                     
                 if preview_df is not None:
+                    is_bal = (base_code_clean == "#BALANCE" or "balance" in str(report_name).lower() or len(preview_df) >= 30)
+                    
                     # Inyectar encabezado institucional superior si no es solo tabla
                     if not is_only_table:
                         # 1. Nombre de la Entidad
                         p_ent = doc.add_paragraph()
                         p_ent.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         p_ent.paragraph_format.space_before = Pt(0)
-                        p_ent.paragraph_format.space_after = Pt(1)
+                        p_ent.paragraph_format.space_after = Pt(0)
+                        p_ent.paragraph_format.line_spacing = Pt(9.5) if is_bal else Pt(10.0)
                         r_ent = p_ent.add_run(empresa_activa.replace("[GRUPO] ", "").upper())
                         r_ent.font.name = 'Arial'
-                        r_ent.font.size = Pt(10)
+                        r_ent.font.size = Pt(9.5) if is_bal else Pt(10)
                         r_ent.font.bold = True
                         r_ent.font.color.rgb = RGBColor(31, 78, 120)
                         move_element_before(p, p_ent._p)
@@ -1191,11 +1225,12 @@ class WordTemplateEngine:
                         # 2. Título formal del Reporte
                         p_tit = doc.add_paragraph()
                         p_tit.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        p_tit.paragraph_format.space_before = Pt(1)
-                        p_tit.paragraph_format.space_after = Pt(1)
+                        p_tit.paragraph_format.space_before = Pt(0)
+                        p_tit.paragraph_format.space_after = Pt(0)
+                        p_tit.paragraph_format.line_spacing = Pt(9.5) if is_bal else Pt(10.0)
                         r_tit = p_tit.add_run(report_name.upper())
                         r_tit.font.name = 'Arial'
-                        r_tit.font.size = Pt(10)
+                        r_tit.font.size = Pt(9.5) if is_bal else Pt(10)
                         r_tit.font.bold = True
                         move_element_before(p, p_tit._p)
 
@@ -1206,25 +1241,27 @@ class WordTemplateEngine:
                         
                         p_sub = doc.add_paragraph()
                         p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        p_sub.paragraph_format.space_before = Pt(1)
-                        p_sub.paragraph_format.space_after = Pt(2)
+                        p_sub.paragraph_format.space_before = Pt(0)
+                        p_sub.paragraph_format.space_after = Pt(1) if is_bal else Pt(2)
+                        p_sub.paragraph_format.line_spacing = Pt(8.5) if is_bal else Pt(9.5)
                         if period_str:
                             r_per = p_sub.add_run(f"{period_str}\n")
                             r_per.font.name = 'Arial'
-                            r_per.font.size = Pt(8.5)
+                            r_per.font.size = Pt(7.5) if is_bal else Pt(8.5)
                             r_per.font.italic = True
                         r_unit = p_sub.add_run(f"(Expresado en {unit_label})")
                         r_unit.font.name = 'Arial'
-                        r_unit.font.size = Pt(8)
+                        r_unit.font.size = Pt(7.5) if is_bal else Pt(8)
                         r_unit.font.italic = True
                         r_unit.font.color.rgb = RGBColor(90, 90, 90)
                         move_element_before(p, p_sub._p)
 
                     # Inyectar tabla en la posición de p
                     unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
-                    tbl = doc.add_table(rows=len(preview_df) + 1, cols=len(preview_df.columns))
-                    numeric_cols = preview_df.select_dtypes(include=['number']).columns.tolist()
-                    populate_docx_table(tbl, preview_df, numeric_cols, unit=unit_str)
+                    tbl = doc.add_table(rows=1, cols=len(preview_df.columns))
+                    from src.reporting.word_export import populate_word_table_styled
+                    ex_b = result_bytes.getvalue() if (result_bytes is not None and hasattr(result_bytes, 'getvalue')) else (result_bytes if isinstance(result_bytes, bytes) else None)
+                    populate_word_table_styled(tbl, preview_df, excel_bytes=ex_b, unit=unit_str, compact=is_bal)
                     
                     move_element_before(p, tbl._tbl)
                     paragraphs_to_delete.append(p)

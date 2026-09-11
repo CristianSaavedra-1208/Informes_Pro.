@@ -17,7 +17,7 @@ def read_excel_cached(path, engine=None, **kwargs):
     return _cached_read_excel(path, mtime, engine=engine, **kwargs)
 
 
-def propagate_global_file(file_name: str, empresas_dir: str = None, source_empresa: str = "Pacifico SpA"):
+def propagate_global_file(file_name: str, empresas_dir: str = None, source_empresa: str = "Pacifico Cable SpA"):
     """
     Propaga un archivo de catálogo/maestro desde la empresa fuente global hacia todas las empresas activas.
     Restringido estrictamente a maestros estructurales para evitar cruces de balances.
@@ -32,6 +32,14 @@ def propagate_global_file(file_name: str, empresas_dir: str = None, source_empre
         empresas_dir = os.path.join("data", "empresas")
     
     source_path = os.path.join(empresas_dir, source_empresa, file_name)
+    if not os.path.exists(source_path):
+        # Fallback alternativo
+        for fallback_co in ["Pacifico Cable SpA", "Pacifico SpA", "Db Terra Chile Holdco SpA"]:
+            p = os.path.join(empresas_dir, fallback_co, file_name)
+            if os.path.exists(p):
+                source_path = p
+                source_empresa = fallback_co
+                break
     if not os.path.exists(source_path):
         return
         
