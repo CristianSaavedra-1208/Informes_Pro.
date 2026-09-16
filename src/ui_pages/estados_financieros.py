@@ -996,7 +996,7 @@ def render(empresa_seleccionada, empresa_path):
             import src.reporting.formatting
             importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'), unit=unidad_pat)
+            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'), unit=st.session_state.get('um_bal', 'Miles de pesos (M$)'))
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")

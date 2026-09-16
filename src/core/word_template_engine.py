@@ -138,14 +138,15 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
         ) or first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"]
         
         is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
-            "total activos", "total patrimonio y pasivos", "patrimonio total", 
-            "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo"
+            "total activos", "total patrimonio y pasivos", "total pasivos y patrimonio", "patrimonio total", "total patrimonio",
+            "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo",
+            "saldo final", "saldo final ejercicio"
         ])
         
         is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
             "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
             "procedentes de actividades de operación", "utilizados en actividades de inversión", 
-            "procedentes de actividades de financiación"
+            "procedentes de actividades de financiación", "total resultados integrales", "total resultados"
         ])
 
         is_even = (row_i % 2 == 1)
@@ -221,8 +222,8 @@ def populate_notes_docx_table(table, chunk_df):
             in_header = False
             
         first_cell_val = str(row.iloc[0]).lower().strip()
-        is_grand_total = any(x in first_cell_val for x in ["total general", "total final", "saldo final", "total patrimonio", "total activos"])
-        is_subtotal = not is_grand_total and any(x in first_cell_val for x in ["total", "sub total", "subtotal", "ganancia bruta"])
+        is_grand_total = any(x in first_cell_val for x in ["total general", "total final", "saldo final", "total patrimonio", "total activos", "total pasivos y patrimonio", "patrimonio total"])
+        is_subtotal = not is_grand_total and any(x in first_cell_val for x in ["total", "sub total", "subtotal", "ganancia bruta", "total resultados integrales"])
         
         is_even = (row_i % 2 == 1)
         bg_color = "FFFFFF" if in_header else ("E3F0FE" if is_even else "FFFFFF")
@@ -1134,21 +1135,22 @@ class WordTemplateEngine:
                                     grupo_name=grupo_name
                                 )
                                 
-                        ex_pat = pat_engine.generate(
+                        result_bytes = pat_engine.generate(
                             bal_preview_df=bal_df_pat,
                             pl_preview_df=pl_df_pat,
                             periodo_actual_str=str(periodo_actual),
                             periodo_comp_str=str(comp_period) if comp_period != "Ninguno" else None,
                             empresa=empresa_activa
                         )
-                        ex_pat.seek(0)
+                        result_bytes.seek(0)
                         from src.core.excel_utils import detect_patrimonio_skiprows, clean_preview_dataframe
-                        pat_skip = detect_patrimonio_skiprows(ex_pat)
-                        ex_pat.seek(0)
-                        preview_df = pd.read_excel(ex_pat, skiprows=pat_skip)
+                        pat_skip = detect_patrimonio_skiprows(result_bytes)
+                        result_bytes.seek(0)
+                        preview_df = pd.read_excel(result_bytes, skiprows=pat_skip)
                         preview_df = clean_preview_dataframe(preview_df)
                         first_col = preview_df.columns[0]
-                        preview_df = preview_df.dropna(how='all', subset=[first_col])
+                        preview_df = preview_df.dropna(how='all', subset=[first_col]).reset_index(drop=True)
+                        result_bytes.seek(0)
                     else:
                         preview_df = None
                         

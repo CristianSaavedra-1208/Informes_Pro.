@@ -19,7 +19,7 @@ class TestNotesIntegrity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.global_template = "Plantilla de notas_v1.xlsx"
-        cls.empresa_test = "Pacifico SpA"
+        cls.empresa_test = "Pacifico Cable SpA"
         cls.periodo_actual = "2026-03"
         cls.periodo_comp = "2025-12"
 

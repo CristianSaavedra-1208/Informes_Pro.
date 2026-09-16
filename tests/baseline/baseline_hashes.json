@@ -1,0 +1,4100 @@
+{
+  "tables": {
+    "pl_records_dim": {
+      "count": 4361,
+      "sha256": "b25391133b6bc5720959731a7cfb4316a336c140972a86806f2bf0f3183dbd61",
+      "columns": [
+        "id",
+        "empresa",
+        "periodo",
+        "cuenta_id",
+        "descripcion",
+        "rubro",
+        "monto"
+      ]
+    },
+    "trial_balance_records": {
+      "count": 779,
+      "sha256": "b03dba7fd80b462a38b34a7814767706962604088065fcfa91b63d9c89f01cce",
+      "columns": [
+        "id",
+        "empresa",
+        "periodo",
+        "cuenta_id",
+        "descripcion",
+        "saldo_final",
+        "saldo_inicial",
+        "debitos",
+        "creditos"
+      ]
+    },
+    "historical_data_records": {
+      "count": 932,
+      "sha256": "a4ac4603fc1c0c0f9d1f2d95f720e8556cf748b73a3432dec89d250794fc1b61",
+      "columns": [
+        "id",
+        "empresa",
+        "periodo",
+        "reporte",
+        "linea_item",
+        "monto",
+        "fecha_congelamiento"
+      ]
+    },
+    "historical_detail_records": {
+      "count": 9069,
+      "sha256": "5469c70c268ae979254b91e702f1bbf085fa8260e5600c6e0dd93567bed3171c",
+      "columns": [
+        "id",
+        "empresa",
+        "periodo",
+        "cuenta_id",
+        "descripcion",
+        "saldo_final",
+        "clasificacion_balance",
+        "clasificacion_pl",
+        "id_nota_asociada",
+        "fecha_congelamiento",
+        "saldo_inicial",
+        "debitos",
+        "creditos"
+      ]
+    },
+    "taxonomy_master": {
+      "count": 777,
+      "sha256": "55d2f6b8a29c0296f522ce20f5009045d1a0458b68f73b8c26b5b9c4dd8cbefe",
+      "columns": [
+        "id",
+        "empresa",
+        "id_reporte",
+        "reporte_destino",
+        "nombre_linea_es",
+        "id_nota_asociada",
+        "desglose_nota_es",
+        "nombre_idioma_1",
+        "nombre_idioma_2",
+        "updated_at"
+      ]
+    }
+  },
+  "aggregates": {
+    "pl_records_dim": [
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-03",
+        "count": 130,
+        "sum_monto": 4270703823.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-06",
+        "count": 149,
+        "sum_monto": 4075860891.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-09",
+        "count": 162,
+        "sum_monto": 7114485605.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-12",
+        "count": 169,
+        "sum_monto": 10126269639.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-01",
+        "count": 133,
+        "sum_monto": 612902358.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-02",
+        "count": 134,
+        "sum_monto": 914716443.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-03",
+        "count": 144,
+        "sum_monto": 3033534414.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-04",
+        "count": 153,
+        "sum_monto": 9101618778.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-05",
+        "count": 159,
+        "sum_monto": 8848267102.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-06",
+        "count": 160,
+        "sum_monto": 9119001647.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-07",
+        "count": 166,
+        "sum_monto": 11135647802.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-08",
+        "count": 171,
+        "sum_monto": 10704805831.0
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "periodo": "2026-08",
+        "count": 171,
+        "sum_monto": 10704805831.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-03",
+        "count": 180,
+        "sum_monto": 2762624535.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-06",
+        "count": 193,
+        "sum_monto": 6362220775.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-09",
+        "count": 215,
+        "sum_monto": 13422394437.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-12",
+        "count": 223,
+        "sum_monto": 18253826462.75
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-01",
+        "count": 168,
+        "sum_monto": 746735939.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-02",
+        "count": 176,
+        "sum_monto": 2914424779.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-03",
+        "count": 189,
+        "sum_monto": 7371016178.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-04",
+        "count": 195,
+        "sum_monto": 8884783665.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-05",
+        "count": 201,
+        "sum_monto": 10243719820.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-06",
+        "count": 202,
+        "sum_monto": 14140292701.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-07",
+        "count": 208,
+        "sum_monto": 16849961428.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-08",
+        "count": 210,
+        "sum_monto": 19472780715.0
+      }
+    ],
+    "trial_balance_records": [
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "periodo": "2026-08",
+        "count": 401,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Empresa_Test",
+        "periodo": "2026-06",
+        "count": 3,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-08",
+        "count": 375,
+        "sum_saldo_final": 0.0
+      }
+    ],
+    "historical_data_records": [
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-01",
+        "count": 26,
+        "sum_monto": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-03",
+        "count": 36,
+        "sum_monto": 4270703823.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-06",
+        "count": 37,
+        "sum_monto": 4075860891.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-09",
+        "count": 40,
+        "sum_monto": 7114485605.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-12",
+        "count": 36,
+        "sum_monto": 10126269639.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-01",
+        "count": 39,
+        "sum_monto": 612902358.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-02",
+        "count": 40,
+        "sum_monto": 914716443.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-03",
+        "count": 37,
+        "sum_monto": 3033534414.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-04",
+        "count": 37,
+        "sum_monto": 9101618778.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-05",
+        "count": 38,
+        "sum_monto": 8848267102.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-06",
+        "count": 40,
+        "sum_monto": 9119001647.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-07",
+        "count": 40,
+        "sum_monto": 11135647802.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-08",
+        "count": 41,
+        "sum_monto": 10704805831.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-03",
+        "count": 38,
+        "sum_monto": 2762624535.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-06",
+        "count": 37,
+        "sum_monto": 6362220775.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-09",
+        "count": 38,
+        "sum_monto": 13422394437.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-12",
+        "count": 37,
+        "sum_monto": 18253826462.75
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-01",
+        "count": 38,
+        "sum_monto": 746735939.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-02",
+        "count": 39,
+        "sum_monto": 2914424779.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-03",
+        "count": 38,
+        "sum_monto": 7371016178.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-04",
+        "count": 38,
+        "sum_monto": 8884783665.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-05",
+        "count": 38,
+        "sum_monto": 10243719820.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-06",
+        "count": 39,
+        "sum_monto": 14140292701.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-07",
+        "count": 39,
+        "sum_monto": 16849961428.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-12",
+        "count": 26,
+        "sum_monto": 0.0
+      }
+    ],
+    "historical_detail_records": [
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-01",
+        "count": 375,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-03",
+        "count": 317,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-06",
+        "count": 343,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-09",
+        "count": 363,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2025-12",
+        "count": 375,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-01",
+        "count": 350,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-02",
+        "count": 352,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-03",
+        "count": 370,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-04",
+        "count": 391,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-05",
+        "count": 398,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-06",
+        "count": 399,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-07",
+        "count": 400,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "periodo": "2026-08",
+        "count": 401,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-03",
+        "count": 370,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-06",
+        "count": 323,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-09",
+        "count": 347,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2025-12",
+        "count": 359,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-01",
+        "count": 328,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-02",
+        "count": 335,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-03",
+        "count": 355,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-04",
+        "count": 359,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-05",
+        "count": 361,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-06",
+        "count": 365,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-07",
+        "count": 374,
+        "sum_saldo_final": 0.0
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "periodo": "2026-12",
+        "count": 359,
+        "sum_saldo_final": 0.0
+      }
+    ],
+    "taxonomy_master": [
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1000",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_1600",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_APO_1700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_APO_2100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_1900",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_2100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_2200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_2300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_600",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_800",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_CUE_900",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_DEU_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_DEU_400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_EFE_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_EFE_200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_GAN_1900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_GAN_2200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_GAS_1500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_GAS_1800",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_INV_1100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_INV_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_INV_700",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_INV_800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_1700",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_2000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_2300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_OTR_300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PLU_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PLU_1300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PRO_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PRO_1500",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PRO_1600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_PRO_2000",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_RES_100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ACT_C_RES_1800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_COS_200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_COS_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_DIF_300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_DIF_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_ING_100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_ING_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_ING_500",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_RES_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_NOO_RES_400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ACC_400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ACC_776",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_COS_300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_COS_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_DEP_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_DEP_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_DEP_500",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_DEP_700",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ER_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_GAS_600",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_GAS_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ING_200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ING_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_ING_600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_OTR_800",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_OTR_900",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_RES_1000",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "ER_OPE_RES_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_FIN_IMP_200",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_FIN_PAG_100",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COB_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COB_400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COM_600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_COM_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_FLU_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_FLU_300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_IMP_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_OTR_100",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_OTR_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_1200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_1400",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_PAG_500",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_SAL_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "FC_OPE_SAL_200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "MNL_20601",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "MNL_90229",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "N_BAL_4152",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_OTR_100",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_OTR_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_OTR_300",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_PAS_200",
+        "count": 2
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_PAS_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Holdco SpA",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 3
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_ACT_1500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_APO_1900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_CUE_2200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_CUE_2300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_CUE_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_CUE_800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_DEU_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_EFE_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_GAN_2000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_GAS_1700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_INV_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_INV_600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_OTR_1600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_OTR_2100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_PLU_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_PRO_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_PRO_1800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ACT_C_RES_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_NOO_COS_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_NOO_DIF_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_NOO_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_NOO_ING_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_NOO_RES_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_ACC_322",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_COS_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_DEP_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_DEP_600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_GAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_ING_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_OTR_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_OTR_800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "ER_OPE_RES_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_FIN_IMP_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_FIN_PAG_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_COB_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_FLU_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_PAG_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_PAG_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_PAG_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "FC_OPE_SAL_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAS_C_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAS_C_OTR_200",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAS_C_PAS_300",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "Db Terra Chile Parent SpA",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_ACT_700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_APO_1800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_COS_2300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_CUE_1500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_CUE_2100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_CUE_2400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_CUE_400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_DEU_300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_DIF_2200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_EFE_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_GAN_2500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_GAS_2000",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_INV_600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_INV_800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_OTR_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_OTR_1900",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_OTR_200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_PLU_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_PRO_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_PRO_1700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ACT_C_RES_1600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_NOO_COS_900",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_NOO_DIF_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_NOO_ING_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_NOO_ING_800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_NOO_RES_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_ACC_236",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_COS_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_COS_200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_DEP_300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_DEP_500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_GAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_ING_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_OTR_600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_OTR_700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "ER_OPE_RES_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_FIN_IMP_1400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_FIN_PAG_1200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_COB_1800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_COB_300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_EFE_2600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_2300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_2700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_FLU_200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_IMP_2800",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_INT_2100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_INT_2400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_OTR_2000",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_OTR_500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PAG_1500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PAG_1600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PAG_1900",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PAG_2200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PAG_400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PEN_1700",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_PEN_2500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "FC_OPE_SAL_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "MNL_1050",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "MNL_5994",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "MNL_9732",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ACT_CRE_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ACT_DER_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ACT_LIC_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ACT_PAG_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_AFP_118",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_AGU_30",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_AJU_69",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_AMO_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ANC_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_108",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_42",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_43",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_46",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_47",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_48",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_49",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_50",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ARR_93",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ASE_41",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ASI_104",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ASI_20",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ASI_31",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_BEN_37",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_BIE_79",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_BON_16",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_CAS_102",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COM_32",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COM_94",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_CON_55",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_CON_59",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COS_11",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COS_115",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COS_116",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COS_13",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_COT_117",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_DER_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_DIR_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_DON_103",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ELE_26",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_EXA_29",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_106",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_107",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_14",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_23",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_24",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_45",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_49",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_51",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_52",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_53",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_54",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_57",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_62",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_63",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_64",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_71",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_72",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_73",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_74",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_75",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_76",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_77",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_80",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_81",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_82",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_83",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_84",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_85",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GAS_88",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GES_28",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GPS_97",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_GRA_18",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_HER_68",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_HON_38",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_HON_39",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_HON_40",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_HOR_34",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_IMA_87",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_IMP_27",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_IMP_89",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_IND_25",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ING_113",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INS_101",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INS_66",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_11",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_12",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_13",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_14",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_15",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_16",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_17",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_18",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_19",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_20",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_21",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_22",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_23",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_24",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_25",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_26",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_27",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_28",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_29",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_30",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_31",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_32",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_33",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_34",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_35",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_36",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_37",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_38",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_39",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_40",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_41",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_42",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_43",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_44",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_45",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_46",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_47",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_INT_48",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_IVA_109",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_LEA_99",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MAN_95",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MAN_96",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MAR_91",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MAR_92",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MAT_65",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MUL_60",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_MUT_21",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_OTR_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_OTR_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_OTR_44",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PAT_58",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PEA_111",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PER_114",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PER_78",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PER_98",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_POR_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PRO_112",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_PRO_86",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_REM_15",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_ROP_19",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SAL_105",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEG_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEG_17",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEG_22",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEG_36",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEG_61",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEM_33",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEN_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEN_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SEN_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SER_56",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SER_67",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SER_90",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SOA_110",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_SUS_70",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_TRA_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_TRA_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_TRA_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_TRA_12",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_COS_VAC_35",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_ANT_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_OTR_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_OTR_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_PRO_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_PRO_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_PRO_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_REM_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_CUE_RET_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_AMO_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_11",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_12",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_13",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_14",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEP_DEP_15",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_ANT_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_DEU_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_DEU_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_DOC_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_EST_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_REC_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DEU_SAL_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_DIF_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_DIF_REA_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_EFE_DEP_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_EFE_EFE_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_EFE_EFE_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_EFE_FON_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_EFE_FON_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_AMO_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_CAS_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_HON_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_IMP_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_ING_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_OTR_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_PER_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_REM_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_SER_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_GAS_SER_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_AJU_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_AJU_15",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_AJU_16",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_FAC_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_FAC_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_GAN_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_ING_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_ING_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_ING_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_NOT_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_NOT_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_OTR_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_OTR_14",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_SER_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_SER_12",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_SER_13",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_ING_SUB_11",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_INV_DET_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_GAN_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_ING_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_ING_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_INS_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_LEA_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_OTR_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_OTR_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_OTR_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_OTR_PRE_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PAS_IMP_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PAS_IMP_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PAS_IMP_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PAS_IVA_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PAS_PAS_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_ACT_09",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_EDI_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_EQU_04",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_EQU_06",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_EQU_07",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_INS_12",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_MUE_05",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_OBR_11",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_OTR_10",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_PLA_03",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_PRO_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_RED_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_PRO_VEH_08",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_RES_COR_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_RES_IMP_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_RES_IMP_02",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "N_RES_REA_01",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_OTR_200",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_PAS_100",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAS_C_PAS_600",
+        "count": 1
+      },
+      {
+        "empresa": "Pacifico Cable SpA",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_ACT_1500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_APO_2100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_CUE_1600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_CUE_1900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_CUE_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_CUE_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_DEU_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_EFE_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_GAN_2200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_GAS_1800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_INV_1000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_INV_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_OTR_1700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_OTR_2300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_PLU_1200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_PRO_1400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_PRO_2000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ACT_C_RES_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_NOO_COS_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_NOO_DIF_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_NOO_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_NOO_ING_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_NOO_RES_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_ACC_939",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_COS_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_DEP_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_DEP_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_GAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_ING_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_OTR_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_OTR_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "ER_OPE_RES_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_FIN_IMP_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_FIN_PAG_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_COB_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_FLU_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_PAG_1200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_PAG_1400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_PAG_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "FC_OPE_SAL_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAS_C_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAS_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAS_C_PAS_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_ACT_1500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_APO_2100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_CUE_1600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_CUE_1900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_CUE_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_CUE_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_DEU_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_EFE_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_GAN_2200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_GAS_1800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_INV_1000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_INV_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_OTR_1700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_OTR_2300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_PLU_1200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_PRO_1400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_PRO_2000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ACT_C_RES_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_NOO_COS_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_NOO_DIF_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_NOO_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_NOO_ING_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_NOO_RES_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_ACC_495",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_COS_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_DEP_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_DEP_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_GAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_ING_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_OTR_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_OTR_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "ER_OPE_RES_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_FIN_IMP_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_FIN_PAG_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_COB_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_FLU_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_PAG_1200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_PAG_1400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_PAG_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "FC_OPE_SAL_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAS_C_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAS_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAS_C_PAS_200",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "[GRUPO] Consolidado Terra Parent",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_ACT_1100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_ACT_1300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_ACT_1500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_ACT_900",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_APO_2100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_CUE_1600",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_CUE_1900",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_CUE_500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_CUE_700",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_CUE_800",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_DEU_400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_EFE_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_GAN_2200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_GAS_1800",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_INV_1000",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_INV_600",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_OTR_1700",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_OTR_2300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_PLU_1200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_PRO_1400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_PRO_2000",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ACT_C_RES_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_NOO_COS_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_NOO_DIF_300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_NOO_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_NOO_ING_500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_NOO_RES_400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_ACC_297",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_COS_300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_DEP_400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_DEP_600",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_GAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_ING_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_ING_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_OTR_700",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_OTR_800",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "ER_OPE_RES_900",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_FIN_IMP_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_FIN_PAG_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_COB_400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_COM_1000",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_COM_700",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_ELI_1100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_ELI_1300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_ELI_800",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_ELI_900",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_FLU_300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_IMP_600",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_PAG_1200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_PAG_1400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_PAG_500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "FC_OPE_SAL_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAS_C_OTR_100",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAS_C_OTR_300",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAS_C_PAS_200",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAS_C_PAS_400",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAS_C_PAS_500",
+        "count": 1
+      },
+      {
+        "empresa": "🌐 [GLOBAL] Configuración General",
+        "id_reporte": "PAT_C_CAP_100",
+        "count": 1
+      }
+    ]
+  }
+}

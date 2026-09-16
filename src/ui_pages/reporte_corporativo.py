@@ -224,7 +224,7 @@ def render(empresa_seleccionada, empresa_path):
                     out_bytes = output_buffer.getvalue() if hasattr(output_buffer, 'getvalue') else output_buffer
                     st.session_state['corp_word_output_bytes'] = out_bytes
                     st.session_state['corp_word_filename'] = f"Reporte_Corporativo_{empresa_seleccionada.replace('[GRUPO] ', '').replace(' ', '_')}_{periodo_actual}.docx"
-                    st.success("¡Reporte generado con éxito!")
+                    st.success("¡Reporte generado con éxito! Presione descargar reporte para emitir Word actualizado.")
                 except Exception as e:
                     st.warning(f"⚠️ **Información del Sistema:** {str(e)}")
                     

@@ -161,7 +161,7 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
     - Si compact=True (Balance Clasificado), reduce padding e interlíneas para calzar en 1 sola página.
     """
     table.style = 'Normal Table'
-    df = df.copy()
+    df = df.copy().reset_index(drop=True)
     df_cols = list(df.columns)
     num_cols = len(df_cols)
 
@@ -318,22 +318,31 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                 for idx_m, j in enumerate(numeric_df_cols):
                     ws_cols_mapping[j] = excel_numeric_cols[idx_m]
 
-            # Construir mapa de filas de Excel
-            row_map = {}
-            for r in range(1, ws.max_row + 1):
-                for col_idx in range(1, min(ws.max_column + 1, 6)):
-                    val = ws.cell(row=r, column=col_idx).value
-                    if val is not None:
-                        s_val = clean_str(val)
-                        if s_val and s_val not in row_map:
-                            row_map[s_val] = r
-
+            # Mapeo secuencial robusto entre DataFrame y Excel (para manejar reportes con múltiples bloques como Patrimonio)
             row_top_borders = {}
             row_bottom_borders = {}
+            curr_excel_row = 1
 
             for idx, df_row in df.iterrows():
                 search_val = clean_str(df_row.iloc[0])
-                found_row = row_map.get(search_val)
+                found_row = None
+                
+                if search_val:
+                    # Búsqueda secuencial hacia adelante
+                    for r in range(curr_excel_row, ws.max_row + 1):
+                        val = ws.cell(row=r, column=excel_name_col).value
+                        if val is not None and clean_str(val) == search_val:
+                            found_row = r
+                            curr_excel_row = r + 1
+                            break
+                    # Si no se encontró hacia adelante, buscar en toda la hoja
+                    if found_row is None:
+                        for r in range(1, ws.max_row + 1):
+                            val = ws.cell(row=r, column=excel_name_col).value
+                            if val is not None and clean_str(val) == search_val:
+                                found_row = r
+                                break
+
                 cell_styles = []
 
                 if found_row is not None:
@@ -425,16 +434,30 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
                 row_styles_data[idx] = cell_styles
 
-            # Propagación horizontal de bordes de totales/subtotales
-            for idx in row_styles_data:
+            # Propagación horizontal y vertical de bordes de totales/subtotales
+            for idx in sorted(list(row_styles_data.keys())):
                 r_top_b = row_top_borders.get(idx)
                 r_bottom_b = row_bottom_borders.get(idx)
+                
+                # Identificar si la fila es un total o saldo final para propagar bordes y asegurar negrita
+                first_cell_text = str(df.iloc[idx, 0]).strip().lower() if idx < len(df) else ""
+                is_row_total = any(k in first_cell_text for k in [
+                    "saldo final", "total", "patrimonio total", "ganancia bruta", "resultado", "ganancia (pérdida)"
+                ])
+                
+                # Si la fila anterior tenía borde inferior y esta fila es un total/subtotal, propagar borde superior
+                if not r_top_b and (idx - 1) in row_bottom_borders and is_row_total:
+                    r_top_b = row_bottom_borders[idx - 1]
+                    row_top_borders[idx] = r_top_b
+
                 if r_top_b or r_bottom_b:
                     for j in range(num_cols):
                         if r_top_b and not row_styles_data[idx][j]['top_b']:
                             row_styles_data[idx][j]['top_b'] = r_top_b
                         if r_bottom_b and not row_styles_data[idx][j]['bottom_b']:
                             row_styles_data[idx][j]['bottom_b'] = r_bottom_b
+                        if is_row_total:
+                            row_styles_data[idx][j]['bold'] = True
 
             dynamic_styled = True
         except Exception as ex:
@@ -491,26 +514,28 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                 fill_bg = "E3F0FE" if is_even else "FFFFFF"
                 set_cell_bg(cell, fill_bg)
 
-                is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
-                    "total activos", "total patrimonio y pasivos", "patrimonio total", 
-                    "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo"
+                is_bottom_double = not is_category_header and any(k in first_cell_clean for k in [
+                    "ganancias (pérdida) del ejercicio", "ganancia (pérdida) del ejercicio", "resultado final"
                 ])
-                is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
-                    "total", "sub total", "subtotal", "ganancia bruta"
+                is_any_total = not is_category_header and not is_bottom_double and any(k in first_cell_clean for k in [
+                    "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
+                    "procedentes de actividades de operación", "utilizados en actividades de inversión", 
+                    "procedentes de actividades de financiación", "total resultados integrales", "total resultados",
+                    "saldo final", "patrimonio total"
                 ])
 
                 top_b = None
                 bottom_b = None
-                if is_grand_total:
+                if is_bottom_double:
                     top_b = {'val': 'single', 'sz': '6', 'color': '000000'}
                     bottom_b = {'val': 'double', 'sz': '12', 'color': '000000'}
-                elif is_subtotal:
+                elif is_any_total:
                     top_b = {'val': 'single', 'sz': '6', 'color': '000000'}
                     bottom_b = {'val': 'single', 'sz': '6', 'color': '000000'}
                 
                 set_cell_borders(cell, top=top_b, bottom=bottom_b)
                 
-                bold = is_grand_total or is_subtotal or is_category_header
+                bold = is_bottom_double or is_any_total or is_category_header
                 italic = False
                 font_size = base_font_size
                 text_color = RGBColor(0, 0, 0)

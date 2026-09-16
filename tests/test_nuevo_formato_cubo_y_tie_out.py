@@ -125,5 +125,65 @@ class TestNuevoFormatoCuboYTieOut(unittest.TestCase):
         finally:
             db.close()
 
+    def test_audit_warnings_empty_odoo_classification(self):
+        """
+        Prueba que process_odoo_cubo identifique filas con celdas de clasificación vacías
+        y retorne el DataFrame de auditoría con la fila, cuenta, monto y rubro asignado.
+        """
+        # Crear un DataFrame simulando el cubo de Odoo con una celda de informe_ee_rr vacía
+        test_cubo = pd.DataFrame([
+            {
+                'fec_doc': '2026-08-15',
+                'ano': 2026,
+                'mes': 8,
+                'cuenta': '3105819',
+                'nombre_cuenta': 'GASTOS DE HOSPEDAJE NACIONAL',
+                'importe_mn': -59664.0,
+                'informe_ee_rr': None,  # Celda vacía en Odoo
+                'Nivel 1': 'EBITDA'
+            },
+            {
+                'fec_doc': '2026-08-15',
+                'ano': 2026,
+                'mes': 8,
+                'cuenta': '3105301',
+                'nombre_cuenta': 'SUELDOS Y SALARIOS',
+                'importe_mn': 100000.0,
+                'informe_ee_rr': 'Gastos de administración',
+                'Nivel 1': 'EBITDA'
+            }
+        ])
+
+        # Map PL con Costo de ventas y Gastos de administración para 3105819
+        test_map_pl = pd.DataFrame([
+            {
+                'N° de cuenta': '3105819',
+                'Nombre de la cuenta': 'GASTOS DE HOSPEDAJE NACIONAL',
+                'Costo de ventas': 'Costos por servicios externos',
+                'Gastos de administración': 'Viáticos y estadía'
+            }
+        ])
+
+        # 1. Probar compatibilidad por defecto (return_audit_log=False)
+        df_proc = process_odoo_cubo(test_cubo, 2026, 8, test_map_pl, return_audit_log=False)
+        self.assertIsInstance(df_proc, pd.DataFrame)
+        self.assertIn('N° de cuenta', df_proc.columns)
+
+        # 2. Probar con return_audit_log=True
+        df_proc, df_audit = process_odoo_cubo(test_cubo, 2026, 8, test_map_pl, return_audit_log=True)
+        self.assertIsInstance(df_proc, pd.DataFrame)
+        self.assertIsInstance(df_audit, pd.DataFrame)
+        self.assertEqual(len(df_audit), 1, "Debe registrar exactamente 1 fila con advertencia de auditoría")
+        
+        audit_row = df_audit.iloc[0]
+        self.assertEqual(audit_row['Fila Excel'], 2, "La primera fila de datos corresponde a la fila 2 de Excel")
+        self.assertEqual(audit_row['N° de Cuenta'], '3105819')
+        self.assertEqual(audit_row['Importe MN'], -59664.0)
+        self.assertEqual(audit_row['Clasificación ERP'], '(Vacío)')
+        self.assertEqual(audit_row['Rubro Asignado'], 'Costo de ventas')
+        self.assertIn('Sin clasificación en ERP', audit_row['Motivo / Observación'])
+
+        print("\n[OK] Test Auditoría Clasificación Vacía: Detección y log de advertencias validado exitosamente.")
+
 if __name__ == '__main__':
     unittest.main()

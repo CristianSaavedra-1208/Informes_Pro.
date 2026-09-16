@@ -123,28 +123,26 @@ def render_balance_vs_pl_validation_card(empresa: str, periodo: str, pl_df_overr
 def check_unmapped_accounts(empresa_path, accounts_to_check, plan_cuentas_df):
     """
     Verifica si las cuentas provistas están mapeadas en las plantillas.
-    Retorna el set de cuentas sin clasificar.
+    Retorna el set de cuentas sin clasificar usando operaciones vectorizadas y set algebra.
     """
     if plan_cuentas_df is None or plan_cuentas_df.empty:
         return set()
         
     plan_cuentas = set(plan_cuentas_df['Cuenta'].astype(str).str.strip())
+    from src.core.excel_utils import read_excel_cached
     
     # 1. Cargar mapeos de Balance
     map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
     mapped_bal_accounts = set()
     if os.path.exists(map_bal_path):
         try:
-            df_bal = pd.read_excel(map_bal_path, dtype=str)
-            if not df_bal.empty:
+            df_bal = read_excel_cached(map_bal_path, dtype=str)
+            if df_bal is not None and not df_bal.empty:
                 col_bal_cuenta = next((c for c in df_bal.columns if 'cuenta' in c.lower()), df_bal.columns[0])
                 clasif_col = next((c for c in df_bal.columns if 'clasificaci' in c.lower() and 'balance' in c.lower()), None)
                 if clasif_col:
-                    for _, row in df_bal.iterrows():
-                        acc_id = str(row[col_bal_cuenta]).strip()
-                        val = row[clasif_col]
-                        if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
-                            mapped_bal_accounts.add(acc_id)
+                    valid_mask = df_bal[clasif_col].notna() & (df_bal[clasif_col].astype(str).str.strip() != "") & (df_bal[clasif_col].astype(str).str.lower() != "nan")
+                    mapped_bal_accounts = set(df_bal.loc[valid_mask, col_bal_cuenta].astype(str).str.strip())
         except Exception:
             pass
 
@@ -156,35 +154,23 @@ def check_unmapped_accounts(empresa_path, accounts_to_check, plan_cuentas_df):
     mapped_pl_accounts.update(pl_overrides)
     if os.path.exists(map_pl_path):
         try:
-            df_pl = pd.read_excel(map_pl_path, dtype=str)
-            if not df_pl.empty:
+            df_pl = read_excel_cached(map_pl_path, dtype=str)
+            if df_pl is not None and not df_pl.empty:
                 col_pl_cuenta = next((c for c in df_pl.columns if 'cuenta' in c.lower()), df_pl.columns[0])
-                for _, row in df_pl.iterrows():
-                    acc_id = str(row[col_pl_cuenta]).strip()
-                    is_mapped = False
-                    for col in df_pl.columns[1:]:
-                        val = row[col]
-                        if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
-                            is_mapped = True
-                            break
-                    if is_mapped:
-                        mapped_pl_accounts.add(acc_id)
+                data_cols = [c for c in df_pl.columns if c != col_pl_cuenta]
+                if data_cols:
+                    clean_vals = df_pl[data_cols].fillna("").astype(str)
+                    has_mapping_mask = clean_vals.apply(lambda col: (col.str.strip() != "") & (col.str.lower() != "nan")).any(axis=1)
+                    mapped_pl_accounts.update(df_pl.loc[has_mapping_mask, col_pl_cuenta].astype(str).str.strip())
         except Exception:
             pass
 
-    # 3. Verificar cada cuenta
-    cuentas_no_mapeadas = set()
-    for acc in accounts_to_check:
-        acc_str = str(acc).strip()
-        if not acc_str or acc_str.upper() == 'TOTAL' or acc_str.lower() == 'nan':
-            continue
-        if acc_str in plan_cuentas:
-            if acc_str in mapped_bal_accounts or acc_str in mapped_pl_accounts:
-                continue
-            else:
-                cuentas_no_mapeadas.add(acc_str)
-                    
-    return cuentas_no_mapeadas
+    # 3. Filtrado vectorizado mediante álgebra de conjuntos
+    clean_accounts = {
+        str(acc).strip() for acc in accounts_to_check
+        if str(acc).strip() and str(acc).strip().upper() != 'TOTAL' and str(acc).strip().lower() != 'nan'
+    }
+    return (clean_accounts & plan_cuentas) - (mapped_bal_accounts | mapped_pl_accounts)
 
 def render(empresa_seleccionada, empresa_path):
     global_opt = "[GLOBAL] Configuración General"
@@ -331,7 +317,8 @@ def render(empresa_seleccionada, empresa_path):
                     if is_global:
                         propagate_global_file("plan_cuentas.xlsx", os.path.dirname(empresa_path))
                     
-                    st.cache_data.clear()
+                    from src.core.sabana_manager import SabanaManager
+                    SabanaManager.clear_sabana_cache()
                     st.session_state['ed_plan_ver'] = st.session_state.get('ed_plan_ver', 1) + 1
                     st.session_state['success_msg'] = f"✅ Plan de Cuentas reemplazado y actualizado exitosamente. Total maestro: **{len(df_final)}** cuentas cargadas."
                     st.rerun()
@@ -377,7 +364,8 @@ def render(empresa_seleccionada, empresa_path):
                         if is_global:
                             propagate_global_file("plan_cuentas.xlsx", os.path.dirname(empresa_path))
                             
-                        st.cache_data.clear()
+                        from src.core.sabana_manager import SabanaManager
+                        SabanaManager.clear_sabana_cache()
                         st.session_state['ed_plan_ver'] += 1
                         st.session_state['success_msg'] = f"✅ Plan de Cuentas guardado con éxito. Total: {len(df_final)} cuentas."
                         st.rerun()
@@ -595,60 +583,9 @@ def render(empresa_seleccionada, empresa_path):
         st.subheader("Cubo de Estado de Resultados (P&L)")
         st.write("Sube el cubo analítico de Pérdidas y Ganancias (ventas por centro de costo, unidad de negocio, etc.) o edita directamente los saldos guardados.")
 
-        # Obtener columnas de P&L de taxonomía
-        from src.models.database import SessionLocal
-        from src.models.taxonomy_master import TaxonomyMasterRecord
-
-        db_pl = SessionLocal()
-        try:
-            tax_recs = db_pl.query(TaxonomyMasterRecord.nombre_linea_es).filter_by(
-                empresa=empresa_seleccionada,
-                reporte_destino="P&L"
-            ).order_by(TaxonomyMasterRecord.id_reporte).all()
-            db_cols = [r[0] for r in tax_recs if r[0]]
-            db_cols = list(dict.fromkeys(db_cols))
-
-            PL_ORDER_LIST = [
-                "ingresos de arriendo fibra optica",
-                "ingresos de actividades ordinarias",
-                "costo de ventas",
-                "acceso a infraestructura fibra optica",
-                "costos de uso fibra optica",
-                "depreciacion operacional",
-                "depreciacion y amortizacion operacional",
-                "otros ingresos por funcion",
-                "costos de distribucion",
-                "gastos de administracion",
-                "depreciacion y amortizaciones",
-                "otros egresos por funcion",
-                "resultado por inversion en empresas relacionadas",
-                "ingresos financieros",
-                "ingresos financieros con empresas relacionadas",
-                "ingresos financieros ic",
-                "costos financieros",
-                "diferencias de cambio",
-                "resultado por unidad de reajuste",
-                "resultados por unidades de reajuste",
-                "ganancia (perdida) por impuesto a las ganancias",
-                "resultado por impuestos a las ganancias"
-            ]
-
-            def get_pl_sort_key(name):
-                if not name:
-                    return 9999
-                norm = name.lower().strip().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
-                if norm in PL_ORDER_LIST:
-                    return PL_ORDER_LIST.index(norm)
-                for idx, item in enumerate(PL_ORDER_LIST):
-                    if item in norm or norm in item:
-                        return idx
-                return 9999
-
-            db_cols = sorted(db_cols, key=get_pl_sort_key)
-        except Exception:
-            db_cols = []
-        finally:
-            db_pl.close()
+        # Obtener columnas de P&L de taxonomía (con caché optimizado)
+        from src.core.taxonomy_cache import get_pl_taxonomy_columns
+        db_cols = get_pl_taxonomy_columns(empresa_seleccionada)
 
         default_pl_cols = [
             "Ingresos de arriendo fibra optica",
@@ -746,9 +683,14 @@ def render(empresa_seleccionada, empresa_path):
 
                 if up_pl_cubo is not None:
                     try:
-                        with st.spinner("Analizando la estructura del archivo Excel..."):
-                            xls = pd.ExcelFile(up_pl_cubo, engine='openpyxl')
-                            sheet_names = xls.sheet_names
+                        file_sig = f"{up_pl_cubo.name}_{up_pl_cubo.size}_{empresa_seleccionada}_{periodo_str_pl}"
+                        if st.session_state.get('pl_cached_file_sig') != file_sig or 'pl_cached_sheet_names' not in st.session_state:
+                            with st.spinner("Analizando la estructura del archivo Excel..."):
+                                xls = pd.ExcelFile(up_pl_cubo, engine='openpyxl')
+                                st.session_state['pl_cached_sheet_names'] = xls.sheet_names
+                                st.session_state['pl_cached_file_sig'] = file_sig
+
+                        sheet_names = st.session_state['pl_cached_sheet_names']
 
                         if len(sheet_names) > 1:
                             def guess_sheet_index(sheets, company):
@@ -772,46 +714,60 @@ def render(empresa_seleccionada, empresa_path):
                         else:
                             selected_sheet = sheet_names[0]
 
-                        import time
-                        start_time = time.time()
-                        with st.spinner(f"Cargando transacciones de la pestaña '{selected_sheet}'..."):
-                            df_raw = pd.read_excel(up_pl_cubo, sheet_name=selected_sheet, dtype=str, engine='openpyxl')
-                            df_raw.columns = [str(c).strip() for c in df_raw.columns]
-                            df_raw_for_reprocess = df_raw.copy()
+                        full_sig = f"{file_sig}_{selected_sheet}"
+                        current_file_id = full_sig
 
-                        # Detectar formato: ¿Es Cubo de Odoo o Formato P&L ancho clásico?
-                        has_eerr_col = any("eerr" in c.lower() or "informe_eerr" in c.lower() for c in df_raw.columns)
-
-                        if has_eerr_col:
-                            format_detected = "Cubo transaccional original de Odoo"
-                            st.info(f"📂 Formato detectado: **{format_detected}** en la pestaña **'{selected_sheet}'**.")
-                            if df_map_master is None:
-                                st.warning("⚠️ No se encontró el archivo maestro 'map_pl.xlsx' de la empresa activa. Se usará clasificación directa de Odoo sin mapeo específico.")
-
-                            with st.spinner("Agrupando transacciones y aplicando reglas de mapeo IFRS (YTD)..."):
-                                from src.core.pl_cubo_processor import process_odoo_cubo
-                                df_processed = process_odoo_cubo(df_raw, upload_year_pl, upload_month_pl, df_map_master, standard_categories=pl_rubros)
+                        # Reutilizar resultado procesado en caché de sesión si no ha cambiado el archivo
+                        if (
+                            st.session_state.get('pl_last_processed_sig') == full_sig
+                            and 'pl_cached_df_processed' in st.session_state
+                        ):
+                            df_processed = st.session_state['pl_cached_df_processed']
+                            df_raw_for_reprocess = st.session_state.get('pl_cached_df_raw')
                         else:
-                            format_detected = "Formato de columnas P&L estructurado (Matriz)"
-                            st.info(f"📂 Formato detectado: **{format_detected}**.")
+                            import time
+                            start_time = time.time()
+                            with st.spinner(f"Cargando transacciones de la pestaña '{selected_sheet}'..."):
+                                df_raw = pd.read_excel(up_pl_cubo, sheet_name=selected_sheet, dtype=str, engine='openpyxl')
+                                df_raw.columns = [str(c).strip() for c in df_raw.columns]
+                                df_raw_for_reprocess = df_raw.copy()
 
-                            cuenta_col = next((c for c in df_raw.columns if "Cuenta" in c or "cuenta" in c), None)
-                            if cuenta_col:
-                                df_processed = df_raw.copy()
-                                if cuenta_col != "N° de cuenta":
-                                    df_processed.rename(columns={cuenta_col: "N° de cuenta"}, inplace=True)
-                                for cat in pl_rubros:
-                                    if cat not in df_processed.columns:
-                                        df_processed[cat] = "0.0"
-                                for cat in pl_rubros:
-                                    df_processed[cat] = pd.to_numeric(df_processed[cat], errors='coerce').fillna(0.0)
+                            # Detectar formato: ¿Es Cubo de Odoo o Formato P&L ancho clásico?
+                            has_eerr_col = any("eerr" in c.lower() or "informe_eerr" in c.lower() for c in df_raw.columns)
+
+                            if has_eerr_col:
+                                format_detected = "Cubo transaccional original de Odoo"
+                                st.info(f"📂 Formato detectado: **{format_detected}** en la pestaña **'{selected_sheet}'**.")
+                                if df_map_master is None:
+                                    st.warning("⚠️ No se encontró el archivo maestro 'map_pl.xlsx' de la empresa activa. Se usará clasificación directa de Odoo sin mapeo específico.")
+
+                                with st.spinner("Agrupando transacciones y aplicando reglas de mapeo IFRS (YTD)..."):
+                                    from src.core.pl_cubo_processor import process_odoo_cubo
+                                    df_processed, df_audit = process_odoo_cubo(df_raw, upload_year_pl, upload_month_pl, df_map_master, standard_categories=pl_rubros, return_audit_log=True)
+                                    st.session_state['pl_cubo_audit_warnings'] = df_audit
                             else:
-                                st.error("❌ Estructura inválida. No se detectó ninguna columna de 'Cuenta'.")
+                                format_detected = "Formato de columnas P&L estructurado (Matriz)"
+                                st.info(f"📂 Formato detectado: **{format_detected}**.")
 
-                        elapsed_time = time.time() - start_time
-                        if df_processed is not None:
-                            st.success(f"✅ Archivo Excel procesado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
-                            current_file_id = f"{up_pl_cubo.name}_{selected_sheet}_{periodo_str_pl}_{up_pl_cubo.size}"
+                                cuenta_col = next((c for c in df_raw.columns if "Cuenta" in c or "cuenta" in c), None)
+                                if cuenta_col:
+                                    df_processed = df_raw.copy()
+                                    if cuenta_col != "N° de cuenta":
+                                        df_processed.rename(columns={cuenta_col: "N° de cuenta"}, inplace=True)
+                                    for cat in pl_rubros:
+                                        if cat not in df_processed.columns:
+                                            df_processed[cat] = "0.0"
+                                    for cat in pl_rubros:
+                                        df_processed[cat] = pd.to_numeric(df_processed[cat], errors='coerce').fillna(0.0)
+                                else:
+                                    st.error("❌ Estructura inválida. No se detectó ninguna columna de 'Cuenta'.")
+
+                            elapsed_time = time.time() - start_time
+                            if df_processed is not None:
+                                st.session_state['pl_cached_df_processed'] = df_processed
+                                st.session_state['pl_cached_df_raw'] = df_raw_for_reprocess
+                                st.session_state['pl_last_processed_sig'] = full_sig
+                                st.success(f"✅ Archivo Excel procesado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
                     except Exception as e:
                         st.error(f"❌ Error al procesar el archivo Excel: {e}")
 
@@ -851,20 +807,52 @@ def render(empresa_seleccionada, empresa_path):
                                 del st.session_state['pl_edit_df']
                             if 'pl_edit_file_id' in st.session_state:
                                 del st.session_state['pl_edit_file_id']
+                            if 'pl_cubo_audit_warnings' in st.session_state:
+                                del st.session_state['pl_cubo_audit_warnings']
                             st.rerun()
 
                     st.markdown("### 📝 Vista Previa y Edición del P&L")
                     st.caption("Puedes modificar los montos directamente haciendo doble clic en cualquier celda o agregar nuevas filas.")
                     render_balance_vs_pl_validation_card(empresa_seleccionada, periodo_str_pl)
 
+                    # Mostrar advertencias de auditoría de clasificación si existen
+                    audit_warn_df = st.session_state.get('pl_cubo_audit_warnings')
+                    if audit_warn_df is not None and not audit_warn_df.empty:
+                        st.warning(
+                            f"⚠️ **Observaciones de Auditoría en Cubo Odoo ({len(audit_warn_df)} transacciones detectadas):** "
+                            f"Se encontraron filas con la columna de clasificación vacía o no reconocida. "
+                            f"El sistema las asignó automáticamente según las reglas de contingencia / diccionario."
+                        )
+                        with st.expander(f"🔍 Ver detalle de las {len(audit_warn_df)} transacciones asignadas automáticamente", expanded=False):
+                            st.dataframe(
+                                audit_warn_df,
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                            import io
+                            audit_buf = io.BytesIO()
+                            with pd.ExcelWriter(audit_buf, engine='openpyxl') as writer:
+                                audit_warn_df.to_excel(writer, index=False, sheet_name='Advertencias_Clasificacion')
+                            st.download_button(
+                                label="📥 Descargar Reporte de Advertencias (Excel)",
+                                data=audit_buf.getvalue(),
+                                file_name=f"advertencias_clasificacion_cubo_{periodo_str_pl}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"btn_download_audit_{periodo_str_pl}"
+                            )
+
                     cuenta_col = next((c for c in st.session_state['pl_edit_df'].columns if "cuenta" in str(c).lower() and "nombre" not in str(c).lower()), "N° de cuenta")
                     desc_col = next((c for c in st.session_state['pl_edit_df'].columns if "nombre" in str(c).lower()), "Nombre de la cuenta")
                     numeric_cols = [c for c in st.session_state['pl_edit_df'].columns if c not in [cuenta_col, desc_col]]
 
-                    # Preparar DF formateado
+                    # Preparar DF formateado de manera optimizada
                     df_to_edit = st.session_state['pl_edit_df'].copy()
                     for col in numeric_cols:
-                        df_to_edit[col] = df_to_edit[col].apply(lambda x: f"{int(round(parse_numeric_cell(x))):,}".replace(",", "."))
+                        series = df_to_edit[col]
+                        first_val = series.dropna().iloc[0] if not series.dropna().empty else None
+                        if isinstance(first_val, str) and ('.' in first_val or first_val in ['0', '-']):
+                            continue
+                        df_to_edit[col] = series.apply(parse_numeric_cell).map(lambda x: f"{int(round(x)):,}".replace(",", "."))
 
                     # -------------------------------------------------------------
                     # AUDITORÍA Y VALIDACIONES
@@ -978,7 +966,8 @@ def render(empresa_seleccionada, empresa_path):
                                     # Si hay un archivo cargado, re-procesar automáticamente con el nuevo mapeo
                                     if df_raw_for_reprocess is not None:
                                         from src.core.pl_cubo_processor import process_odoo_cubo
-                                        df_reprocessed = process_odoo_cubo(df_raw_for_reprocess, upload_year_pl, upload_month_pl, df_map_to_update, standard_categories=pl_rubros)
+                                        df_reprocessed, df_audit = process_odoo_cubo(df_raw_for_reprocess, upload_year_pl, upload_month_pl, df_map_to_update, standard_categories=pl_rubros, return_audit_log=True)
+                                        st.session_state['pl_cubo_audit_warnings'] = df_audit
                                         st.session_state['pl_edit_df'] = add_totals_row(df_reprocessed)
                                         # Guardar de inmediato en BD
                                         PlCuboDB.save_pl_cubo(empresa_seleccionada, periodo_str_pl, df_reprocessed)

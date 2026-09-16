@@ -160,15 +160,29 @@ def get_group_companies(grupo_name: str):
     """
     Obtiene la lista de nombres de empresas filiales y matriz pertenecientes a un grupo.
     """
+    _, comps, _, _ = get_group_info(grupo_name)
+    return comps
+
+
+def get_group_info(grupo_name: str):
+    """
+    Obtiene id de grupo, empresas matriz/filial y lista plana de compañías del grupo.
+    """
     from src.models.database import SessionLocal
     from src.models.consolidacion import ConsolidationGroup
     
-    clean_group = grupo_name.replace("[GRUPO] ", "").strip()
+    clean_group = str(grupo_name).replace("[GRUPO] ", "").strip()
     db = SessionLocal()
+    grupo_id = None
+    empresa_matriz = ""
+    empresa_filial = ""
     companies = []
     try:
         grupo_obj = db.query(ConsolidationGroup).filter_by(nombre_grupo=clean_group).first()
         if grupo_obj:
+            grupo_id = grupo_obj.id
+            empresa_matriz = grupo_obj.empresa_matriz
+            empresa_filial = grupo_obj.empresa_filial
             companies.append(grupo_obj.empresa_matriz)
             if grupo_obj.filial_is_group:
                 def get_sub_companies(sub_g_id):
@@ -186,22 +200,125 @@ def get_group_companies(grupo_name: str):
                 companies.append(grupo_obj.empresa_filial)
     finally:
         db.close()
-    return sorted(list(dict.fromkeys(companies)))
+    return grupo_id, sorted(list(dict.fromkeys(companies))), empresa_matriz, empresa_filial
+
+
+def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, report_type: str = "BALANCE"):
+    """
+    Calcula los montos netos de ajustes de consolidación por mes YTD (desde Enero hasta periodo)
+    para cada cuenta contable (incluyendo cuentas 9999xxx y cuentas operativas).
+    Retorna (ytd_months, month_cols, adjustments_by_account, acc_map).
+    """
+    from collections import defaultdict
+    from sqlalchemy import or_
+    from src.models.database import SessionLocal
+    from src.models.consolidacion import ConsolidationJournalEntry
+    from src.core.consolidacion_account_mapper import load_consolidation_account_map, find_account_by_rubro_nota
+    from src.core.consolidacion_engine import resolver_montos_asiento, is_pl_account
+    from src.core.excel_utils import format_periodo
+    
+    acc_map = load_consolidation_account_map(empresa_ref)
+    
+    try:
+        parts = str(periodo).split('-')
+        p_year = parts[0]
+        p_month = int(parts[1])
+        ytd_months = [f"{p_year}-{m:02d}" for m in range(1, p_month + 1)]
+    except Exception:
+        ytd_months = [periodo] if periodo else []
+        
+    month_cols = [f"Ajustes {format_periodo(m)}" for m in ytd_months]
+    adjustments_by_account = defaultdict(lambda: defaultdict(float))
+    
+    if not grupo_id or not ytd_months:
+        return ytd_months, month_cols, adjustments_by_account, acc_map
+        
+    db = SessionLocal()
+    try:
+        for m_idx, m_str in enumerate(ytd_months):
+            col_m = month_cols[m_idx]
+            entries_m = db.query(ConsolidationJournalEntry).filter(
+                ConsolidationJournalEntry.grupo_id == grupo_id,
+                or_(
+                    ConsolidationJournalEntry.periodo == m_str,
+                    (ConsolidationJournalEntry.periodo < m_str) & (ConsolidationJournalEntry.es_recurrente == True)
+                )
+            ).order_by(
+                ConsolidationJournalEntry.asiento_codigo.asc(),
+                ConsolidationJournalEntry.num_linea.asc(),
+                ConsolidationJournalEntry.id.asc()
+            ).all()
+            
+            if not entries_m:
+                continue
+                
+            vouchers_dict = defaultdict(list)
+            for e in entries_m:
+                v_key = (
+                    e.columna_ajuste,
+                    e.glosa,
+                    getattr(e, 'asiento_codigo', None) or f"AST-{m_str}-{e.id}"
+                )
+                vouchers_dict[v_key].append(e)
+                
+            for (col_val, glosa_val, codigo_val), entries_list in vouchers_dict.items():
+                try:
+                    resolved = resolver_montos_asiento(grupo_id, m_str, entries_list, db=db, columna_destino=col_val)
+                except Exception:
+                    resolved = [{
+                        "debe_calculado": e.debe or 0.0,
+                        "haber_calculado": e.haber or 0.0,
+                        "saldo_base": 0.0,
+                        "elimina_saldo_total": e.elimina_saldo_total
+                    } for e in entries_list]
+                    
+                for idx, e in enumerate(entries_list):
+                    res_line = resolved[idx] if idx < len(resolved) else {}
+                    debe_val = float(res_line.get("debe_calculado", e.debe or 0.0))
+                    haber_val = float(res_line.get("haber_calculado", e.haber or 0.0))
+                    neto = debe_val - haber_val
+                    
+                    cuenta_cod = getattr(e, "cuenta_codigo", None)
+                    if not cuenta_cod:
+                        cuenta_cod = find_account_by_rubro_nota(
+                            e.linea_item,
+                            getattr(e, "linea_nota", None),
+                            empresa=empresa_ref
+                        )
+                    if not cuenta_cod:
+                        continue
+                    cuenta_cod = str(cuenta_cod).strip()
+                    
+                    acc_info = acc_map.get(cuenta_cod)
+                    is_pl = (acc_info.get("tipo") == "P&L") if acc_info else is_pl_account(e.linea_item)
+                    
+                    if report_type == "BALANCE" and is_pl:
+                        continue
+                    if report_type == "PL" and not is_pl:
+                        continue
+                        
+                    adjustments_by_account[cuenta_cod][col_m] += neto
+    finally:
+        db.close()
+        
+    return ytd_months, month_cols, adjustments_by_account, acc_map
 
 
 def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance_df: pd.DataFrame = None) -> pd.DataFrame:
     """
     Construye la sábana de auditoría consolidada para el Balance General.
-    Muestra cada filial en una columna independiente junto al total consolidado.
+    Muestra cada filial en una columna independiente, los ajustes mensuales YTD,
+    la columna de Total Ajustes Consolidación, el Total Consolidado y sus clasificaciones.
     """
     from src.models.trial_balance_db import TrialBalanceDB
     
-    companies = get_group_companies(grupo_name)
+    grupo_id, companies, empresa_matriz, empresa_filial = get_group_info(grupo_name)
     if not companies:
         return pd.DataFrame()
         
     all_accounts = {}
     
+    # 1. Cargar saldos de Trial Balance por empresa
     for co in companies:
         tb_df = TrialBalanceDB.get_trial_balance(co, periodo)
         if tb_df is not None and not tb_df.empty:
@@ -227,6 +344,32 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
                     all_accounts[acct_id]['Nombre de la Cuenta'] = acct_name
                     
                 all_accounts[acct_id][co] = all_accounts[acct_id].get(co, 0.0) + val
+
+    # 2. Calcular ajustes mensuales YTD y cargar cuentas de consolidación (serie 9999xxx)
+    empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
+    ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
+        grupo_id, periodo, empresa_ref, report_type="BALANCE"
+    )
+    
+    # Inyectar cuentas de consolidación de balance serie 9999xxx
+    for cod, info in acc_map.items():
+        if info.get("tipo") == "Balance":
+            if cod not in all_accounts:
+                all_accounts[cod] = {
+                    'N° de Cuenta': cod,
+                    'Nombre de la Cuenta': info.get("nombre_cuenta") or info.get("display_label")
+                }
+
+    # Asignar ajustes mensuales a all_accounts
+    for acct_id, months_dict in adjustments_by_account.items():
+        if acct_id not in all_accounts:
+            acc_info = acc_map.get(acct_id, {})
+            all_accounts[acct_id] = {
+                'N° de Cuenta': acct_id,
+                'Nombre de la Cuenta': acc_info.get("nombre_cuenta") or acc_info.get("display_label") or f"Ajuste {acct_id}"
+            }
+        for col_m, val_m in months_dict.items():
+            all_accounts[acct_id][col_m] = all_accounts[acct_id].get(col_m, 0.0) + val_m
                 
     if not all_accounts:
         return pd.DataFrame()
@@ -239,8 +382,25 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
         else:
             df_res[co] = df_res[co].fillna(0.0)
             
-    df_res['TOTAL CONSOLIDADO'] = df_res[companies].sum(axis=1)
+    for col_m in month_cols:
+        if col_m not in df_res.columns:
+            df_res[col_m] = 0.0
+        else:
+            df_res[col_m] = df_res[col_m].fillna(0.0)
+            
+    if month_cols:
+        df_res['TOTAL AJUSTES'] = df_res[month_cols].sum(axis=1)
+    else:
+        df_res['TOTAL AJUSTES'] = 0.0
+        
+    df_res['TOTAL CONSOLIDADO'] = df_res[companies].sum(axis=1) + df_res['TOTAL AJUSTES']
     
+    # Reordenar columnas principales
+    front_cols = ['N° de Cuenta', 'Nombre de la Cuenta'] + companies + month_cols + ['TOTAL AJUSTES', 'TOTAL CONSOLIDADO']
+    other_cols = [c for c in df_res.columns if c not in front_cols]
+    df_res = df_res[front_cols + other_cols]
+    
+    # 3. Cruzar con Mapeo de Balance
     if map_balance_df is not None and not map_balance_df.empty:
         map_acc_cols = ['N° de Cuenta \n', 'N de Cuenta', 'N° de Cuenta', 'Cuenta', 'cuenta_id']
         map_col = next((c for c in map_balance_df.columns if str(c).strip() in [ac.strip() for ac in map_acc_cols]), map_balance_df.columns[0])
@@ -256,6 +416,7 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
             
     df_res = sort_accounts(df_res, 'N° de Cuenta')
     
+    # 4. Fila de Totales Generales
     totales = {'N° de Cuenta': 'TOTAL', 'Nombre de la Cuenta': 'Total General'}
     for col in df_res.columns:
         if col in ('N° de Cuenta', 'Nombre de la Cuenta'):
@@ -273,17 +434,19 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
 def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.DataFrame = None) -> pd.DataFrame:
     """
     Construye la sábana de auditoría consolidada para el Estado de Resultados / P&L.
-    Muestra cada filial en una columna independiente junto al total consolidado.
+    Muestra cada filial en una columna independiente, los ajustes mensuales YTD,
+    la columna de Total Ajustes Consolidación, el Total Consolidado y sus clasificaciones.
     """
     from src.models.pl_cubo_db import PlCuboDB
     from src.models.trial_balance_db import TrialBalanceDB
     
-    companies = get_group_companies(grupo_name)
+    grupo_id, companies, empresa_matriz, empresa_filial = get_group_info(grupo_name)
     if not companies:
         return pd.DataFrame()
         
     all_accounts = {}
     
+    # 1. Cargar saldos de P&L / Cubo por empresa
     for co in companies:
         pl_df = PlCuboDB.get_pl_cubo(co, periodo)
         if pl_df is not None and not pl_df.empty:
@@ -333,6 +496,32 @@ def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.Da
                         
                     all_accounts[acct_id][co] = all_accounts[acct_id].get(co, 0.0) + val
 
+    # 2. Calcular ajustes mensuales YTD y cargar cuentas de consolidación (serie 9999xxx)
+    empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
+    ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
+        grupo_id, periodo, empresa_ref, report_type="PL"
+    )
+    
+    # Inyectar cuentas de consolidación P&L serie 9999xxx
+    for cod, info in acc_map.items():
+        if info.get("tipo") == "P&L":
+            if cod not in all_accounts:
+                all_accounts[cod] = {
+                    'N° de Cuenta': cod,
+                    'Nombre de la Cuenta': info.get("nombre_cuenta") or info.get("display_label")
+                }
+
+    # Asignar ajustes mensuales a all_accounts
+    for acct_id, months_dict in adjustments_by_account.items():
+        if acct_id not in all_accounts:
+            acc_info = acc_map.get(acct_id, {})
+            all_accounts[acct_id] = {
+                'N° de Cuenta': acct_id,
+                'Nombre de la Cuenta': acc_info.get("nombre_cuenta") or acc_info.get("display_label") or f"Ajuste {acct_id}"
+            }
+        for col_m, val_m in months_dict.items():
+            all_accounts[acct_id][col_m] = all_accounts[acct_id].get(col_m, 0.0) + val_m
+
     if not all_accounts:
         return pd.DataFrame()
         
@@ -344,8 +533,25 @@ def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.Da
         else:
             df_res[co] = df_res[co].fillna(0.0)
             
-    df_res['TOTAL CONSOLIDADO'] = df_res[companies].sum(axis=1)
+    for col_m in month_cols:
+        if col_m not in df_res.columns:
+            df_res[col_m] = 0.0
+        else:
+            df_res[col_m] = df_res[col_m].fillna(0.0)
+            
+    if month_cols:
+        df_res['TOTAL AJUSTES'] = df_res[month_cols].sum(axis=1)
+    else:
+        df_res['TOTAL AJUSTES'] = 0.0
+        
+    df_res['TOTAL CONSOLIDADO'] = df_res[companies].sum(axis=1) + df_res['TOTAL AJUSTES']
     
+    # Reordenar columnas principales
+    front_cols = ['N° de Cuenta', 'Nombre de la Cuenta'] + companies + month_cols + ['TOTAL AJUSTES', 'TOTAL CONSOLIDADO']
+    other_cols = [c for c in df_res.columns if c not in front_cols]
+    df_res = df_res[front_cols + other_cols]
+    
+    # 3. Cruzar con Mapeo de P&L
     if map_pl_df is not None and not map_pl_df.empty:
         map_acc_cols = ['N° de Cuenta \n', 'N de Cuenta', 'N° de Cuenta', 'Cuenta', 'cuenta_id']
         map_col = next((c for c in map_pl_df.columns if str(c).strip() in [ac.strip() for ac in map_acc_cols]), map_pl_df.columns[0])
@@ -361,6 +567,7 @@ def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.Da
             
     df_res = sort_accounts(df_res, 'N° de Cuenta')
     
+    # 4. Fila de Totales Generales
     totales = {'N° de Cuenta': 'TOTAL', 'Nombre de la Cuenta': 'Total General'}
     for col in df_res.columns:
         if col in ('N° de Cuenta', 'Nombre de la Cuenta'):

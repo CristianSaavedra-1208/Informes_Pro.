@@ -124,35 +124,55 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
     Retorna el valor filtrado (corriente vs no corriente y bruto vs depreciación) para el matched_key.
     Si el estado de la fila es corriente o no corriente, se filtran las cuentas
     en el contexto según su Clasificación balance.
+
+    Para notas de P&L, si matched_key coincide con el rubro en sí (y no es un sub-ítem),
+    se suman todos los sub-ítems del rubro (comportamiento de Total).
     """
     if match_type == 'pl':
         pl_ctx = period_ctx.get('pl', {})
-        
+
+        def _sum_rubro(rdata, fkey):
+            """Suma todos los sub-ítems de un rubro para obtener el total."""
+            total = 0.0
+            for sub_val in rdata.values():
+                if isinstance(sub_val, dict):
+                    total += float(sub_val.get(fkey, 0.0))
+            return total
+
         # Si se especificó el rubro exacto de la sección/tabla activa
         if section_rubro and section_rubro in pl_ctx:
             rubro_data = pl_ctx[section_rubro]
             if matched_key in rubro_data:
                 return float(rubro_data[matched_key].get(flow_key, 0.0))
+            # Si la clave buscada ES el rubro mismo, sumar todos los sub-ítems
+            if matched_key == section_rubro:
+                return _sum_rubro(rubro_data, flow_key)
             return 0.0
 
         sheet_title = str(ws.title).strip()
         allowed_rubros = SHEET_TO_PL_RUBROS.get(sheet_title, [])
-        
+
         # Si la pestaña no está en el mapa, buscar en todos los rubros como fallback
         if not allowed_rubros:
-            for rubro_data in pl_ctx.values():
+            for r_key, rubro_data in pl_ctx.items():
                 if matched_key in rubro_data:
                     return float(rubro_data[matched_key].get(flow_key, 0.0))
+                if matched_key == r_key:
+                    return _sum_rubro(rubro_data, flow_key)
             return 0.0
-            
+
         # Buscar en los rubros específicos permitidos para esta pestaña
         for rubro in allowed_rubros:
             rubro_clean = ''.join(c for c in unicodedata.normalize('NFD', rubro.lower()) if unicodedata.category(c) != 'Mn')
             rubro_clean = re.sub(r'\s+', ' ', rubro_clean).strip()
-            
+
             rubro_data = pl_ctx.get(rubro_clean)
-            if rubro_data and matched_key in rubro_data:
-                return float(rubro_data[matched_key].get(flow_key, 0.0))
+            if rubro_data:
+                if matched_key in rubro_data:
+                    return float(rubro_data[matched_key].get(flow_key, 0.0))
+                # Si la clave buscada ES el rubro mismo, sumar todos los sub-ítems
+                if matched_key == rubro_clean:
+                    return _sum_rubro(rubro_data, flow_key)
         return 0.0
 
     group_data = period_ctx.get(match_type, {}).get(matched_key)
@@ -338,10 +358,18 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
 
     # Mapeo de P&L
     # Columnas a excluir del mapeo de notas en map_pl
+    # Se excluyen columnas de identificación de cuenta (código y nombre) así como clasificaciones
+    # que no son rubros de P&L, para que no aparezcan como claves espurias en el contexto.
     _PL_EXCLUDE_COLS = {
         'Cuenta', 'Detalle', 'Clasificación Flujo Efectivo', 'Clasificacion',
-        'Clasificaci\u00f3n Flujo Efectivo'
+        'Clasificación Flujo Efectivo', 'Clasificaci\u00f3n Flujo Efectivo'
     }
+    # Palabras clave que identifican columnas de ID/nombre de cuenta (se excluyen automáticamente)
+    _PL_EXCLUDE_KEYWORDS = [
+        'n° de cuenta', 'n de cuenta', 'numero de cuenta', 'cod cuenta', 'codigo cuenta',
+        'nombre de la cuenta', 'nombre cuenta', 'nombre_cuenta',
+        'clasificacion flujo', 'flujo efectivo', 'clasificacion',
+    ]
     if map_pl_df is not None and not map_pl_df.empty:
         from src.models.pl_cubo_db import PlCuboDB
         from src.core.sabana_builder import build_pl_sabana
@@ -428,7 +456,15 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
                     split_accounts.add(acc_id)
 
             for col in map_pl_df.columns:
+                col_lower_norm = ''.join(
+                    c for c in unicodedata.normalize('NFD', col.replace('\xa0', ' ').strip().lower())
+                    if unicodedata.category(c) != 'Mn'
+                )
+                col_lower_norm = re.sub(r'\s+', ' ', col_lower_norm)
                 if col in _PL_EXCLUDE_COLS or col.lower().startswith('unnamed'):
+                    continue
+                # Excluir columnas de código/nombre de cuenta y clasificaciones no-P&L
+                if any(kw in col_lower_norm for kw in _PL_EXCLUDE_KEYWORDS):
                     continue
                 
                 col_san = col.replace("\xa0", " ").strip().lower()
@@ -801,25 +837,6 @@ class NoteGenerator:
                     elif re.search(r'\bactual\b', val_lower):
                         col_period_type = 'actual'
                         
-                # Fallback: si no se encontró año en la columna pero es columna de datos, buscar año en columnas adyacentes del mismo bloque
-                if col_year is None:
-                    for c_adj in [c + 1, c + 2, c - 1, c - 2]:
-                        if 1 <= c_adj <= ws.max_column:
-                            for r_adj in range(1, 13):
-                                val_adj = get_merged_cell_value(ws, r_adj, c_adj)
-                                if val_adj is not None:
-                                    if isinstance(val_adj, (_dt.datetime, _dt.date)):
-                                        col_year = val_adj.year
-                                        col_period_type = 'actual' if col_year >= 2026 else 'comp'
-                                        break
-                                    else:
-                                        match_adj = re.search(r'(202\d)', str(val_adj))
-                                        if match_adj:
-                                            col_year = int(match_adj.group(1))
-                                            col_period_type = 'actual' if col_year >= 2026 else 'comp'
-                                            break
-                            if col_year is not None:
-                                break
                 # --- Validar si es columna descriptiva de texto (no de datos) ---
                 # Si en las cabeceras hay palabras como 'detalle', 'nombre', 'concepto', etc., no es columna de datos.
                 is_label_col = False
@@ -1021,10 +1038,14 @@ class NoteGenerator:
             # Conjunto de palabras clave que identifican cabeceras o filas no-datos
             HEADER_KEYWORDS = {
                 'detalle', 'm$', '$', '%', 'neto', 'bruto', 
-                'concepto', 'nombre', 'total', 'validacion', 'cuadro', 'fecha', 'actual', 
+                'concepto', 'nombre', 'validacion', 'cuadro', 'fecha', 'actual', 
                 'comparativa', 'unidades', 'codigo', 'cuenta', 'nombre cuenta', 'detalle de'
             }
+            # En notas de resultados (P&L), 'total' puede ser una fila de datos válida
+            # (e.g., 'Total gastos de administración'), por lo que NO se excluye.
+            # En notas de Balance, sí se excluye para no procesar totales como ítems.
             if not is_results_note:
+                HEADER_KEYWORDS.add('total')
                 HEADER_KEYWORDS.add('amortizacion')
                 HEADER_KEYWORDS.add('depreciacion')
             
@@ -1186,32 +1207,45 @@ class NoteGenerator:
                         # 2.1 Búsqueda exacta
                         if is_results_note:
                             section_rubro = detect_row_section_rubro(ws, row)
+                            # Obtener rubros permitidos para esta hoja
+                            sheet_title = str(ws.title).strip()
+                            allowed_rubros_for_sheet = SHEET_TO_PL_RUBROS.get(sheet_title, [])
+
                             if section_rubro:
                                 rubro_data = sample_context.get('pl', {}).get(section_rubro, {})
                                 if cell_clean in rubro_data:
                                     matched_key = cell_clean
                                     match_type = 'pl'
                                     matched_rubro = section_rubro
-                            else:
-                                sheet_title = str(ws.title).strip()
-                                allowed_rubros = SHEET_TO_PL_RUBROS.get(sheet_title, [])
-                                if not allowed_rubros:
-                                    for rubro, rubro_data in sample_context.get('pl', {}).items():
-                                        if cell_clean in rubro_data:
-                                            matched_key = cell_clean
-                                            match_type = 'pl'
-                                            matched_rubro = rubro
-                                            break
-                                else:
-                                    for rubro in allowed_rubros:
-                                        rubro_clean = ''.join(c for c in unicodedata.normalize('NFD', rubro.lower()) if unicodedata.category(c) != 'Mn')
-                                        rubro_clean = re.sub(r'\s+', ' ', rubro_clean).strip()
-                                        rubro_data = sample_context.get('pl', {}).get(rubro_clean, {})
-                                        if cell_clean in rubro_data:
-                                            matched_key = cell_clean
-                                            match_type = 'pl'
-                                            matched_rubro = rubro_clean
-                                            break
+                                # NUEVO: Si la clave ES el rubro mismo (fila de Total del rubro)
+                                elif cell_clean == section_rubro or cell_clean in section_rubro or section_rubro in cell_clean:
+                                    matched_key = section_rubro
+                                    match_type = 'pl'
+                                    matched_rubro = section_rubro
+                            
+                            if matched_key is None:
+                                rubros_to_search = allowed_rubros_for_sheet if allowed_rubros_for_sheet else list(sample_context.get('pl', {}).keys())
+                                for rubro in rubros_to_search:
+                                    rubro_clean = ''.join(c for c in unicodedata.normalize('NFD', rubro.lower()) if unicodedata.category(c) != 'Mn')
+                                    rubro_clean = re.sub(r'\s+', ' ', rubro_clean).strip()
+                                    rubro_data = sample_context.get('pl', {}).get(rubro_clean, {})
+                                    if cell_clean in rubro_data:
+                                        matched_key = cell_clean
+                                        match_type = 'pl'
+                                        matched_rubro = rubro_clean
+                                        break
+                                    # NUEVO: Si la etiqueta de la fila coincide con el nombre del rubro
+                                    # (fila de total de ese rubro), sumar todo el rubro
+                                    if rubro_clean and (cell_clean == rubro_clean
+                                            or cell_clean in rubro_clean
+                                            or rubro_clean in cell_clean
+                                            or 'total ' + rubro_clean in cell_clean
+                                            or cell_clean.replace('total ', '') == rubro_clean):
+                                        matched_key = rubro_clean
+                                        match_type = 'pl'
+                                        matched_rubro = rubro_clean
+                                        break
+
                             LABEL_ALIASES = {
                                 'bodega central (*)': 'mercaderias',
                                 'bodega central': 'mercaderias',
@@ -1222,35 +1256,16 @@ class NoteGenerator:
                                 'licencias': 'licencias',
                                 'derecho de uso (1)': 'derecho de uso (1)',
                             }
-                            if cell_clean in sample_context.get('nota1', {}):
-                                matched_key = cell_clean
-                                match_type = 'nota1'
-                            elif cell_clean in LABEL_ALIASES and LABEL_ALIASES[cell_clean] in sample_context.get('nota1', {}):
-                                matched_key = LABEL_ALIASES[cell_clean]
-                                match_type = 'nota1'
-                            elif cell_clean in sample_context.get('nota2', {}):
-                                matched_key = cell_clean
-                                match_type = 'nota2'
-                            else:
-                                sheet_title = str(ws.title).strip()
-                                allowed_rubros = SHEET_TO_PL_RUBROS.get(sheet_title, [])
-                                if not allowed_rubros:
-                                    for rubro, rubro_data in sample_context.get('pl', {}).items():
-                                        if cell_clean in rubro_data:
-                                            matched_key = cell_clean
-                                            match_type = 'pl'
-                                            matched_rubro = rubro
-                                            break
-                                else:
-                                    for rubro in allowed_rubros:
-                                        rubro_clean = ''.join(c for c in unicodedata.normalize('NFD', rubro.lower()) if unicodedata.category(c) != 'Mn')
-                                        rubro_clean = re.sub(r'\s+', ' ', rubro_clean).strip()
-                                        rubro_data = sample_context.get('pl', {}).get(rubro_clean, {})
-                                        if cell_clean in rubro_data:
-                                            matched_key = cell_clean
-                                            match_type = 'pl'
-                                            matched_rubro = rubro_clean
-                                            break
+                            if matched_key is None:
+                                if cell_clean in sample_context.get('nota1', {}):
+                                    matched_key = cell_clean
+                                    match_type = 'nota1'
+                                elif cell_clean in LABEL_ALIASES and LABEL_ALIASES[cell_clean] in sample_context.get('nota1', {}):
+                                    matched_key = LABEL_ALIASES[cell_clean]
+                                    match_type = 'nota1'
+                                elif cell_clean in sample_context.get('nota2', {}):
+                                    matched_key = cell_clean
+                                    match_type = 'nota2'
                         
                         # 2.2 Búsqueda tolerante por prefijo/sufijo para cortes menores (máx 5 de diferencia)
                         if matched_key is None:

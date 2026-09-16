@@ -3,6 +3,12 @@ import pandas as pd
 import os
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 from src.reporting.adjustments_export import generate_adjustments_excel, get_adjustments_dataset
+from src.core.consolidacion_account_mapper import (
+    get_consolidation_accounts_list,
+    get_account_info,
+    find_account_by_rubro_nota,
+    load_consolidation_account_map
+)
 
 def get_all_note_options(rubro_name: str) -> list:
     """
@@ -213,10 +219,33 @@ def render(empresa_seleccionada, empresa_path):
             if 'temp_asiento_lineas' not in st.session_state:
                 st.session_state['temp_asiento_lineas'] = []
 
+            def _get_empresa_mapeo(grupo_id):
+                db_g = SessionLocal()
+                try:
+                    g = db_g.query(ConsolidationGroup).filter_by(id=grupo_id).first()
+                    if g:
+                        return g.empresa_filial if not g.filial_is_group else g.empresa_matriz
+                    return "Pacifico Cable SpA"
+                finally:
+                    db_g.close()
+
             def cb_agregar_linea():
-                rubro_val = st.session_state.get("asiento_rubro")
-                nota_sel = st.session_state.get("asiento_linea_nota")
-                nota_val = None if (not nota_sel or str(nota_sel).startswith("--")) else str(nota_sel).strip()
+                cuenta_cod = st.session_state.get("asiento_cuenta_codigo")
+                if cuenta_cod:
+                    emp_map = _get_empresa_mapeo(sel_grupo)
+                    acc_info = get_account_info(cuenta_cod, emp_map)
+                    if acc_info:
+                        rubro_val = acc_info["linea_item"]
+                        nota_val = acc_info.get("linea_nota")
+                    else:
+                        rubro_val = st.session_state.get("asiento_rubro")
+                        nota_sel = st.session_state.get("asiento_linea_nota")
+                        nota_val = None if (not nota_sel or str(nota_sel).startswith("--")) else str(nota_sel).strip()
+                else:
+                    rubro_val = st.session_state.get("asiento_rubro")
+                    nota_sel = st.session_state.get("asiento_linea_nota")
+                    nota_val = None if (not nota_sel or str(nota_sel).startswith("--")) else str(nota_sel).strip()
+
                 debe_val = st.session_state.get("asiento_debe", 0.0)
                 haber_val = st.session_state.get("asiento_haber", 0.0)
                 elimina_saldo_val = st.session_state.get("asiento_elimina_saldo", False)
@@ -227,7 +256,9 @@ def render(empresa_seleccionada, empresa_path):
                     st.session_state["asiento_msg_success"] = None
                 else:
                     lbl_nota = f" [Nota: {nota_val}]" if nota_val else ""
+                    lbl_cod = f"[{cuenta_cod}] " if cuenta_cod else ""
                     st.session_state['temp_asiento_lineas'].append({
+                        "cuenta_codigo": cuenta_cod,
                         "linea_item": rubro_val,
                         "linea_nota": nota_val,
                         "debe": 0.0 if elimina_saldo_val else debe_val,
@@ -238,7 +269,7 @@ def render(empresa_seleccionada, empresa_path):
                     st.session_state['asiento_haber'] = 0.0
                     st.session_state['asiento_elimina_saldo'] = False
                     st.session_state["asiento_msg_error"] = None
-                    st.session_state["asiento_msg_success"] = f"✔️ Línea agregada: {rubro_val}{lbl_nota} (Debe: {debe_val:,.0f} | Haber: {haber_val:,.0f})"
+                    st.session_state["asiento_msg_success"] = f"✔️ Línea agregada: {lbl_cod}{rubro_val}{lbl_nota} (Debe: {debe_val:,.0f} | Haber: {haber_val:,.0f})"
                     st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_limpiar_borrador():
@@ -249,6 +280,7 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_elimina_saldo'] = False
                 st.session_state['asiento_es_rec'] = False
                 st.session_state["asiento_msg_error"] = None
+                st.session_state["asiento_msg_warning"] = None
                 st.session_state["asiento_msg_success"] = "Borrador/Edición cancelada."
                 st.session_state['asiento_editando_original_key'] = None
                 st.session_state['sel_comprobante_activo'] = "-- Selecciona un comprobante --"
@@ -330,6 +362,7 @@ def render(empresa_seleccionada, empresa_path):
                             columna_ajuste=col_ajuste,
                             linea_item=l["linea_item"],
                             linea_nota=l.get("linea_nota"),
+                            cuenta_codigo=l.get("cuenta_codigo"),
                             debe=l["debe"],
                             haber=l["haber"],
                             es_recurrente=es_rec_val,
@@ -353,6 +386,7 @@ def render(empresa_seleccionada, empresa_path):
                             del st.session_state[k_ctx]
 
                     st.session_state["asiento_msg_error"] = None
+                    st.session_state["asiento_msg_warning"] = None
                     st.session_state['temp_asiento_lineas'] = []
                     st.session_state['asiento_glosa'] = ""
                     st.session_state['asiento_debe'] = 0.0
@@ -377,6 +411,7 @@ def render(empresa_seleccionada, empresa_path):
 
                 st.session_state['temp_asiento_lineas'] = [
                     {
+                        "cuenta_codigo": getattr(l, 'cuenta_codigo', None),
                         "linea_item": l.linea_item,
                         "linea_nota": getattr(l, 'linea_nota', None),
                         "debe": float(l.debe or 0.0),
@@ -393,11 +428,20 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_msg_success'] = f"✏️ Asiento '{glosa}' cargado en el formulario de arriba para editar. Modifica lo que necesites y haz clic en 'Guardar Cambios del Asiento'."
                 st.session_state['edit_msg_success'] = f"✏️ **Asiento cargado para editar**: Desplázate hacia arriba 👆 al formulario superior ('Editar Asiento Contable') para modificar los números."
                 st.session_state['asiento_msg_error'] = None
+                
+                # Advertencia para líneas históricas sin cuenta_codigo
+                sin_cuenta = [l.linea_item for l in lines if not getattr(l, 'cuenta_codigo', None)]
+                if sin_cuenta:
+                    st.session_state['asiento_msg_warning'] = f"⚠️ Este comprobante contiene {len(sin_cuenta)} línea(s) histórica(s) sin cuenta contable 9999xxx asignada. Al editarlo o agregar líneas, puedes reasignarles su cuenta contable correspondiente."
+                else:
+                    st.session_state['asiento_msg_warning'] = None
+
                 st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_copiar_asiento(periodo, columna, glosa, es_rec, lines):
                 st.session_state['temp_asiento_lineas'] = [
                     {
+                        "cuenta_codigo": getattr(l, 'cuenta_codigo', None),
                         "linea_item": l.linea_item,
                         "linea_nota": getattr(l, 'linea_nota', None),
                         "debe": float(l.debe or 0.0),
@@ -412,6 +456,13 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_msg_success'] = f"📋 Estructura de '{glosa}' copiada al borrador superior. Selecciona el período destino abierto, modifica los montos y haz clic en 'Guardar Asiento Completo'."
                 st.session_state['edit_msg_success'] = f"📋 **Estructura copiada**: Desplázate hacia arriba 👆 al formulario superior ('Nuevo Asiento Contable') para cambiar el período/montos y guardar."
                 st.session_state['asiento_msg_error'] = None
+                
+                sin_cuenta = [l.linea_item for l in lines if not getattr(l, 'cuenta_codigo', None)]
+                if sin_cuenta:
+                    st.session_state['asiento_msg_warning'] = f"⚠️ La estructura copiada contiene {len(sin_cuenta)} línea(s) sin código 9999xxx asignado."
+                else:
+                    st.session_state['asiento_msg_warning'] = None
+
                 st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_eliminar_asiento(periodo, columna, glosa):
@@ -456,6 +507,8 @@ def render(empresa_seleccionada, empresa_path):
                 # Display validation messages from callback actions
                 if st.session_state.get("asiento_msg_error"):
                     st.error(st.session_state["asiento_msg_error"])
+                if st.session_state.get("asiento_msg_warning"):
+                    st.warning(st.session_state["asiento_msg_warning"])
                 if st.session_state.get("asiento_msg_success"):
                     st.success(st.session_state["asiento_msg_success"])
 
@@ -481,60 +534,35 @@ def render(empresa_seleccionada, empresa_path):
                 col_ajuste = col_c.selectbox("Columna Destino en Hoja de Trabajo", columnas_destino, key="asiento_col_ajuste")
                 glosa = st.text_input("Glosa Explicativa del Ajuste (Detalle)", key="asiento_glosa")
                 
-                # Fetch line items for the Rubro selector from the group's taxonomy and history
-                lineas = []
-                try:
-                    db = SessionLocal()
-                    from src.models.taxonomy_master import TaxonomyMasterRecord
-                    grupo_obj = db.query(ConsolidationGroup).filter_by(id=sel_grupo).first()
-                    if grupo_obj:
-                        entidades_grupo = [grupo_obj.empresa_matriz]
-                        if grupo_obj.filial_is_group:
-                            def get_subgroup_companies(sub_g_id):
-                                comps = []
-                                sub_g = db.query(ConsolidationGroup).filter_by(id=sub_g_id).first()
-                                if sub_g:
-                                    comps.append(sub_g.empresa_matriz)
-                                    if sub_g.filial_is_group:
-                                        comps.extend(get_subgroup_companies(int(sub_g.empresa_filial)))
-                                    else:
-                                        comps.append(sub_g.empresa_filial)
-                                return comps
-                            entidades_grupo.extend(get_subgroup_companies(int(grupo_obj.empresa_filial)))
-                        else:
-                            entidades_grupo.append(grupo_obj.empresa_filial)
-                            
-                        # Query unique line names from taxonomy and history of these companies
-                        tax_items = db.query(TaxonomyMasterRecord.nombre_linea_es).filter(
-                            TaxonomyMasterRecord.empresa.in_(entidades_grupo),
-                            TaxonomyMasterRecord.reporte_destino.in_(['Balance', 'P&L'])
-                        ).distinct().all()
-                        
-                        hist_items = db.query(HistoricalDataRecord.linea_item).filter(
-                            HistoricalDataRecord.empresa.in_(entidades_grupo)
-                        ).distinct().all()
-                        
-                        lineas_set = set(r[0] for r in tax_items).union(set(r[0] for r in hist_items))
-                        lineas_set.add("Ganancias (Pérdida) del Ejercicio")
-                        lineas = sorted(list(lineas_set))
-                    else:
-                        tax_recs = db.query(HistoricalDataRecord.linea_item).filter_by(empresa=empresa_seleccionada).distinct().all()
-                        lineas_set = set(r[0] for r in tax_recs)
-                        lineas_set.add("Ganancias (Pérdida) del Ejercicio")
-                        lineas = sorted(list(lineas_set))
-                except Exception as e:
-                    st.error(f"Error cargando rubros: {e}")
-                finally:
-                    db.close()
-                if not lineas: lineas = ["Activos", "Pasivos", "Patrimonio", "Ingresos", "Gastos"]
-                
-                col_r1, col_r2 = st.columns(2)
-                with col_r1:
-                    rubro = st.selectbox("Rubro (Línea de Balance/P&L) a afectar", lineas, key="asiento_rubro")
-                
-                opciones_nota = get_all_note_options(rubro)
-                with col_r2:
-                    st.selectbox("Detalle / Nota Afectada (Opcional)", opciones_nota, key="asiento_linea_nota")
+                # Cargar cuentas de consolidación (serie 9999xxx)
+                empresa_mapeo = _get_empresa_mapeo(sel_grupo)
+                cuentas_list = get_consolidation_accounts_list(empresa_mapeo)
+                cuentas_dict = {c["codigo"]: c for c in cuentas_list}
+                cuentas_codigos = [c["codigo"] for c in cuentas_list]
+
+                if not cuentas_codigos:
+                    st.warning(f"⚠️ No se encontraron cuentas contables de consolidación (serie 9999xxx) para la empresa '{empresa_mapeo}'.")
+                    col_r1, col_r2 = st.columns(2)
+                    with col_r1:
+                        rubro = st.selectbox("Rubro (Línea de Balance/P&L) a afectar", ["Activos", "Pasivos", "Patrimonio", "Ingresos", "Gastos"], key="asiento_rubro")
+                    opciones_nota = get_all_note_options(rubro)
+                    with col_r2:
+                        st.selectbox("Detalle / Nota Afectada (Opcional)", opciones_nota, key="asiento_linea_nota")
+                else:
+                    cuenta_sel_codigo = st.selectbox(
+                        "Cuenta Contable de Consolidación (Serie 9999xxx)",
+                        options=cuentas_codigos,
+                        format_func=lambda cod: cuentas_dict[cod]["display_label"],
+                        key="asiento_cuenta_codigo"
+                    )
+                    
+                    info_cuenta = cuentas_dict.get(cuenta_sel_codigo, {})
+                    rubro_derivado = info_cuenta.get("linea_item", "")
+                    nota_derivada = info_cuenta.get("linea_nota")
+                    tipo_derivado = info_cuenta.get("tipo", "")
+                    
+                    lbl_nota_info = f" • **Nota:** `{nota_derivada}`" if nota_derivada else " • **Nota:** *Sin Desglose*"
+                    st.info(f"📌 **Mapeo Automático:** EEFF: `{tipo_derivado}` • **Rubro:** `{rubro_derivado}`{lbl_nota_info}")
 
                 col_d, col_h = st.columns(2)
                 elimina_saldo = st.checkbox("🔮 Eliminar saldo total automáticamente (Dinámico - calcula la reversa según balance mensual)", key="asiento_elimina_saldo", on_change=cb_toggle_dinamico_todas)
@@ -550,7 +578,7 @@ def render(empresa_seleccionada, empresa_path):
                 if st.session_state['temp_asiento_lineas']:
                     st.divider()
                     st.write("📋 **Borrador de Asiento Actual (Editable)**")
-                    st.caption("💡 Puedes hacer doble clic en cualquier celda para corregir los montos o cambiar de rubro antes de guardar. También puedes seleccionar filas y presionar 'Supr' (Delete) para eliminarlas.")
+                    st.caption("💡 Puedes hacer doble clic en cualquier celda para corregir los montos antes de guardar. También puedes seleccionar filas y presionar 'Supr' (Delete) para eliminarlas.")
                     
                     # Calcular saldos y ajustes resueltos en tiempo real para el borrador
                     from src.core.consolidacion_engine import resolver_montos_asiento
@@ -567,6 +595,7 @@ def render(empresa_seleccionada, empresa_path):
                         } for l in st.session_state['temp_asiento_lineas']]
                     
                     df_draft_raw = pd.DataFrame([{
+                        "N° Cuenta": l.get("cuenta_codigo") or "— (Histórico)",
                         "Rubro": l["linea_item"],
                         "Nota Afectada": l.get("linea_nota") or "Sin Detalle",
                         "Saldo Base": f"{int(round(resolved_draft[i]['saldo_base'])):,}".replace(",", "."),
@@ -585,15 +614,22 @@ def render(empresa_seleccionada, empresa_path):
                         df_draft_raw,
                         key=draft_editor_key,
                         num_rows="dynamic",
-                        disabled=["Saldo Base", "Debe (Ajuste Real)", "Haber (Ajuste Real)"],
+                        disabled=["N° Cuenta", "Rubro", "Nota Afectada", "Saldo Base", "Debe (Ajuste Real)", "Haber (Ajuste Real)"],
                         use_container_width=True,
                         column_config={
-                            "Rubro": st.column_config.SelectboxColumn(
+                            "N° Cuenta": st.column_config.TextColumn(
+                                "N° Cuenta",
+                                help="Código de cuenta de consolidación (9999xxx)",
+                                width="small"
+                            ),
+                            "Rubro": st.column_config.TextColumn(
                                 "Rubro",
-                                help="Rubro a afectar",
-                                width="medium",
-                                options=lineas,
-                                required=True
+                                help="Rubro afectado",
+                                width="medium"
+                            ),
+                            "Nota Afectada": st.column_config.TextColumn(
+                                "Nota Afectada",
+                                width="medium"
                             ),
                             "Saldo Base": st.column_config.TextColumn(
                                 "Saldo Base"
@@ -620,14 +656,16 @@ def render(empresa_seleccionada, empresa_path):
                     
                     # Actualizar st.session_state con las líneas editadas en tiempo real
                     new_lines = []
-                    for _, row in edited_draft_df.iterrows():
+                    for idx_row, row in edited_draft_df.iterrows():
                         rubro_val = str(row.get("Rubro", "")).strip()
                         nota_raw  = str(row.get("Nota Afectada", "")).strip()
                         nota_val  = None if (not nota_raw or nota_raw in ("Sin Detalle", "-- Sin Detalle / General --", "")) else nota_raw
+                        orig_cta = st.session_state['temp_asiento_lineas'][idx_row].get("cuenta_codigo") if idx_row < len(st.session_state['temp_asiento_lineas']) else None
                         if rubro_val:
                             debe_str = str(row.get("Debe (Manual)", "0")).replace(".", "").replace(",", "")
                             haber_str = str(row.get("Haber (Manual)", "0")).replace(".", "").replace(",", "")
                             new_lines.append({
+                                "cuenta_codigo": orig_cta,
                                 "linea_item": rubro_val,
                                 "linea_nota": nota_val,
                                 "debe": float(pd.to_numeric(debe_str, errors='coerce') or 0.0),
@@ -915,6 +953,7 @@ def render(empresa_seleccionada, empresa_path):
                                         resolved_preview = resolver_montos_asiento(sel_grupo, chosen.periodo, lineas_comp, columna_destino=chosen.columna_ajuste)
                                         df_preview = pd.DataFrame([{
                                             "Línea #": getattr(l, 'num_linea', i + 1),
+                                            "N° Cuenta": getattr(l, 'cuenta_codigo', None) or "— (Histórico)",
                                             "Código Folio": getattr(l, 'asiento_codigo', 'N/A') or "N/A",
                                             "Rubro": l.linea_item,
                                             "Nota Afectada": getattr(l, 'linea_nota', None) or "Sin Detalle",
@@ -926,6 +965,7 @@ def render(empresa_seleccionada, empresa_path):
                                     except Exception as e:
                                         df_preview = pd.DataFrame([{
                                             "Línea #": getattr(a, 'num_linea', i + 1),
+                                            "N° Cuenta": getattr(a, 'cuenta_codigo', None) or "— (Histórico)",
                                             "Código Folio": getattr(a, 'asiento_codigo', 'N/A') or "N/A",
                                             "Rubro": a.linea_item,
                                             "Nota Afectada": getattr(a, 'linea_nota', None) or "Sin Detalle",
@@ -940,8 +980,10 @@ def render(empresa_seleccionada, empresa_path):
                                         use_container_width=True,
                                         column_config={
                                             "Línea #": st.column_config.NumberColumn("Línea #", format="%d"),
+                                            "N° Cuenta": st.column_config.TextColumn("N° Cuenta"),
                                             "Código Folio": st.column_config.TextColumn("Código Folio"),
                                             "Rubro": st.column_config.TextColumn("Rubro"),
+                                            "Nota Afectada": st.column_config.TextColumn("Nota Afectada"),
                                             "Saldo Base": st.column_config.TextColumn("Saldo Base"),
                                             "Debe (Ajuste Real)": st.column_config.TextColumn("Debe (Ajuste Real)"),
                                             "Haber (Ajuste Real)": st.column_config.TextColumn("Haber (Ajuste Real)"),

@@ -122,11 +122,14 @@ def parse_year_to_num(val):
         pass
     return None
 
-def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None):
+def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None, return_audit_log=False):
     """
     Procesa un DataFrame transaccional del Cubo de Odoo, filtra por periodo YTD,
     realiza la homologación de cuentas contra map_pl.xlsx y pivota los datos
     al formato P&L configurado.
+    
+    Si return_audit_log=True, retorna (df_pivot, df_audit) donde df_audit contiene
+    las filas del Excel que no tenían clasificación o requerían asignación por descarte.
     """
     # 1. Detectar nombres de columnas de forma dinámica
     col_nivel1 = next((c for c in df_cubo.columns if normalize_text(c) in ['nivel 1', 'nivel_1', 'nivel1', 'n1']), None)
@@ -171,6 +174,8 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
         col_category = df_cubo.columns[6] if len(df_cubo.columns) > 6 else df_cubo.columns[0]
 
     df_filtered = df_cubo.copy()
+    # Guardar número de fila original de Excel (índice + 2 asumiendo fila 1 de encabezados)
+    df_filtered['_excel_row'] = df_cubo.index + 2
 
     # 1.1 Filtrar por Nivel 1 (EBITDA / NO EBITDA) si existe la columna
     if col_nivel1 and col_nivel1 in df_filtered.columns:
@@ -236,15 +241,23 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
         map_pl_df_copy = map_pl_df.copy()
         map_pl_df_copy[col_map_cuenta] = map_pl_df_copy[col_map_cuenta].astype(str).str.strip()
         
-        for idx, row in map_pl_df_copy.iterrows():
-            acc_id = row[col_map_cuenta]
-            map_database[acc_id] = {}
-            for cat in STANDARD_CATEGORIES:
-                map_col = next((c for c in map_pl_df_copy.columns if normalize_text(c) == normalize_text(cat)), None)
-                if map_col:
-                    val = row[map_col]
-                    if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
-                        map_database[acc_id][cat] = str(val).strip()
+        # Pre-calcular el mapeo de columnas una sola vez
+        normalized_cols = {normalize_text(c): c for c in map_pl_df_copy.columns}
+        valid_cat_cols = [
+            (cat, normalized_cols[normalize_text(cat)])
+            for cat in STANDARD_CATEGORIES
+            if normalize_text(cat) in normalized_cols
+        ]
+        
+        cols_to_use = [col_map_cuenta] + [col for _, col in valid_cat_cols]
+        for row in map_pl_df_copy[cols_to_use].itertuples(index=False):
+            acc_id = str(row[0]).strip()
+            row_map = {}
+            for i, (cat, _) in enumerate(valid_cat_cols, start=1):
+                val = row[i]
+                if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
+                    row_map[cat] = str(val).strip()
+            map_database[acc_id] = row_map
 
     # 5. Normalizar mapeo de Odoo
     category_mapping = {
@@ -274,6 +287,8 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
 
     def map_odoo_category(raw_cat):
         norm = normalize_text(raw_cat)
+        if not norm or norm in ['nan', 'none']:
+            return None
         if norm in category_mapping:
             return category_mapping[norm]
         for k, v in category_mapping.items():
@@ -296,75 +311,150 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
         "Resultado por impuestos a las ganancias"
     ]
 
-    def determine_final_category(cuenta_id, raw_odoo_cat):
-        cuenta_id = str(cuenta_id).strip()
-        
-        # Mapeos forzados específicos requeridos por el usuario
-        overrides = {
-            "3105301": "Gastos de administración",
-            "3105302": "Costo de ventas",
-            "3105312": "Acceso a infraestructura fibra óptica",
-            "3105702": "Depreciación y amortizaciones",
-            "3105703": "Depreciación operacional",
-            "3105711": "Depreciación y amortizaciones",
-            "3105834": "Depreciación operacional",
-            "3105835": "Depreciación operacional",
-            "3108112": "Ingresos financieros IC",
-            "3103111": "Ingresos de arriendo fibra optica",
-            "3103113": "Ingresos de actividades ordinarias",
-            "3103112": "Costo de ventas",
-            "3103122": "Ingresos de actividades ordinarias",
-            "3105704": "Depreciación operacional"
-        }
+    # Mapeos forzados específicos requeridos por el usuario
+    overrides = {
+        "3105301": "Gastos de administración",
+        "3105302": "Costo de ventas",
+        "3105312": "Acceso a infraestructura fibra óptica",
+        "3105702": "Depreciación y amortizaciones",
+        "3105703": "Depreciación operacional",
+        "3105711": "Depreciación y amortizaciones",
+        "3105834": "Depreciación operacional",
+        "3105835": "Depreciación operacional",
+        "3108112": "Ingresos financieros IC",
+        "3103111": "Ingresos de arriendo fibra optica",
+        "3103113": "Ingresos de actividades ordinarias",
+        "3103112": "Costo de ventas",
+        "3103122": "Ingresos de actividades ordinarias",
+        "3105704": "Depreciación operacional"
+    }
+
+    def resolve_category_and_motivo(cuenta_id, raw_odoo_cat, odoo_cat_mapped):
         if cuenta_id in overrides:
-            return overrides[cuenta_id]
+            return overrides[cuenta_id], ""
             
-        odoo_cat_mapped = map_odoo_category(raw_odoo_cat)
-        
+        final_cat = None
+        motivo = ""
+
         # Si no está mapeado en el maestro, usar la clasificación directa de Odoo
         if cuenta_id not in map_database:
-            return odoo_cat_mapped if odoo_cat_mapped else "Otros egresos por función"
+            if odoo_cat_mapped:
+                final_cat = odoo_cat_mapped
+            else:
+                final_cat = "Otros egresos por función"
+                motivo = "Sin clasificación en ERP y sin cuenta en map_pl (asignado a 'Otros egresos por función')"
+        else:
+            mappings = map_database[cuenta_id]
             
-        mappings = map_database[cuenta_id]
-        
-        # Desempate operacional/no operacional para depreciaciones mapeadas a ambos
-        if "Depreciación operacional" in mappings and "Depreciación y amortizaciones" in mappings:
-            if odoo_cat_mapped == "Costo de ventas":
-                return "Depreciación operacional"
-            elif odoo_cat_mapped == "Gastos de administración":
-                return "Depreciación y amortizaciones"
-        
-        # Verificar prioridades de categorías específicas
-        for spec_cat in SPECIFIC_CATEGORIES:
-            if spec_cat in mappings:
-                return spec_cat
+            # Desempate operacional/no operacional para depreciaciones mapeadas a ambos
+            if "Depreciación operacional" in mappings and "Depreciación y amortizaciones" in mappings:
+                if odoo_cat_mapped == "Costo de ventas":
+                    final_cat = "Depreciación operacional"
+                elif odoo_cat_mapped == "Gastos de administración":
+                    final_cat = "Depreciación y amortizaciones"
+                else:
+                    final_cat = "Depreciación operacional"
+                    motivo = "Sin clasificación en ERP (asignado por descarte a 'Depreciación operacional')"
+            
+            if final_cat is None:
+                # Verificar prioridades de categorías específicas
+                for spec_cat in SPECIFIC_CATEGORIES:
+                    if spec_cat in mappings:
+                        final_cat = spec_cat
+                        break
+                        
+            if final_cat is None and odoo_cat_mapped and odoo_cat_mapped in mappings:
+                # Usar la columna que coincida con la categoría mapeada de Odoo
+                final_cat = odoo_cat_mapped
                 
-        # Usar la columna que coincida con la categoría mapeada de Odoo
-        if odoo_cat_mapped and odoo_cat_mapped in mappings:
-            return odoo_cat_mapped
-            
-        # Tomar la primera clasificación disponible
-        if mappings:
-            if len(mappings) == 1:
-                return list(mappings.keys())[0]
-            for cat in STANDARD_CATEGORIES:
-                if cat in mappings:
-                    return cat
-                    
-        return odoo_cat_mapped if odoo_cat_mapped else "Otros egresos por función"
+            if final_cat is None and mappings:
+                # Tomar la primera clasificación disponible por orden estándar
+                if len(mappings) == 1:
+                    final_cat = list(mappings.keys())[0]
+                    motivo = f"Sin clasificación en ERP (único rubro mapeado: '{final_cat}')"
+                else:
+                    for cat in STANDARD_CATEGORIES:
+                        if cat in mappings:
+                            final_cat = cat
+                            motivo = f"Sin clasificación en ERP (asignado por orden prioritario a '{final_cat}')"
+                            break
+                            
+            if final_cat is None:
+                final_cat = odoo_cat_mapped if odoo_cat_mapped else "Otros egresos por función"
+                motivo = f"Sin clasificación en ERP ni coincidencia (asignado a '{final_cat}')"
 
-    # Aplicar clasificación a cada fila
+        return final_cat, motivo
+
+    # Clasificar filas de forma vectorizada/agrupada
+    df_audit = None
     if col_category and col_category in df_filtered.columns:
-        df_filtered['mapped_category'] = df_filtered.apply(
-            lambda r: determine_final_category(r[col_cuenta], r[col_category]), axis=1
-        )
+        unique_odoo = df_filtered[col_category].unique()
+        odoo_map_cache = {raw: map_odoo_category(raw) for raw in unique_odoo}
+
+        unique_combos = df_filtered[[col_cuenta, col_category]].drop_duplicates()
+        combo_cat = {}
+        combo_mot = {}
+        for cuenta_val, cat_val in unique_combos.itertuples(index=False):
+            acc_id = str(cuenta_val).strip()
+            mapped_odoo = odoo_map_cache.get(cat_val)
+            f_cat, f_mot = resolve_category_and_motivo(acc_id, cat_val, mapped_odoo)
+            combo_cat[(cuenta_val, cat_val)] = f_cat
+            combo_mot[(cuenta_val, cat_val)] = f_mot
+
+        combo_keys = list(zip(df_filtered[col_cuenta], df_filtered[col_category]))
+        df_filtered['mapped_category'] = [combo_cat.get(k) for k in combo_keys]
+
+        if return_audit_log:
+            raw_series = df_filtered[col_category].fillna("").astype(str).str.strip()
+            odoo_mapped_series = pd.Series([odoo_map_cache.get(c) for c in df_filtered[col_category]], index=df_filtered.index)
+            
+            is_empty_or_unmapped = (
+                (raw_series == "") | 
+                (raw_series.str.lower().isin(['nan', 'none', '0', '0.0'])) | 
+                (odoo_mapped_series.isna())
+            )
+            
+            audit_df_rows = df_filtered[is_empty_or_unmapped]
+            if not audit_df_rows.empty:
+                audit_keys = [combo_keys[i] for i in range(len(combo_keys)) if is_empty_or_unmapped.iloc[i]]
+                motivos = [combo_mot.get(k, "") for k in audit_keys]
+                
+                df_audit = pd.DataFrame({
+                    'Fila Excel': audit_df_rows['_excel_row'].astype(int) if '_excel_row' in audit_df_rows.columns else 0,
+                    'N° de Cuenta': audit_df_rows[col_cuenta].astype(str).str.strip(),
+                    'Nombre de la cuenta': audit_df_rows[col_nombre].astype(str).str.strip(),
+                    'Importe MN': audit_df_rows[col_importe].astype(float),
+                    'Clasificación ERP': raw_series.loc[audit_df_rows.index].apply(lambda s: s if s else "(Vacío)"),
+                    'Rubro Asignado': audit_df_rows['mapped_category'],
+                    'Motivo / Observación': [m if m else f"Clasificación ERP vacía/no reconocida (asignado a '{c}')" for m, c in zip(motivos, audit_df_rows['mapped_category'])]
+                })
+            else:
+                df_audit = pd.DataFrame(columns=[
+                    'Fila Excel', 'N° de Cuenta', 'Nombre de la cuenta', 
+                    'Importe MN', 'Clasificación ERP', 'Rubro Asignado', 'Motivo / Observación'
+                ])
     else:
-        def fallback_map(acc_id):
-            mappings = map_database.get(acc_id, {})
-            if mappings:
-                return list(mappings.keys())[0]
-            return "Otros egresos por función"
-        df_filtered['mapped_category'] = df_filtered[col_cuenta].apply(fallback_map)
+        unique_cuentas = df_filtered[col_cuenta].unique()
+        cuenta_cat = {}
+        for c in unique_cuentas:
+            acc_id = str(c).strip()
+            if acc_id in overrides:
+                cuenta_cat[c] = overrides[acc_id]
+            else:
+                mappings = map_database.get(acc_id, {})
+                cuenta_cat[c] = list(mappings.keys())[0] if mappings else "Otros egresos por función"
+        df_filtered['mapped_category'] = df_filtered[col_cuenta].map(cuenta_cat)
+        
+        if return_audit_log:
+            df_audit = pd.DataFrame({
+                'Fila Excel': df_filtered['_excel_row'].astype(int) if '_excel_row' in df_filtered.columns else 0,
+                'N° de Cuenta': df_filtered[col_cuenta].astype(str).str.strip(),
+                'Nombre de la cuenta': df_filtered[col_nombre].astype(str).str.strip(),
+                'Importe MN': df_filtered[col_importe].astype(float),
+                'Clasificación ERP': "(Columna ausente)",
+                'Rubro Asignado': df_filtered['mapped_category'],
+                'Motivo / Observación': df_filtered['mapped_category'].apply(lambda cat: f"Columna informe_ee_rr no encontrada (asignado a '{cat}')")
+            })
 
     # 6. Agrupar y pivotar a formato ancho
     df_grouped = df_filtered.groupby([col_cuenta, col_nombre, 'mapped_category'])[col_importe].sum().reset_index()
@@ -388,4 +478,13 @@ def process_odoo_cubo(df_cubo, year, month, map_pl_df, standard_categories=None)
 
     # Reordenar columnas exactamente al formato esperado
     df_pivot = df_pivot[['N° de cuenta', 'Nombre de la cuenta'] + STANDARD_CATEGORIES]
+    
+    if return_audit_log:
+        if df_audit is None or df_audit.empty:
+            df_audit = pd.DataFrame(columns=[
+                'Fila Excel', 'N° de Cuenta', 'Nombre de la cuenta', 
+                'Importe MN', 'Clasificación ERP', 'Rubro Asignado', 'Motivo / Observación'
+            ])
+        return df_pivot, df_audit
+        
     return df_pivot

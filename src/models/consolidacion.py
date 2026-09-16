@@ -33,6 +33,7 @@ class ConsolidationJournalEntry(Base):
     haber = Column(Float, default=0.0)
     es_recurrente = Column(Boolean, default=False)
     elimina_saldo_total = Column(Boolean, default=False)
+    cuenta_codigo = Column(String(20), nullable=True, default=None) # Código de cuenta de consolidación 9999xxx
     asiento_codigo = Column(String(50), index=True, nullable=True) # ej AST-202605-001
     num_linea = Column(Integer, default=1)
     created_by = Column(String(100), nullable=True) # Auditoría: usuario creador

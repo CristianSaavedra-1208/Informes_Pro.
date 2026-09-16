@@ -58,6 +58,8 @@ def init_db():
                 conn.execute(text("ALTER TABLE consolidation_journal_entries ADD COLUMN created_by VARCHAR(100)"))
             if "updated_by" not in columns:
                 conn.execute(text("ALTER TABLE consolidation_journal_entries ADD COLUMN updated_by VARCHAR(100)"))
+            if "cuenta_codigo" not in columns:
+                conn.execute(text("ALTER TABLE consolidation_journal_entries ADD COLUMN cuenta_codigo VARCHAR(20)"))
             if "updated_at" not in columns:
                 conn.execute(text("ALTER TABLE consolidation_journal_entries ADD COLUMN updated_at DATETIME"))
                 

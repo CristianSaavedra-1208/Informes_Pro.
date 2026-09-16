@@ -7,6 +7,7 @@ from sqlalchemy import or_
 from src.models.database import SessionLocal
 from src.models.consolidacion import ConsolidationGroup, ConsolidationJournalEntry
 from src.core.consolidacion_engine import resolver_montos_asiento
+from src.core.consolidacion_account_mapper import find_account_by_rubro_nota
 from src.core.excel_utils import format_periodo
 
 def get_adjustments_dataset(
@@ -146,6 +147,14 @@ def get_adjustments_dataset(
                 tipo_calc = "Eliminación Dinámica (100%)" if e.elimina_saldo_total else "Monto Fijo"
                 fecha_str = comp_fecha.strftime("%d-%m-%Y %H:%M") if isinstance(comp_fecha, datetime) else str(comp_fecha or "")
 
+                cuenta_cod = getattr(e, "cuenta_codigo", None)
+                if not cuenta_cod:
+                    cuenta_cod = find_account_by_rubro_nota(
+                        e.linea_item,
+                        getattr(e, "linea_nota", None),
+                        empresa=empresa_filial or empresa_matriz
+                    )
+
                 lineas_detalladas.append({
                     "Código Folio": codigo_val,
                     "Período": p_val,
@@ -154,6 +163,7 @@ def get_adjustments_dataset(
                     "Tipo de Ajuste": col_val,
                     "Glosa / Explicación": glosa_val,
                     "Línea #": getattr(e, "num_linea", idx + 1) or (idx + 1),
+                    "N° Cuenta": cuenta_cod or "",
                     "Rubro EEFF Afectado": e.linea_item,
                     "Nota / Desglose": getattr(e, "linea_nota", None) or "Sin Detalle",
                     "Tipo Cálculo": tipo_calc,
@@ -293,7 +303,7 @@ def generate_adjustments_excel(
         if df_lineas.empty:
             df_lineas = pd.DataFrame(columns=[
                 "Código Folio", "Período", "Mes / Año", "Fecha Registro", "Tipo de Ajuste",
-                "Glosa / Explicación", "Línea #", "Rubro EEFF Afectado", "Nota / Desglose",
+                "Glosa / Explicación", "Línea #", "N° Cuenta", "Rubro EEFF Afectado", "Nota / Desglose",
                 "Tipo Cálculo", "Saldo Base", "Debe ($)", "Haber ($)", "Recurrente", "Registrado Por"
             ])
 
@@ -337,7 +347,7 @@ def generate_adjustments_excel(
                 if col_name in ["Debe ($)", "Haber ($)", "Saldo Base"]:
                     cell.alignment = Alignment(horizontal="right", vertical="center")
                     cell.number_format = NUMBER_FMT
-                elif col_name in ["Línea #"]:
+                elif col_name in ["Línea #", "N° Cuenta"]:
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 elif col_name in ["Código Folio", "Período", "Recurrente"]:
                     cell.alignment = Alignment(horizontal="center", vertical="center")

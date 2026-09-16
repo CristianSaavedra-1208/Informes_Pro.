@@ -220,8 +220,11 @@ def render(empresa_seleccionada, empresa_path):
                                 edited_bal.to_excel(map_bal_file, index=False)
                                 if is_global: propagate_global_file("map_balance.xlsx")
                                 
-                                # Invalidar caché de lectura de Excel y sincronizar taxonomía
-                                st.cache_data.clear()
+                                # Invalidar caché de sábana y taxonomía sin destruir caché global
+                                from src.core.sabana_manager import SabanaManager
+                                SabanaManager.clear_sabana_cache()
+                                from src.core.taxonomy_cache import clear_taxonomy_cache
+                                clear_taxonomy_cache(empresa_seleccionada)
                                 from src.models.taxonomy_generator import process_mapping_for_taxonomy
                                 process_mapping_for_taxonomy(edited_bal, "Balance", empresa_seleccionada)
                                 
@@ -244,61 +247,9 @@ def render(empresa_seleccionada, empresa_path):
             st.subheader("Mapeo de P&L (Estado de Resultados)")
             st.write("Sube el archivo Excel con las definiciones operacionales y administrativas (e.g. Notas de Costos, Administración).")
         
-            # Obtener dinámicamente las columnas de P&L de la base de datos de taxonomía para esta empresa
-            from src.models.database import SessionLocal
-            from src.models.taxonomy_master import TaxonomyMasterRecord
-        
-            db_pl = SessionLocal()
-            try:
-                tax_recs = db_pl.query(TaxonomyMasterRecord.nombre_linea_es).filter_by(
-                    empresa=empresa_seleccionada,
-                    reporte_destino="P&L"
-                ).order_by(TaxonomyMasterRecord.id_reporte).all()
-                db_cols = [r[0] for r in tax_recs if r[0]]
-                db_cols = list(dict.fromkeys(db_cols)) # Eliminar duplicados preservando orden
-            
-                # Ordenar los rubros según el orden estándar del reporte
-                PL_ORDER_LIST = [
-                    "ingresos de arriendo fibra optica",
-                    "ingresos de actividades ordinarias",
-                    "costo de ventas",
-                    "acceso a infraestructura fibra optica",
-                    "costos de uso fibra optica",
-                    "depreciacion operacional",
-                    "depreciacion y amortizacion operacional",
-                    "otros ingresos por funcion",
-                    "costos de distribucion",
-                    "gastos de administracion",
-                    "depreciacion y amortizaciones",
-                    "otros egresos por funcion",
-                    "resultado por inversion en empresas relacionadas",
-                    "ingresos financieros",
-                    "ingresos financieros con empresas relacionadas",
-                    "ingresos financieros ic",
-                    "costos financieros",
-                    "diferencias de cambio",
-                    "resultado por unidad de reajuste",
-                    "resultados por unidades de reajuste",
-                    "ganancia (perdida) por impuesto a las ganancias",
-                    "resultado por impuestos a las ganancias"
-                ]
-            
-                def get_pl_sort_key(name):
-                    if not name:
-                        return 9999
-                    norm = name.lower().strip().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
-                    if norm in PL_ORDER_LIST:
-                        return PL_ORDER_LIST.index(norm)
-                    for idx, item in enumerate(PL_ORDER_LIST):
-                        if item in norm or norm in item:
-                            return idx
-                    return 9999
-
-                db_cols = sorted(db_cols, key=get_pl_sort_key)
-            except Exception:
-                db_cols = []
-            finally:
-                db_pl.close()
+            # Obtener dinámicamente las columnas de P&L con caché optimizado
+            from src.core.taxonomy_cache import get_pl_taxonomy_columns
+            db_cols = get_pl_taxonomy_columns(empresa_seleccionada)
             
             default_pl_cols = [
                 "Ingresos de arriendo fibra optica",
@@ -415,8 +366,11 @@ def render(empresa_seleccionada, empresa_path):
                         edited_pl.to_excel(map_pl_file, index=False)
                         if is_global: propagate_global_file("map_pl.xlsx")
                         
-                        # Invalidar caché de lectura de Excel y sincronizar taxonomía
-                        st.cache_data.clear()
+                        # Invalidar caché de sábana y taxonomía sin destruir caché global
+                        from src.core.sabana_manager import SabanaManager
+                        SabanaManager.clear_sabana_cache()
+                        from src.core.taxonomy_cache import clear_taxonomy_cache
+                        clear_taxonomy_cache(empresa_seleccionada)
                         from src.models.taxonomy_generator import process_mapping_for_taxonomy
                         process_mapping_for_taxonomy(edited_pl, "PL", empresa_seleccionada)
                         

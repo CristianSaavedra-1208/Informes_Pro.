@@ -71,6 +71,9 @@ class TestAdjustmentsExcelExport(unittest.TestCase):
         self.assertIn("INFORMES PRO", str(ws_det["A1"].value))
         self.assertIn("LIBRO DIARIO DE AJUSTES", str(ws_det["A2"].value))
 
+        headers = [cell.value for cell in ws_det[6]]
+        self.assertIn("N° Cuenta", headers, "❌ La columna 'N° Cuenta' debe estar presente en el encabezado de Libro de Ajustes")
+
     def test_03_export_single_month(self):
         """
         Verifica que al filtrar por un mes específico solo se extraigan asientos de ese período.
