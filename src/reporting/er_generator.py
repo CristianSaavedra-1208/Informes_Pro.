@@ -7,32 +7,51 @@ import datetime
 from copy import copy
 from io import BytesIO
 
-def format_period_to_spanish_date(period_str):
+from src.core.ifrs_glossary import translate_ifrs_term, extract_mapping_en_overrides
+
+def format_period_date(period_str, lang='es'):
     if not period_str:
         return ""
     try:
         import calendar
-        parts = str(period_str).strip().split('-')
-        if len(parts) >= 2:
-            year = int(parts[0])
-            month = int(parts[1])
+        from src.core.pl_cubo_processor import parse_month_to_num, parse_year_to_num
+        year = parse_year_to_num(period_str)
+        month = parse_month_to_num(period_str)
+        if year and month:
             last_day = calendar.monthrange(year, month)[1]
-            months_es = {
-                1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
-                5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
-                9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
-            }
-            month_name = months_es[month]
-            return f"{last_day} de {month_name} {year}"
+            if str(lang).lower() == 'en':
+                months_en = {
+                    1: "January", 2: "February", 3: "March", 4: "April",
+                    5: "May", 6: "June", 7: "July", 8: "August",
+                    9: "September", 10: "October", 11: "November", 12: "December"
+                }
+                return f"{months_en.get(month, '')} {last_day}, {year}"
+            else:
+                months_es = {
+                    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+                    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+                    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+                }
+                return f"{last_day} de {months_es.get(month, '')} {year}"
     except Exception:
         pass
     return period_str
+
+format_period_to_spanish_date = format_period_date
 
 class ERGenerator:
     def __init__(self, template_path):
         self.template_path = template_path
 
-    def generate(self, pl_df, scale_factor=1.0, pl_df_comp=None, periodo_actual_str=None, periodo_comp_str=None):
+    def generate(self, pl_df, scale_factor=1.0, pl_df_comp=None, periodo_actual_str=None, periodo_comp_str=None, map_pl_df=None, target_lang=None):
+        if target_lang is None:
+            try:
+                import streamlit as st
+                target_lang = st.session_state.get('idioma_reporte', 'es')
+            except Exception:
+                target_lang = 'es'
+
+        overrides = extract_mapping_en_overrides(map_pl_df)
         # 1. Cargar plantilla base con openpyxl para preservar todo el formato original
         wb = openpyxl.load_workbook(self.template_path)
         ws = wb.active
@@ -100,8 +119,8 @@ class ERGenerator:
 
         # 3. Limpiar y actualizar los encabezados de fechas
         if periodo_actual_str:
-            formatted_actual = format_period_to_spanish_date(periodo_actual_str)
-            formatted_comp = format_period_to_spanish_date(periodo_comp_str) if periodo_comp_str else ""
+            formatted_actual = format_period_date(periodo_actual_str, lang=target_lang)
+            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if periodo_comp_str else ""
             
             for row in range(1, 5):
                 cell_25 = ws.cell(row=row, column=val25_col_idx)
@@ -266,6 +285,9 @@ class ERGenerator:
                             ws.cell(row=row, column=val24_col_idx).value = rolling_sum_24
                         else:
                             ws.cell(row=row, column=val24_col_idx).value = 0.0
+
+                if str(target_lang).lower() == 'en' and cell_name and isinstance(cell_name, str):
+                    ws.cell(row=row, column=clasif_col_idx).value = translate_ifrs_term(cell_name.strip(), target_lang='en', overrides_dict=overrides)
 
         # Para compatibilidad con la UI de visualización que espera (output, template_df)
         output = BytesIO()

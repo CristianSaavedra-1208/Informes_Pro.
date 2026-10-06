@@ -42,8 +42,65 @@ def render(empresa_seleccionada, empresa_path):
         st.info("Para acceder a estas funciones de administración, selecciona **🌐 [GLOBAL] Configuración General** en el selector de empresa de la barra lateral.")
         return
 
-    tabs = st.tabs(["🏢 Empresas y Entornos", "🔌 Conexiones ERP (API)", "👥 Roles & Settings", "🗑️ Eliminación de Data"])
-    tab_empresas, tab_erp, tab_roles, tab_danger = tabs
+    tabs = st.tabs(["🏢 Empresas y Entornos", "🌐 Glosario IFRS (ES ↔ EN)", "🔌 Conexiones ERP (API)", "👥 Roles & Settings", "🗑️ Eliminación de Data"])
+    tab_empresas, tab_glossary, tab_erp, tab_roles, tab_danger = tabs
+    
+    with tab_glossary:
+        st.subheader("🌐 Editor de Glosario IFRS / NIIF (ES ↔ EN)")
+        st.caption("Modifica o agrega traducciones de rubros contables y títulos de Notas. Los cambios se aplicarán instantáneamente a todos los reportes Excel, Word y vistas en pantalla.")
+
+        from src.core.ifrs_glossary import get_glossary_dataframe, save_glossary_from_dataframe
+
+        df_glossary = get_glossary_dataframe()
+
+        # Buscador en vivo
+        search_query = st.text_input("🔍 Buscar término en el glosario:", key="search_ifrs_glossary")
+        if search_query.strip():
+            sq = search_query.strip().lower()
+            mask = (
+                df_glossary["Término en Español"].astype(str).str.lower().str.contains(sq) |
+                df_glossary["Traducción en Inglés (IASB)"].astype(str).str.lower().str.contains(sq)
+            )
+            filtered_df = df_glossary[mask].reset_index(drop=True)
+        else:
+            filtered_df = df_glossary
+
+        st.markdown(f"**Términos activos:** `{len(df_glossary)}` (mostrando `{len(filtered_df)}`).")
+
+        edited_df = st.data_editor(
+            filtered_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="data_editor_ifrs_glossary",
+            column_config={
+                "Término en Español": st.column_config.TextColumn("Término en Español", width="large", required=True),
+                "Traducción en Inglés (IASB)": st.column_config.TextColumn("Traducción en Inglés (IASB)", width="large", required=True),
+            }
+        )
+
+        col_save, col_info = st.columns([1, 1])
+        with col_save:
+            if st.button("💾 Guardar Cambios en Glosario IFRS", type="primary", use_container_width=True):
+                # Si se usó filtro, combinar la edición con los términos no filtrados
+                if search_query.strip():
+                    merged_dict = dict(zip(df_glossary["Término en Español"], df_glossary["Traducción en Inglés (IASB)"]))
+                    for _, r in edited_df.iterrows():
+                        k_es = str(r.get("Término en Español", "")).strip()
+                        v_en = str(r.get("Traducción en Inglés (IASB)", "")).strip()
+                        if k_es and v_en:
+                            merged_dict[k_es] = v_en
+                    final_df = pd.DataFrame([{"Término en Español": k, "Traducción en Inglés (IASB)": v} for k, v in merged_dict.items()])
+                else:
+                    final_df = edited_df
+
+                ok, msg = save_glossary_from_dataframe(final_df)
+                if ok:
+                    st.success(f"✅ {msg}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
+        with col_info:
+            st.info("💡 **Consejo:** Puedes pegar directamente múltiples filas desde Excel o presionar `+` en la tabla para agregar nuevos términos.")
     
     with tab_empresas:
         col1, col2, col3 = st.columns(3)

@@ -4,25 +4,13 @@ import os
 import datetime
 from src.core.excel_utils import df_to_excel_bytes, format_periodo, read_excel_cached
 
-from src.reporting.notes import NOTE_REGISTRY
+from src.reporting.notes import NOTE_REGISTRY, get_full_note_registry, get_notes_by_category
 
-# Mapeo de notas dinámico reconstruido desde NOTE_REGISTRY
-sheet_name_map = {code: info['sheets'] for code, info in NOTE_REGISTRY.items()}
+# Mapeo de notas dinámico reconstruido desde NOTE_REGISTRY y plantillas activas
+sheet_name_map = {code: info['sheets'] for code, info in get_full_note_registry().items()}
 
 # Agrupación de notas dinámica agrupada por categorías del estado financiero
-notes_by_category = {
-    "activos_corrientes": [],
-    "activos_no_corrientes": [],
-    "pasivos_corrientes": [],
-    "pasivos_no_corrientes": [],
-    "patrimonio": [],
-    "resultados": []
-}
-
-for code, info in NOTE_REGISTRY.items():
-    cat = info['category']
-    if cat in notes_by_category:
-        notes_by_category[cat].append((code, f"[{code}] {info['title']}"))
+notes_by_category = get_notes_by_category()
 
 def load_all_entity_contexts(active_entity, periodo_actual, periodo_comp, map_balance_df, map_pl_df):
     from src.core.sabana_manager import SabanaManager
@@ -191,6 +179,9 @@ def classify_row(row):
         return "validation", cells
         
     if len(cells) == 1:
+        label = str(cells[0]).strip().lower()
+        if any(k in label for k in ["total", "saldo final", "sub-total", "subtotal", "totales"]):
+            return "table", cells
         return "text", cells[0]
         
     return "table", cells
@@ -228,87 +219,222 @@ def is_header_start_row(row):
                 
     return (has_date or has_entity) and not has_numeric_value
 
-def split_sheet_into_elements(df):
+def get_base_title(text):
+    import re
+    if not text:
+        return ""
+    s = re.sub(r'\[COMPARATIVO\]', '', str(text), flags=re.IGNORECASE).strip().lower()
+    s = re.sub(r'^\d+[\)\.\-]\s*', '', s).strip()
+    s = re.sub(r'^[a-z][\)\.\-]\s*', '', s).strip()
+    s = re.sub(r'\b(202\d|201\d|199\d)\b', '', s).strip()
+    s = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]\d{2,4}\b', '', s).strip()
+    return " ".join(s.split())
+
+def is_same_base_title(t1, t2):
+    b1 = get_base_title(t1)
+    b2 = get_base_title(t2)
+    if not b1 or not b2:
+        return False
+    return b1 == b2 or b1 in b2 or b2 in b1
+
+def is_main_section_title(first_cell_txt, full_row_title, non_empty):
+    import re
+    first_low = first_cell_txt.lower().strip()
+    full_low = full_row_title.lower().strip()
+    
+    # Must contain at least some alphabetic characters (not just dates or numbers)
+    if not re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]', full_row_title):
+        return False
+        
+    # Ignore table header labels, column names, or total rows
+    if first_low in ['total', 'totales', 'saldo final', 'subtotal', 'sub-total', 'concepto', 'detalle', 'activos', 'pasivos', 'institución', 'institucion']:
+        return False
+    if first_low.startswith('total') or first_low.startswith('saldo final') or first_low.startswith('sub total') or first_low.startswith('sub-total'):
+        return False
+        
+    numeric_vals = [v for v in non_empty if isinstance(v, (int, float)) and not (1990 <= v <= 2030)]
+    if numeric_vals:
+        return False
+        
+    # Numbered titles: e.g. 1), 2), 3), 4), 5), a), b), 1.-
+    if re.match(r'^\d+[\)\.\-]', first_cell_txt) or re.match(r'^[a-z][\)\.\-]', first_cell_txt):
+        return True
+        
+    explicit_starters = [
+        'vencimiento de pasivos', 'vencimientos', 'cambios en pasivo', 
+        'detalle leasing', 'detalle prestamos', 'detalle prstamos', 'detalle de instrumentos',
+        'detalle de fondos mutuos', 'reconciliacion de tasa', 'reconciliacin de tasa', 'reconciliación de tasa',
+        'composicion del gasto', 'composicin del gasto', 'composición del gasto',
+        'los saldos acumulados', 'conciliacion del saldo', 'conciliacin del saldo', 'conciliación del saldo',
+        'los efectos de impuestos', 'nota de ', 'provisiones por pasivos', 'contratos con clientes',
+        'movimientos de propiedades', 'movimientos de activos', 'detalle de leasing', 'detalle de prestamos'
+    ]
+    
+    if any(full_low.startswith(starter) for starter in explicit_starters):
+        return True
+        
+    return False
+
+def split_sheet_into_elements(df, sheet_name=None):
+    import re
     df = df.dropna(how='all', axis=1)
     
+    code_pattern = re.compile(r'#([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)')
+    
+    # 1. PRE-ESCANEO: ¿Contiene la hoja códigos explícitos con '#'? (ej: #N15.1, #N09.2, [#N15.2])
+    explicit_codes_found = []
+    for idx, row in df.iterrows():
+        for val in row.values:
+            if pd.notna(val) and isinstance(val, str):
+                m = code_pattern.search(val.strip())
+                if m:
+                    explicit_codes_found.append(f"#{m.group(1)}")
+                    
+    is_explicit_mode = len(explicit_codes_found) > 0
+
+    # =========================================================================
+    # MODO EXPLÍCITO: La plantilla Excel gobierna estrictamente con '#'
+    # =========================================================================
+    if is_explicit_mode:
+        elements = []
+        current_chunk = []
+        current_explicit_code = None
+        has_data = False
+        in_table = False
+        
+        for idx, row in df.iterrows():
+            row_vals = list(row.values)
+            non_empty = [v for v in row_vals if pd.notna(v) and str(v).strip() != ""]
+            if not non_empty:
+                if current_chunk and in_table and not has_data:
+                    current_chunk = []
+                elif current_chunk and has_data:
+                    current_chunk.append(row_vals)
+                continue
+                
+            first_cell_txt = str(non_empty[0]).strip()
+            full_row_title = " ".join([str(v).strip() for v in non_empty if isinstance(v, str)])
+            
+            m = code_pattern.search(first_cell_txt) or code_pattern.search(full_row_title)
+            
+            if m:
+                found_code = f"#{m.group(1)}"
+                
+                # Si es el mismo código actualmente activo (ej: réplica duplicada del período comparativo)
+                if current_explicit_code is not None and found_code == current_explicit_code:
+                    continue
+                    
+                # Si es un nuevo código explícito, guardar la tabla previa
+                if current_chunk and has_data:
+                    chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+                    if not chunk_df.empty:
+                        elements.append(("table", chunk_df, sheet_name, current_explicit_code))
+                    current_chunk = []
+                    has_data = False
+                    in_table = False
+                    
+                current_explicit_code = found_code
+                
+                # Extraer título descriptivo limpio (sin códigos técnicos ni [COMPARATIVO])
+                clean_title = re.sub(r'\[?#' + re.escape(m.group(1)) + r'\]?', '', full_row_title)
+                clean_title = re.sub(r'\[COMPARATIVO\]', '', clean_title, flags=re.IGNORECASE).strip()
+                clean_title = re.sub(r'\b(202\d|201\d|199\d)\b', '', clean_title).strip()
+                clean_title = re.sub(r'^[\s\-:]+', '', clean_title).strip()
+                if clean_title:
+                    elements.append(("text", clean_title, sheet_name, current_explicit_code))
+                continue
+            else:
+                has_data = True
+                in_table = True
+                current_chunk.append(row_vals)
+                
+        if current_chunk and has_data:
+            chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+            if not chunk_df.empty:
+                elements.append(("table", chunk_df, sheet_name, current_explicit_code))
+                
+        return elements
+
+    # =========================================================================
+    # MODO LEGADO DE RESPALDO: Para notas que aún no tienen '#' en su plantilla
+    # =========================================================================
     elements = []
     current_chunk = []
     has_data = False
-    after_total = False
-    
+    in_table = False
+
+    active_pasivos_section = None
+
     for idx, row in df.iterrows():
         row_vals = list(row.values)
-        row_type, cell_val = classify_row(row_vals)
+        non_empty = [v for v in row_vals if pd.notna(v) and str(v).strip() != ""]
+        if not non_empty:
+            if current_chunk and in_table and not has_data:
+                current_chunk = []
+            elif current_chunk and has_data:
+                current_chunk.append(row_vals)
+            continue
+            
+        first_cell_txt = str(non_empty[0]).strip()
+        full_row_title = " ".join([str(v).strip() for v in non_empty if isinstance(v, str)])
         
-        is_end_of_table = False
-        if row_type == "validation":
-            is_end_of_table = True
-        elif row_vals:
-            non_empty_cells = [v for v in row_vals if pd.notna(v) and str(v).strip() != ""]
-            if non_empty_cells:
-                label_str = str(non_empty_cells[0]).strip().lower()
-                if (
-                    label_str == "total" or 
-                    label_str.startswith("total") or 
-                    label_str.startswith("sub-total") or 
-                    label_str.startswith("subtotal") or 
-                    "totales" in label_str
-                ):
-                    is_end_of_table = True
-                    
-        if is_end_of_table:
-            after_total = True
-            
-        if row_type == "empty":
-            if has_data and after_total:
-                # Look ahead to see if the next non-empty row is validation
-                is_followed_by_validation = False
-                for j in range(idx + 1, len(df)):
-                    next_row_vals = list(df.iloc[j].values)
-                    next_type, _ = classify_row(next_row_vals)
-                    if next_type == "empty":
+        is_split = is_main_section_title(first_cell_txt, full_row_title, non_empty)
+        
+        # Regla exclusiva para Activo Fijo: dividir en Cuadro #N09.1 (Detalle por rubro) y Cuadro #N09.2 (Cuadro de movimientos comparativo)
+        if not is_split and sheet_name and str(sheet_name).strip() == "Activo Fijo":
+            if current_chunk and has_data:
+                if len(non_empty) == 1 and re.match(r'^20\d{2}$', first_cell_txt):
+                    # Solo dividir la primera vez (para separar #N09.1 de #N09.2)
+                    if len([e for e in elements if e[0] == "table"]) == 0:
+                        is_split = True
+
+        # Regla exclusiva para Pasivos Financieros (#N15):
+        # Mantener los dos cuadros comparativos de "vencimiento de pasivos" y "cambios en pasivo" bajo un solo código
+        if sheet_name and "pasivos financieros" in str(sheet_name).strip().lower():
+            full_low = full_row_title.lower()
+            if is_split:
+                if "vencimiento de pasivos" in full_low:
+                    if active_pasivos_section == "vencimientos":
+                        is_split = False
                         continue
-                    if next_type == "validation":
-                        is_followed_by_validation = True
-                    break
-                
-                if is_followed_by_validation:
-                    current_chunk.append(row_vals)
+                    else:
+                        active_pasivos_section = "vencimientos"
+                elif "cambios en pasivo" in full_low:
+                    if active_pasivos_section == "cambios":
+                        is_split = False
+                        continue
+                    else:
+                        active_pasivos_section = "cambios"
                 else:
-                    elements.append(("table", pd.DataFrame(current_chunk)))
-                    current_chunk = []
-                    has_data = False
-                    after_total = False
-            else:
-                current_chunk.append(row_vals)
-        elif row_type == "text":
-            if has_data and after_total:
-                elements.append(("table", pd.DataFrame(current_chunk)))
+                    active_pasivos_section = "other"
+
+        if is_split:
+            if current_chunk and has_data:
+                chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+                if not chunk_df.empty:
+                    elements.append(("table", chunk_df))
                 current_chunk = []
                 has_data = False
-                after_total = False
-                elements.append(("text", cell_val))
+                in_table = False
+                
+            if is_main_section_title(first_cell_txt, full_row_title, non_empty):
+                clean_txt = re.sub(r'\[COMPARATIVO\]', '', full_row_title, flags=re.IGNORECASE).strip()
+                clean_header = re.sub(r'\b(202\d|201\d|199\d)\b', '', clean_txt).strip()
+                if clean_header.strip():
+                    elements.append(("text", clean_header.strip()))
             else:
-                current_chunk.append(row_vals)
-        elif is_header_start_row(row_vals):
-            if has_data:
-                elements.append(("table", pd.DataFrame(current_chunk)))
-                current_chunk = []
-                has_data = False
-                after_total = False
-            current_chunk.append(row_vals)
-        else:
-            has_nums = False
-            for val in row_vals:
-                if pd.notna(val) and isinstance(val, (int, float)) and not (val > 2000 and val < 2100):
-                    has_nums = True
-                    break
-            if has_nums:
                 has_data = True
+                in_table = True
+                current_chunk.append(row_vals)
+        else:
+            has_data = True
+            in_table = True
             current_chunk.append(row_vals)
-            
-    if current_chunk:
-        elements.append(("table", pd.DataFrame(current_chunk)))
+
+    if current_chunk and has_data:
+        chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+        if not chunk_df.empty:
+            elements.append(("table", chunk_df))
         
     return elements
 
@@ -344,15 +470,18 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                 SabanaManager.clear_sabana_cache()
                 st.success("🔄 Caché de saldos y asientos actualizada. Haz clic en '🚀 Ejecutar y Visualizar Nota'.")
             
-        cache_key = f"_note_result__{key_prefix}__{selected_id}"
+        target_lang = st.session_state.get('idioma_reporte', 'es')
+        cache_key = f"_note_result__{key_prefix}__{selected_id}__{target_lang}"
 
         if run_note:
             from src.core.sabana_manager import SabanaManager
             SabanaManager.clear_sabana_cache()
 
-            template_nota = "Plantilla de notas_v1.xlsx"
+            template_nota = os.path.join(empresa_path, "Plantilla de notas_v1.xlsx")
             if not os.path.exists(template_nota):
-                st.error("❌ No se encontró la plantilla maestra global 'Plantilla de notas_v1.xlsx' en la raíz.")
+                template_nota = "Plantilla de notas_v1.xlsx"
+            if not os.path.exists(template_nota):
+                st.error("❌ No se encontró la plantilla maestra de notas 'Plantilla de notas_v1.xlsx'.")
             else:
                 st.info(f"Procesando y mapeando saldos para {selected_label}...")
                 
@@ -366,9 +495,16 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                     st.error("❌ No se pudo cargar el maestro de Mapeo Balance.")
                     st.stop()
 
-                from src.reporting.note_generator import NoteGenerator
-                
+                import importlib
+                import src.reporting.note_generator as note_gen_module
+                importlib.reload(note_gen_module)
+                NoteGenerator = note_gen_module.NoteGenerator
+
                 try:
+                    # Invalidar caché previa de resultados para forzar recalculo fresco
+                    if cache_key in st.session_state:
+                        del st.session_state[cache_key]
+
                     # Cargar contextos con caché en session_state.
                     _ctx_cache_key = f"_entity_ctx__{empresa_seleccionada}__{periodo_actual}__{periodo_comp}"
                     if _ctx_cache_key not in st.session_state:
@@ -395,11 +531,22 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         periodo_actual_str=periodo_actual,
                         periodo_comp_str=periodo_comp,
                         map_balance_df=map_balance_df,
-                        map_pl_df=map_pl_df
+                        map_pl_df=map_pl_df,
+                        target_lang=target_lang
                     )
                     
-                    # Vista previa de la nota con sub-tablas visualmente separadas
-                    excel_nota_out.seek(0)
+                    # Inyectar datos de anexos externos (si existen para la empresa/período)
+                    import importlib
+                    import src.core.external_notes_manager as ext_mgr_module
+                    importlib.reload(ext_mgr_module)
+                    ExternalNotesManager = ext_mgr_module.ExternalNotesManager
+                    excel_nota_out = ExternalNotesManager.inject_external_data(
+                        excel_nota_out,
+                        empresa=empresa_seleccionada,
+                        periodo_actual=periodo_actual,
+                        periodo_comp=periodo_comp if periodo_comp != "Ninguno" else None,
+                        target_lang=target_lang
+                    )
                     excel_eval_out = evaluate_formulas_in_workbook(excel_nota_out)
                     preview_nota_df = pd.read_excel(excel_eval_out, sheet_name=target_sheets[0], header=None)
                     
@@ -546,10 +693,14 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         for sheet_name in target_sheets:
                             sheet_df = pd.read_excel(excel_eval_out, sheet_name=sheet_name, header=None)
                             if len(target_sheets) > 1:
-                                elements.append(("text", f"Pestaña: {sheet_name.strip()}", sheet_name))
-                            sheet_elements = split_sheet_into_elements(sheet_df)
-                            for el_type, el_val in sheet_elements:
-                                elements.append((el_type, el_val, sheet_name))
+                                elements.append(("text", f"Pestaña: {sheet_name.strip()}", sheet_name, None))
+                            sheet_elements = split_sheet_into_elements(sheet_df, sheet_name=sheet_name)
+                            for s_item in sheet_elements:
+                                el_type = s_item[0]
+                                el_val = s_item[1]
+                                s_name = s_item[2] if len(s_item) > 2 else sheet_name
+                                exp_code = s_item[3] if len(s_item) > 3 else None
+                                elements.append((el_type, el_val, s_name, exp_code))
                     
                     from src.reporting.word_export import WordExportEngine
                     word_nota_out = WordExportEngine.generate_notes_word(
@@ -557,7 +708,8 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         title=selected_label,
                         unit=unidad_nota,
                         note_code=selected_id,
-                        excel_bytes=excel_eval_out.getvalue()
+                        excel_bytes=excel_eval_out.getvalue(),
+                        target_lang=target_lang
                     )
                     
                     excel_nota_out.seek(0)
@@ -595,30 +747,44 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
             
             table_counter = 0
             for item in cached["elements"]:
-                if len(item) == 3:
+                if len(item) == 4:
+                    el_type, el_val, sh_name, explicit_code = item
+                elif len(item) == 3:
                     el_type, el_val, sh_name = item
+                    explicit_code = None
                 else:
-                    el_type, el_val = item
+                    el_type, el_val = item[0], item[1]
                     sh_name = cached["target_sheets"][0]
+                    explicit_code = None
                     
                 if el_type == "text":
-                    st.markdown(f"##### 📋 {el_val}")
+                    clean_text = str(el_val).replace("[COMPARATIVO]", "").replace("[comparativo]", "").strip()
+                    if not clean_text:
+                        continue
+                    from src.core.narrative_translator import translate_narrative_text
+                    display_text = translate_narrative_text(clean_text, target_lang=target_lang)
+                    st.markdown(f"##### 📋 {display_text}")
                 else:
                     chunk_df = el_val.dropna(how='all', axis=0).reset_index(drop=True)
                     if chunk_df.empty:
                         continue
                     
-                    table_counter += 1
-                    sub_code = f"{cached['selected_id']}.{table_counter}"
-                    st.markdown(f"**📍 Cuadro `{sub_code}`**")
+                    if explicit_code:
+                        sub_code = explicit_code
+                    else:
+                        table_counter += 1
+                        sub_code = f"{cached['selected_id']}.{table_counter}"
+                    label_cuadro = "Schedule" if str(target_lang).lower() == "en" else "Cuadro"
+                    st.markdown(f"**📍 {label_cuadro} `{sub_code}`**")
                     
                     new_cols = [" " * (idx + 1) for idx in range(len(chunk_df.columns))]
                     chunk_df.columns = new_cols
                     chunk_df = chunk_df.fillna("")
                     
-                    styled_df = apply_corporate_style(chunk_df, excel_bytes=eval_io, sheet_name=sh_name)
+                    styled_df = apply_corporate_style(chunk_df, excel_bytes=eval_io, sheet_name=sh_name, target_lang=target_lang)
                     html_str = styled_df.to_html(index=False)
-                    html_str = html_str.replace("<thead>", '<thead style="display:none">')
+                    import re
+                    html_str = re.sub(r'<thead\b[^>]*>.*?</thead>', '', html_str, flags=re.DOTALL)
                     scrollable_html = f'<div style="overflow-x: auto; width: 100%;">{html_str}</div>'
                     st.markdown(scrollable_html, unsafe_allow_html=True)
                     st.write("")
@@ -662,38 +828,116 @@ def render(empresa_seleccionada, empresa_path):
     st.title("📑 Informes y Notas a los Estados Financieros")
     
     if "GLOBAL" in empresa_seleccionada:
-        st.info("🌐 **Modo Global Activo**: Desde esta sección puedes administrar la **Plantilla Maestra Global** de Notas (`Plantilla de notas_v1.xlsx`). Para ejecutar y visualizar notas contables de una empresa específica, selecciónala en la barra lateral izquierda.")
-        
-        with st.expander("⚙️ Administrar Plantilla Maestra Global de Notas", expanded=True):
-            st.write("Descarga la plantilla Excel global actual de notas, realiza modificaciones en su estructura, textos o mapeos, y vuelve a subirla para que aplique a todas las empresas.")
+        st.info("🌐 **Modo Global Activo**: Desde esta sección puedes administrar las **Plantillas Maestras del Sistema**: la Plantilla Global de Notas (Contable) y la Plantilla Base de Anexos (Extracontable para filiales). Ambas plantillas aplican como base para todas las empresas.")
+
+        if 'global_tpl_feedback' in st.session_state:
+            fb_type, fb_msg = st.session_state.pop('global_tpl_feedback')
+            if fb_type == "success":
+                st.success(fb_msg)
+            elif fb_type == "error":
+                st.error(fb_msg)
+
+        tab_g1, tab_g2 = st.tabs([
+            "📘 Plantilla Maestra Global de Notas (Contable)",
+            "📙 Plantilla Base Máster de Anexos (Extracontable)"
+        ])
+
+        with tab_g1:
+            st.subheader("📘 Plantilla Maestra Global de Notas Contables (`Plantilla de notas_v1.xlsx`)")
+            st.write("Esta es la **base y molde maestro de todas las notas del sistema**. Si agregas nuevas notas, tablas o códigos (`#N...`), hazlo en este archivo y vuelve a subirlo.")
             
             template_nota = "Plantilla de notas_v1.xlsx"
             if os.path.exists(template_nota):
+                mtime_g = int(os.path.getmtime(template_nota))
+                size_g = os.path.getsize(template_nota) / 1024.0
+                dt_g = datetime.datetime.fromtimestamp(mtime_g).strftime("%Y-%m-%d %H:%M:%S")
+                st.caption(f"🕒 **Última modificación:** {dt_g} | 📦 **Tamaño:** {size_g:.1f} KB")
+
                 with open(template_nota, "rb") as file:
-                    st.download_button(
-                        label="📥 Descargar Plantilla Maestra Global Actual",
-                        data=file,
-                        file_name="Plantilla_de_notas_v1.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key="download_global_master_template_notes"
-                    )
+                    fresh_bytes_g = file.read()
+                st.download_button(
+                    label="📥 Descargar Plantilla Maestra Global Actual (`Plantilla de notas_v1.xlsx`)",
+                    data=fresh_bytes_g,
+                    file_name="Plantilla_de_notas_v1.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"download_global_master_template_notes_{mtime_g}"
+                )
             else:
                 st.warning("⚠️ No se encontró la plantilla maestra global 'Plantilla de notas_v1.xlsx' en la raíz.")
 
+            st.write("")
+            st.markdown("##### 📤 Subir y Actualizar Plantilla Maestra Global")
             uploaded_template = st.file_uploader(
-                "Subir Nueva Plantilla Maestra Global (Reemplazar en la raíz):",
+                "Seleccionar archivo Excel para reemplazar la Plantilla Maestra Global (.xlsx):",
                 type=["xlsx"],
                 key="global_notes_template_uploader"
             )
             
             if uploaded_template is not None:
-                if st.button("💾 Guardar Plantilla Maestra Global", type="primary", use_container_width=True):
-                    with open(template_nota, "wb") as f:
-                        f.write(uploaded_template.getbuffer())
-                    st.session_state['success_msg'] = "✅ ¡Plantilla maestra global subida y actualizada con éxito en la raíz del proyecto!"
-                    st.rerun()
+                if st.button("💾 Guardar y Actualizar Plantilla Maestra Global", type="primary", use_container_width=True, key="save_global_master_notes_btn"):
+                    try:
+                        with open(template_nota, "wb") as f:
+                            f.write(uploaded_template.getbuffer())
+                        # Limpiar caché de notas
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):
+                                del st.session_state[k]
+                        st.session_state['global_tpl_feedback'] = ("success", "✅ ¡Plantilla Maestra Global de Notas subida y actualizada con éxito en la raíz del proyecto!")
+                        st.rerun()
+                    except PermissionError:
+                        st.error("❌ El archivo 'Plantilla de notas_v1.xlsx' está abierto en Excel. Ciérralo y vuelve a presionar Guardar.")
+                    except Exception as e:
+                        st.error(f"❌ Error al guardar la plantilla: {e}")
+
+        with tab_g2:
+            st.subheader("📙 Plantilla Base Máster de Anexos Extracontables (`Plantilla EXTERNA_de_notas_v1.xlsx`)")
+            st.write("Esta es la **plantilla base oficial de anexos** que descargan las filiales para completar datos cualitativos y operacionales (antigüedad de deuda, vencimientos, etc.), basada en las notas de la plantilla global.")
+            
+            from src.core.external_notes_manager import ExternalNotesManager
+            ext_info = ExternalNotesManager.get_master_template_info()
+            if ext_info["exists"]:
+                st.caption(f"🕒 **Última modificación:** {ext_info['last_modified']} | 📦 **Tamaño:** {ext_info['size_kb']}")
+                if ext_info["sheets"]:
+                    st.caption(f"📑 **{len(ext_info['sheets'])} Hojas disponibles:** {', '.join(ext_info['sheets'][:6])}{'...' if len(ext_info['sheets']) > 6 else ''}")
+
+                with open(ext_info["path"], "rb") as mf:
+                    fresh_bytes_ext = mf.read()
+                st.download_button(
+                    label="📥 Descargar Plantilla Base Máster de Anexos (`Plantilla EXTERNA_de_notas_v1.xlsx`)",
+                    data=fresh_bytes_ext,
+                    file_name="Plantilla_EXTERNA_de_notas_v1.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"download_global_master_ext_notes_{ext_info['mtime']}"
+                )
+            else:
+                st.warning("⚠️ No se encontró la plantilla base de anexos en la raíz.")
+
+            st.write("")
+            st.markdown("##### 📤 Subir y Actualizar Plantilla Base Máster de Anexos")
+            up_master_anexo = st.file_uploader(
+                "Seleccionar archivo Excel para reemplazar la Plantilla Base Máster de Anexos (.xlsx):",
+                type=["xlsx"],
+                key="global_master_anexo_uploader"
+            )
+            if up_master_anexo is not None:
+                if st.button("💾 Guardar y Actualizar Plantilla Base de Anexos Global", type="primary", use_container_width=True, key="save_global_master_anexo_btn"):
+                    try:
+                        ExternalNotesManager.save_master_template(up_master_anexo.getbuffer())
+                        # Limpiar caché de notas
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):
+                                del st.session_state[k]
+                        st.session_state['global_tpl_feedback'] = ("success", "✅ ¡Plantilla Base Máster de Anexos actualizada con éxito en la raíz del sistema!")
+                        st.rerun()
+                    except PermissionError:
+                        st.error("❌ El archivo 'Plantilla EXTERNA_de_notas_v1.xlsx' está abierto en Excel. Ciérralo y vuelve a presionar Guardar.")
+                    except Exception as e:
+                        st.error(f"❌ Error al guardar la plantilla: {e}")
+
         st.stop()
+
         
     from src.models.trial_balance_db import TrialBalanceDB
     
@@ -724,63 +968,202 @@ def render(empresa_seleccionada, empresa_path):
             
     st.write("")
     
-    is_consolidated = empresa_seleccionada.startswith("[GRUPO] ")
-
-    # Filtrar notas por categoría según modo (individual vs consolidado)
-    active_notes_by_cat = {}
-    for cat, note_list in notes_by_category.items():
-        filtered_list = []
-        for code, label in note_list:
-            info = NOTE_REGISTRY.get(code, {})
-            if info.get("consolidated_only") and not is_consolidated:
-                continue
-            filtered_list.append((code, label))
-        active_notes_by_cat[cat] = filtered_list
-
-    # Crear pestañas para cada rubro
-    tabs = st.tabs([
-        "💰 Activos Corrientes",
-        "🏢 Activos No Corrientes",
-        "💳 Pasivos Corrientes",
-        "🛡️ Pasivos No Corrientes",
-        "📊 Patrimonio",
-        "📈 Resultados",
-        "📂 Informes Corporativos"
+    main_tab_viz, main_tab_anexos = st.tabs([
+        "👁️ Visualizar y Exportar Notas",
+        "📥 Carga de Anexos Operacionales por Empresa"
     ])
-    
-    # Tab 1: Activos Corrientes
-    with tabs[0]:
-        st.subheader("Notas de Activos Corrientes")
-        render_note_section(active_notes_by_cat["activos_corrientes"], "act_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+
+    with main_tab_viz:
+        is_consolidated = empresa_seleccionada.startswith("[GRUPO] ")
+
+        # Cargar registro completo actualizado (incluyendo pestañas adicionales descubiertas en la plantilla activa)
+        template_nota_activa = os.path.join(empresa_path, "Plantilla de notas_v1.xlsx")
+        if not os.path.exists(template_nota_activa):
+            template_nota_activa = "Plantilla de notas_v1.xlsx"
+
+        full_registry = get_full_note_registry(template_nota_activa)
+        sheet_name_map.update({code: info['sheets'] for code, info in full_registry.items()})
+        current_notes_by_cat = get_notes_by_category(template_nota_activa)
+
+        # Filtrar notas por categoría según modo (individual vs consolidado)
+        active_notes_by_cat = {}
+        for cat, note_list in current_notes_by_cat.items():
+            filtered_list = []
+            for code, label in note_list:
+                info = full_registry.get(code, {})
+                if info.get("consolidated_only") and not is_consolidated:
+                    continue
+                filtered_list.append((code, label))
+            active_notes_by_cat[cat] = filtered_list
+
+        # Crear pestañas para cada rubro, incorporando Notas Adicionales dinámicas
+        tabs = st.tabs([
+            "💰 Activos Corrientes",
+            "🏢 Activos No Corrientes",
+            "💳 Pasivos Corrientes",
+            "🛡️ Pasivos No Corrientes",
+            "📊 Patrimonio",
+            "📈 Resultados",
+            "📌 Notas Adicionales",
+            "📂 Informes Corporativos"
+        ])
         
-    # Tab 2: Activos No Corrientes
-    with tabs[1]:
-        st.subheader("Notas de Activos No Corrientes")
-        render_note_section(active_notes_by_cat["activos_no_corrientes"], "act_no_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+        # Tab 1: Activos Corrientes
+        with tabs[0]:
+            st.subheader("Notas de Activos Corrientes")
+            render_note_section(active_notes_by_cat.get("activos_corrientes", []), "act_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            
+        # Tab 2: Activos No Corrientes
+        with tabs[1]:
+            st.subheader("Notas de Activos No Corrientes")
+            render_note_section(active_notes_by_cat.get("activos_no_corrientes", []), "act_no_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            
+        # Tab 3: Pasivos Corrientes
+        with tabs[2]:
+            st.subheader("Notas de Pasivos Corrientes")
+            render_note_section(active_notes_by_cat.get("pasivos_corrientes", []), "pas_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            
+        # Tab 4: Pasivos No Corrientes
+        with tabs[3]:
+            st.subheader("Notas de Pasivos No Corrientes")
+            render_note_section(active_notes_by_cat.get("pasivos_no_corrientes", []), "pas_no_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            
+        # Tab 5: Patrimonio
+        with tabs[4]:
+            st.subheader("Notas de Patrimonio")
+            render_note_section(active_notes_by_cat.get("patrimonio", []), "patrimonio", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            
+        # Tab 6: Resultados
+        with tabs[5]:
+            st.subheader("Notas de Resultados (P&L)")
+            render_note_section(active_notes_by_cat.get("resultados", []), "resultados", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+
+        # Tab 7: Notas Adicionales / Personalizadas detectadas dinámicamente
+        with tabs[6]:
+            st.subheader("📌 Notas y Cuadros Adicionales (Detectados de la Plantilla)")
+            adic_notes = active_notes_by_cat.get("adicionales", [])
+            if adic_notes:
+                st.caption("Pestañas personalizadas detectadas automáticamente en la plantilla Excel activa:")
+                render_note_section(adic_notes, "adic_notes", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+            else:
+                st.info("ℹ️ No se detectaron pestañas adicionales en la plantilla actual. Si agregas una pestaña nueva a la plantilla Excel de notas, el sistema la detectará aquí automáticamente.")
+            
+        # Tab 8: Informes Corporativos
+        with tabs[7]:
+            st.subheader("Informes Adicionales")
+            st.write("Generación de paquetes de gerencia corporativos. (PDF, Word).")
+            st.info("Funcionalidad en desarrollo.")
+
+    with main_tab_anexos:
+        st.subheader("📥 Carga e Integración de Anexos / Notas Extracontables")
+        st.write(
+            "Desde esta sección puedes administrar y cargar la **Plantilla Externa de Anexos** por empresa y período "
+            "para aquellas notas que contienen datos operacionales o desgloses estructurados "
+            "(ej: Fondos Mutuos, Antigüedad de Deudores, Vencimiento de Pasivos, Inversiones en Relacionadas, etc.)."
+        )
         
-    # Tab 3: Pasivos Corrientes
-    with tabs[2]:
-        st.subheader("Notas de Pasivos Corrientes")
-        render_note_section(active_notes_by_cat["pasivos_corrientes"], "pas_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+        from src.core.external_notes_manager import ExternalNotesManager
         
-    # Tab 4: Pasivos No Corrientes
-    with tabs[3]:
-        st.subheader("Notas de Pasivos No Corrientes")
-        render_note_section(active_notes_by_cat["pasivos_no_corrientes"], "pas_no_corr", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
+        col_anx1, col_anx2 = st.columns([2, 2])
+        with col_anx1:
+            anexo_periodo = st.selectbox(
+                "Seleccionar Período de Carga:",
+                periodos_hist,
+                index=0,
+                format_func=format_periodo,
+                key="anexo_ext_period_select"
+            )
         
-    # Tab 5: Patrimonio
-    with tabs[4]:
-        st.subheader("Notas de Patrimonio")
-        render_note_section(active_notes_by_cat["patrimonio"], "patrimonio", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
-        
-    # Tab 6: Resultados
-    with tabs[5]:
-        st.subheader("Notas de Resultados (P&L)")
-        render_note_section(active_notes_by_cat["resultados"], "resultados", scale_factor_nota, unidad_nota, empresa_path, empresa_seleccionada, periodo_actual, periodo_comp)
-        
-    # Tab 7: Informes
-    with tabs[6]:
-        st.subheader("Informes Adicionales")
-        st.write("Generación de paquetes de gerencia corporativos. (PDF, Word).")
-        st.info("Funcionalidad en desarrollo.")
+        with col_anx2:
+            info = ExternalNotesManager.get_anexo_info(empresa_seleccionada, anexo_periodo)
+            if info["exists"]:
+                if info.get("is_auto_aggregated"):
+                    subs_str = ", ".join(info.get("subsidiaries", []))
+                    st.info(
+                        f"⚡ **Consolidado Automático Activo**: Este grupo consolida y suma automáticamente las filiales con anexo registrado (**{subs_str}**).\n\n"
+                        f"*(Excluye automáticamente 'Impuestos Diferidos' y 'Saldos Intercompañía/Relacionadas')*"
+                    )
+                    agg_bytes = ExternalNotesManager.build_aggregated_group_anexo(empresa_seleccionada, anexo_periodo)
+                    if agg_bytes:
+                        st.download_button(
+                            label="📥 Descargar Anexo Consolidado Pre-sumado (.xlsx)",
+                            data=agg_bytes,
+                            file_name=f"Anexo_Consolidado_PreSumado_{anexo_periodo}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"download_auto_agg_{empresa_seleccionada}_{anexo_periodo}"
+                        )
+                else:
+                    st.success(f"✅ Anexo registrado para **{empresa_seleccionada}** ({format_periodo(anexo_periodo)})\n\n🕒 **Modificado:** {info['last_modified']} | 📦 **Tamaño:** {info['size_kb']}")
+            else:
+                st.warning(f"⚠️ Sin anexo externo registrado para **{empresa_seleccionada}** en **{format_periodo(anexo_periodo)}**.")
+
+        # Mensaje de retroalimentación persistente tras guardar
+        if 'anexo_feedback' in st.session_state:
+            fb_type, fb_msg = st.session_state.pop('anexo_feedback')
+            if fb_type == "success":
+                st.success(fb_msg)
+            elif fb_type == "error":
+                st.error(fb_msg)
+            elif fb_type == "warning":
+                st.warning(fb_msg)
+
+        st.write("---")
+        c_dn1, c_dn2 = st.columns([2, 2])
+        with c_dn1:
+            st.markdown("#### 1. Descargar Formato Oficial de Anexos")
+            st.write("Descarga el formato base vigente del sistema para ingresar los datos operacionales de esta empresa en este período.")
+            
+            master_info = ExternalNotesManager.get_master_template_info()
+            if master_info["exists"]:
+                st.caption(f"🕒 **Plantilla oficial vigente:** {master_info['last_modified']} | 📦 **Tamaño:** {master_info['size_kb']}")
+                if master_info["sheets"]:
+                    sheets_preview = ", ".join(master_info["sheets"][:5])
+                    more_count = len(master_info["sheets"]) - 5
+                    if more_count > 0:
+                        sheets_preview += f" (+{more_count} más)"
+                    st.caption(f"📑 **{len(master_info['sheets'])} Hojas disponibles:** {sheets_preview}")
+
+                try:
+                    with open(master_info["path"], "rb") as mf:
+                        fresh_bytes = mf.read()
+                    st.download_button(
+                        label="📥 Descargar Formato Base de Anexos (.xlsx)",
+                        data=fresh_bytes,
+                        file_name="Plantilla_EXTERNA_de_notas_v1.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"download_master_external_template_btn_{master_info['mtime']}"
+                    )
+                except Exception as e:
+                    st.error(f"Error al preparar la descarga: {e}")
+            else:
+                st.warning("⚠️ No se encontró la plantilla base de anexos en el sistema.")
+
+            st.caption("💡 *Nota: Para modificar o agregar nuevas hojas a la plantilla base del sistema, dirígete a `[GLOBAL] Configuración General` en la barra lateral izquierda.*")
+
+
+        with c_dn2:
+            st.markdown("#### 2. Subir Anexo Completado")
+            st.write(f"Sube el archivo Excel completado para **{empresa_seleccionada}** en el período **{format_periodo(anexo_periodo)}**:")
+            uploaded_anexo = st.file_uploader(
+                "Seleccionar archivo Excel (.xlsx):",
+                type=["xlsx"],
+                key=f"anexo_uploader_{empresa_seleccionada}_{anexo_periodo}"
+            )
+            if uploaded_anexo is not None:
+                if st.button("💾 Guardar Anexo de la Empresa para este Período", type="primary", use_container_width=True, key="save_anexo_btn"):
+                    try:
+                        saved_path = ExternalNotesManager.save_anexo(empresa_seleccionada, anexo_periodo, uploaded_anexo.getbuffer())
+                        # Limpiar caché de notas para forzar recarga inmediata con los nuevos datos
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):
+                                del st.session_state[k]
+                        st.session_state['anexo_feedback'] = ("success", f"✅ ¡Anexo guardado e integrado con éxito para **{empresa_seleccionada}** ({format_periodo(anexo_periodo)})! Los datos ya están listos en la pestaña de Notas.")
+                        st.rerun()
+                    except PermissionError:
+                        st.error("❌ El archivo de anexo está abierto en otro programa. Ciérralo y vuelve a presionar Guardar.")
+                    except Exception as e:
+                        st.error(f"❌ Error al guardar el anexo: {e}")
+
 

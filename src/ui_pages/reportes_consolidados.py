@@ -7,6 +7,7 @@ import openpyxl
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 
 def render(empresa_seleccionada, empresa_path):
+    target_lang = st.session_state.get('idioma_reporte', 'es')
     st.title("📄 Estados Financieros Consolidados")
     st.write("Emite reportes formales (PDF/Excel) inyectando la hoja de trabajo en tus plantillas base.")
     
@@ -184,10 +185,6 @@ def render(empresa_seleccionada, empresa_path):
                 import time
                 start_time = time.time()
                 with st.spinner("Procesando hojas de trabajo y cruzando con plantillas..."):
-                    import sys
-                    import importlib
-                    import src.core.consolidacion_engine
-                    importlib.reload(src.core.consolidacion_engine)
                     from src.core.consolidacion_engine import generar_hoja_trabajo
                     df_hoja_act, msg_act = generar_hoja_trabajo(sel_g3, periodo_act_g)
                     df_hoja_comp = None
@@ -343,9 +340,6 @@ def render(empresa_seleccionada, empresa_path):
                             })
                             dummy_map.loc[~dummy_map['N° de Cuenta'].isin(template_accounts), 'Clasificación balance'] = pd.NA
                             
-                            import importlib
-                            import src.reporting.balance_generator
-                            importlib.reload(src.reporting.balance_generator)
                             from src.reporting.balance_generator import BalanceGenerator
                             gen = BalanceGenerator(os.path.join(grupo_folder, "Balance clasificado.xlsx"))
                             result_bytes = gen.generate(
@@ -354,7 +348,8 @@ def render(empresa_seleccionada, empresa_path):
                                 scale_factor=scale_factor,
                                 tb_df_comp=tb_df_comp,
                                 periodo_actual_str=periodo_act_g,
-                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None
+                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None,
+                                target_lang=target_lang
                             )
                             filename = f"Balance_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
                             
@@ -367,9 +362,6 @@ def render(empresa_seleccionada, empresa_path):
                                 pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean.iterrows()}
                                 pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
                             
-                            import importlib
-                            import src.reporting.er_generator
-                            importlib.reload(src.reporting.er_generator)
                             from src.reporting.er_generator import ERGenerator
                             gen = ERGenerator(os.path.join(grupo_folder, "Estado de Resultados Clasificados.xlsx"))
                             result_bytes, _ = gen.generate(
@@ -377,7 +369,8 @@ def render(empresa_seleccionada, empresa_path):
                                 scale_factor=scale_factor,
                                 pl_df_comp=pl_df_comp_wide,
                                 periodo_actual_str=periodo_act_g,
-                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None
+                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None,
+                                target_lang=target_lang
                             )
                             filename = f"ER_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
                             
@@ -403,9 +396,6 @@ def render(empresa_seleccionada, empresa_path):
                             map_balance_df = pd.read_excel(map_bal_path) if os.path.exists(map_bal_path) else None
                             map_pl_df = pd.read_excel(map_pl_path) if os.path.exists(map_pl_path) else None
                             
-                            import importlib
-                            import src.reporting.cash_flow_generator
-                            importlib.reload(src.reporting.cash_flow_generator)
                             from src.reporting.cash_flow_generator import CashFlowGenerator
                             gen = CashFlowGenerator(template_cf_path)
                             result_bytes, matriz_audit = gen.generate(
@@ -418,7 +408,8 @@ def render(empresa_seleccionada, empresa_path):
                                 is_consolidado=True,
                                 consolidated_hoja_trabajo_df=df_hoja_act,
                                 consolidated_hoja_trabajo_comp_df=df_hoja_comp,
-                                scale_factor=scale_factor
+                                scale_factor=scale_factor,
+                                target_lang=target_lang
                             )
                             filename = f"Flujo_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
                             st.session_state['flujo_audit_data_g'] = matriz_audit
@@ -582,33 +573,25 @@ def render(empresa_seleccionada, empresa_path):
                                 scale_factor=scale_factor,
                                 pl_df_comp=pl_df_comp_wide,
                                 periodo_actual_str=periodo_act_g,
-                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None
+                                periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None,
+                                target_lang=target_lang
                             )
                             # pl_df ya viene listo del ERGenerator como preview_df
                             
                             # 3. Generar reporte
                             if report_type == "Estado de Cambios en el Patrimonio":
-                                import sys
-                                import importlib
-                                import src.reporting.patrimonio_generator
-                                importlib.reload(sys.modules['src.reporting.patrimonio_generator'])
                                 from src.reporting.patrimonio_generator import PatrimonioGenerator
-                                import src.reporting.formatting
-                                importlib.reload(sys.modules['src.reporting.formatting'])
                                 gen = PatrimonioGenerator(os.path.join(grupo_folder, "Estado de Cambios en el Patrimonio.xlsx"))
                                 result_bytes = gen.generate(
                                     bal_preview_df=bal_df, 
                                     pl_preview_df=pl_df, 
                                     periodo_actual_str=periodo_act_g, 
                                     periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None, 
-                                    empresa=f"[GRUPO] {grupo_name}"
+                                    empresa=f"[GRUPO] {grupo_name}",
+                                    target_lang=target_lang
                                 )
                                 filename = f"Patrimonio_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
                             else:
-                                import sys
-                                import importlib
-                                import src.reporting.ori_generator
-                                importlib.reload(sys.modules['src.reporting.ori_generator'])
                                 from src.reporting.ori_generator import OriGenerator
                                 gen = OriGenerator(os.path.join(grupo_folder, "Estado de Resultados Integrales.xlsx"))
                                 result_bytes = gen.generate(
@@ -616,7 +599,8 @@ def render(empresa_seleccionada, empresa_path):
                                     periodo_actual_str=periodo_act_g, 
                                     periodo_comp_str=periodo_comp_g if periodo_comp_g != "Ninguno" else None, 
                                     bal_preview_df=bal_df,
-                                    empresa=f"[GRUPO] {grupo_name}"
+                                    empresa=f"[GRUPO] {grupo_name}",
+                                    target_lang=target_lang
                                 )
                                 filename = f"ORI_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
                             
@@ -784,7 +768,8 @@ def render(empresa_seleccionada, empresa_path):
                                     df=preview_df,
                                     title="Estado de Situación Financiera Consolidado",
                                     unit=unidad,
-                                    excel_bytes=cons_excel_bytes
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
                                 )
                                 word_bytes_out = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
                                 word_filename = f"Balance_Consolidado_{grupo_name}_{periodo_act_g}.docx"
@@ -794,7 +779,8 @@ def render(empresa_seleccionada, empresa_path):
                                     df=preview_df,
                                     title="Estado de Resultados Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
-                                    excel_bytes=cons_excel_bytes
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
                                 )
                                 word_filename = f"ER_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             elif report_type == "Estado de Flujos de Efectivo":
@@ -803,7 +789,8 @@ def render(empresa_seleccionada, empresa_path):
                                     df=preview_df,
                                     title="Estado de Flujos de Efectivo Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
-                                    excel_bytes=cons_excel_bytes
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
                                 )
                                 word_filename = f"Flujo_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             elif report_type == "Estado de Cambios en el Patrimonio":
@@ -812,7 +799,8 @@ def render(empresa_seleccionada, empresa_path):
                                     df=preview_df,
                                     title="Estado de Cambios en el Patrimonio Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
-                                    excel_bytes=cons_excel_bytes
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
                                 )
                                 word_filename = f"Patrimonio_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                             else: # Estado de Resultados Integrales
@@ -821,7 +809,8 @@ def render(empresa_seleccionada, empresa_path):
                                     df=preview_df,
                                     title="Estado de Resultados Integrales Consolidado",
                                     subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
-                                    excel_bytes=cons_excel_bytes
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
                                 )
                                 word_filename = f"ORI_Consolidado_{grupo_name}_{periodo_act_g}.docx"
                         except Exception as ex_w:
@@ -865,12 +854,8 @@ def render(empresa_seleccionada, empresa_path):
             
             with tab_view1:
                 try:
-                    import sys
-                    import importlib
-                    import src.reporting.formatting
-                    importlib.reload(sys.modules['src.reporting.formatting'])
                     from src.reporting.formatting import apply_corporate_style
-                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary'), unit=unidad).to_html(index=False), unsafe_allow_html=True)
+                    st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary'), unit=unidad, target_lang=target_lang).to_html(index=False), unsafe_allow_html=True)
                 except Exception as e:
                     st.dataframe(preview_df, height=500, use_container_width=True)
 

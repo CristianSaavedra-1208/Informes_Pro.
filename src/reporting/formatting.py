@@ -1,10 +1,27 @@
 import pandas as pd
 
-def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=None, unit=None, is_miles=None):
+def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=None, unit=None, is_miles=None, target_lang=None):
     import openpyxl
     from io import BytesIO
 
+    if target_lang is None:
+        try:
+            import streamlit as st
+            target_lang = st.session_state.get('idioma_reporte', 'es')
+        except Exception:
+            target_lang = 'es'
+
     df = df.copy()
+
+    if str(target_lang).lower() == 'en':
+        from src.core.ifrs_glossary import translate_ifrs_term
+        new_cols = []
+        for col in df.columns:
+            new_cols.append(translate_ifrs_term(str(col), target_lang='en'))
+        df.columns = new_cols
+
+        if len(df) > 0:
+            df.iloc[:, 0] = df.iloc[:, 0].apply(lambda x: translate_ifrs_term(str(x), target_lang='en') if pd.notna(x) else x)
 
     # Detectar si la unidad es en miles
     if is_miles is None:
@@ -50,12 +67,13 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
     if len(df.columns) > 0:
         df.iloc[:, 0] = df.iloc[:, 0].fillna("").astype(str).replace({"nan": "", "None": ""})
 
-    for col in df.columns[1:]:
-        if df[col].dtype == 'object':
+    for i in range(1, len(df.columns)):
+        col_series = df.iloc[:, i]
+        if getattr(col_series, 'dtype', None) == 'object':
             try:
-                converted = pd.to_numeric(df[col], errors='ignore')
-                df[col] = converted
-            except:
+                converted = pd.to_numeric(col_series, errors='ignore')
+                df.iloc[:, i] = converted
+            except Exception:
                 pass
 
     # Definir columnas de valores (numéricas) de forma robusta
@@ -66,6 +84,8 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
     ]
     text_cols = [c for c in df.columns if c not in numeric_cols]
     
+    is_en = (str(target_lang).lower() == 'en')
+
     def format_accounting(x):
         if pd.isna(x) or str(x).lower() == 'nan':
             return ""
@@ -73,16 +93,24 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
         # If it's already a number
         if isinstance(x, (int, float)):
             if x == 0: return "-"
-            if x < 0: return f"({abs(x):,.0f})".replace(',', '.')
-            return f"{x:,.0f}".replace(',', '.')
+            if is_en:
+                if x < 0: return f"({abs(x):,.0f})"
+                return f"{x:,.0f}"
+            else:
+                if x < 0: return f"({abs(x):,.0f})".replace(',', '.')
+                return f"{x:,.0f}".replace(',', '.')
             
         # Try to cast string numbers
         try:
             num = float(str(x).replace(',', ''))
             if pd.isna(num): return ""
             if num == 0: return "-"
-            if num < 0: return f"({abs(num):,.0f})".replace(',', '.')
-            return f"{num:,.0f}".replace(',', '.')
+            if is_en:
+                if num < 0: return f"({abs(num):,.0f})"
+                return f"{num:,.0f}"
+            else:
+                if num < 0: return f"({abs(num):,.0f})".replace(',', '.')
+                return f"{num:,.0f}".replace(',', '.')
         except:
             # If it's text, date, or "M$"
             if "00:00:00" in str(x):
@@ -118,34 +146,8 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 ('border', 'none'),
                 ('padding', '8px'),
                 ('border-top', '2px solid #000000'),
-                ('border-bottom', '2px solid #000000')
-            ]
-        },
-        {
-            'selector': 'th:first-child, td:first-child',
-            'props': [
-                ('min-width', '250px !important'),
-                ('width', 'auto !important'),
-                ('white-space', 'normal !important')
-            ]
-        },
-        {
-            'selector': 'th:not(:first-child)',
-            'props': [
-                ('white-space', 'pre-line !important'),
-                ('width', '150px !important'),
-                ('min-width', '150px !important'),
-                ('max-width', '250px !important'),
-                ('vertical-align', 'bottom !important')
-            ]
-        },
-        {
-            'selector': 'td:not(:first-child)',
-            'props': [
-                ('white-space', 'nowrap !important'),
-                ('width', '150px !important'),
-                ('min-width', '150px !important'),
-                ('max-width', '250px !important')
+                ('border-bottom', '2px solid #000000'),
+                ('text-align', 'left')
             ]
         },
         {
@@ -174,9 +176,54 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
     styler = styler.set_table_styles(table_styles)
     styler = styler.hide(axis="index")
     
+    def _check_is_num(v):
+        if pd.isna(v) or v is None or v == '': return False
+        if isinstance(v, (int, float)): return True
+        sv = str(v).strip()
+        if sv in ['-', '—', '–']: return True
+        c_v = sv.replace('.', '').replace(',', '').replace('(', '').replace(')', '').replace('$', '').replace('%', '').replace('M$', '').strip()
+        return c_v.lstrip('-+').isdigit()
+
     for idx, col in enumerate(df.columns):
-        align_val = 'left' if idx == 0 else 'right'
-        styler = styler.set_properties(subset=[col], **{'text-align': align_val})
+        col_series = df[col]
+        non_empty_vals = [v for v in col_series if pd.notna(v) and str(v).strip() != '']
+        num_count = sum(1 for v in col_series if _check_is_num(v))
+        is_num_col = (num_count >= max(1, len(col_series) * 0.4))
+        
+        # Detectar columnas de viñetas / numerales cortos (ej: 1), 2), a), b))
+        max_str_len = max((len(str(v).strip()) for v in non_empty_vals), default=0)
+        is_bullet_col = (not is_num_col) and (max_str_len <= 5) and (idx == 0 or idx == 1)
+
+        if is_num_col:
+            styler = styler.set_properties(
+                subset=[col],
+                **{
+                    'text-align': 'right',
+                    'width': '130px',
+                    'min-width': '110px',
+                    'white-space': 'nowrap'
+                }
+            )
+        elif is_bullet_col:
+            styler = styler.set_properties(
+                subset=[col],
+                **{
+                    'text-align': 'left',
+                    'width': '35px',
+                    'min-width': '30px',
+                    'max-width': '50px',
+                    'white-space': 'nowrap'
+                }
+            )
+        else:
+            styler = styler.set_properties(
+                subset=[col],
+                **{
+                    'text-align': 'left',
+                    'min-width': '280px',
+                    'white-space': 'normal'
+                }
+            )
 
     dynamic_styled = False
     if excel_bytes is not None:
@@ -224,14 +271,17 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                         color_hex = c_rgb
                 return f"{width} {css_style} #{color_hex}"
 
+            import datetime
+            import re
+
             df_cols = list(df.columns)
             ws_cols_mapping = {}
-            if col_indices:
+            excel_cols_from_attrs = getattr(df, 'attrs', {}).get('excel_cols')
+            if excel_cols_from_attrs and len(excel_cols_from_attrs) == len(df_cols):
+                ws_cols_mapping = {j: excel_cols_from_attrs[j] for j in range(len(df_cols))}
+            elif col_indices:
                 ws_cols_mapping = {j: col_indices[j] for j in range(len(df_cols))}
             else:
-                import datetime
-                import re
-                
                 excel_name_col = 1
                 for col in range(1, 11):
                     for row in range(1, 20):
@@ -257,12 +307,15 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 
                 excel_date_cols = []
                 for col in range(1, ws.max_column + 1):
-                    for row in range(1, 15):
+                    for row in range(1, 7):
                         val = ws.cell(row=row, column=col).value
                         if val is not None:
+                            val_str = str(val).strip()
+                            if any(k in val_str.lower() for k in ['saldo inicial', 'saldo final', 'adiciones', 'informe', 'validacion']):
+                                continue
                             is_date = (
                                 isinstance(val, (datetime.datetime, datetime.date)) or
-                                (isinstance(val, str) and re.search(r'20\d{2}', val))
+                                bool(re.search(r'\b20\d{2}\b', val_str))
                             )
                             if is_date:
                                 excel_date_cols.append(col)
@@ -320,8 +373,10 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
 
             # Pre-construir mapa de búsqueda de filas en openpyxl
             row_map = {}
+            name_search_col = ws_cols_mapping.get(0, 1)
+            search_cols = [name_search_col] + [c for c in range(1, min(ws.max_column + 1, 25)) if c != name_search_col]
             for r in range(1, ws.max_row + 1):
-                for col_idx in range(1, min(ws.max_column + 1, 6)):
+                for col_idx in search_cols:
                     val = ws.cell(row=r, column=col_idx).value
                     if val is not None:
                         s_val = clean_str(val)
@@ -334,17 +389,18 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             
             for idx, df_row in df.iterrows():
                 search_val = clean_str(df_row.iloc[0])
+                if not search_val and len(df_row) > 1:
+                    search_val = clean_str(df_row.iloc[1])
                 found_row = row_map.get(search_val)
                 
-                if found_row is not None:
-                    row_top_b = None
-                    row_bottom_b = None
-                    
-                    for j, col_name in enumerate(df_cols):
+                row_top_b = None
+                row_bottom_b = None
+                
+                for j, col_name in enumerate(df_cols):
+                    css_styles = []
+                    if found_row is not None:
                         excel_col = ws_cols_mapping.get(j, j + 1)
                         cell = ws.cell(row=found_row, column=excel_col)
-                        
-                        css_styles = []
                         
                         if cell.font:
                             if cell.font.bold:
@@ -358,14 +414,24 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                             if cell.font.name:
                                 css_styles.append(f"font-family: '{cell.font.name}', sans-serif")
                         
-                        if cell.alignment and cell.alignment.horizontal:
-                            align = cell.alignment.horizontal
-                            if align == 'center':
-                                css_styles.append("text-align: center")
-                            elif align == 'right':
-                                css_styles.append("text-align: right")
-                            elif align == 'left':
-                                css_styles.append("text-align: left")
+                        val_curr = df_row.iloc[j] if j < len(df_row) else None
+                        def _is_num_cell(v):
+                            if pd.isna(v) or v is None or v == "": return False
+                            if isinstance(v, (int, float)): return True
+                            sv = str(v).strip()
+                            if sv in ["-", "—", "–"]: return True
+                            c_v = sv.replace(".", "").replace(",", "").replace("(", "").replace(")", "").replace("$", "").replace("%", "").replace("M$", "").strip()
+                            return c_v.lstrip("-+").isdigit()
+
+                        if _is_num_cell(val_curr):
+                            css_styles = [s for s in css_styles if not s.startswith("text-align")]
+                            css_styles.append("text-align: right !important")
+                        else:
+                            val_str = str(val_curr).strip() if val_curr is not None else ""
+                            is_num_col_header = (j >= 2) and (val_str.lower() in ["m$", "$", "%", "activos", "pasivos"] or any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202"]))
+                            if not is_num_col_header:
+                                css_styles = [s for s in css_styles if not s.startswith("text-align")]
+                                css_styles.append("text-align: left !important")
                                 
                         if cell.fill and cell.fill.fill_type == 'solid' and cell.fill.fgColor:
                             c_rgb = str(cell.fill.fgColor.rgb)
@@ -394,13 +460,13 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                         else:
                             css_styles.append("border-bottom: 1px solid #f0f0f0")
                         
-                        if css_styles:
-                            row_styles_matrix.loc[idx, col_name] = "; ".join(css_styles)
+                    if css_styles:
+                        row_styles_matrix.loc[idx, col_name] = "; ".join(css_styles)
                             
-                    if row_top_b:
-                        row_top_borders[idx] = row_top_b
-                    if row_bottom_b:
-                        row_bottom_borders[idx] = row_bottom_b
+                if row_top_b:
+                    row_top_borders[idx] = row_top_b
+                if row_bottom_b:
+                    row_bottom_borders[idx] = row_bottom_b
             
             # Aplicar propagación de bordes horizontalmente en filas de totales
             for idx in row_styles_matrix.index:

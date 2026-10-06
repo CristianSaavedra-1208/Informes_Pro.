@@ -1,6 +1,6 @@
 [server]
 headless = true
-fileWatcherType = "auto"
+fileWatcherType = "poll"
 runOnSave = true
 
 [browser]

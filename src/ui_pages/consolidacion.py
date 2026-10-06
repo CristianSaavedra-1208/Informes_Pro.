@@ -1292,12 +1292,8 @@ def render(empresa_seleccionada, empresa_path):
             
             if st.button("Generar Consolidación", type="primary"):
                 with st.spinner("Compilando matrices y aplicando ajustes recurrentes y del periodo..."):
-                    import sys
-                    import importlib
                     import time
                     start_time = time.time()
-                    import src.core.consolidacion_engine
-                    importlib.reload(src.core.consolidacion_engine)
                     from src.core.consolidacion_engine import generar_hoja_trabajo
                     df_hoja, msg = generar_hoja_trabajo(sel_g2, periodo_cons)
                     elapsed_time = time.time() - start_time

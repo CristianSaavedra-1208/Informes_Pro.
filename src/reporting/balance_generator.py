@@ -7,7 +7,9 @@ import datetime
 import calendar
 from copy import copy
 
-def format_period_to_spanish_date(period_str):
+from src.core.ifrs_glossary import translate_ifrs_term, extract_mapping_en_overrides
+
+def format_period_date(period_str, lang='es'):
     if not period_str:
         return ""
     try:
@@ -16,23 +18,39 @@ def format_period_to_spanish_date(period_str):
         month = parse_month_to_num(period_str)
         if year and month:
             last_day = calendar.monthrange(year, month)[1]
-            months_es = {
-                1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
-                5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
-                9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
-            }
-            month_name = months_es.get(month, "")
-            if month_name:
-                return f"{last_day} de {month_name} {year}"
+            if str(lang).lower() == 'en':
+                months_en = {
+                    1: "January", 2: "February", 3: "March", 4: "April",
+                    5: "May", 6: "June", 7: "July", 8: "August",
+                    9: "September", 10: "October", 11: "November", 12: "December"
+                }
+                return f"{months_en.get(month, '')} {last_day}, {year}"
+            else:
+                months_es = {
+                    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+                    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+                    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+                }
+                return f"{last_day} de {months_es.get(month, '')} {year}"
     except Exception:
         pass
     return str(period_str)
+
+format_period_to_spanish_date = format_period_date
 
 class BalanceGenerator:
     def __init__(self, template_path):
         self.template_path = template_path
 
-    def generate(self, tb_df, map_balance_df, scale_factor=1.0, tb_df_comp=None, periodo_actual_str=None, periodo_comp_str=None):
+    def generate(self, tb_df, map_balance_df, scale_factor=1.0, tb_df_comp=None, periodo_actual_str=None, periodo_comp_str=None, target_lang=None):
+        if target_lang is None:
+            try:
+                import streamlit as st
+                target_lang = st.session_state.get('idioma_reporte', 'es')
+            except Exception:
+                target_lang = 'es'
+
+        overrides = extract_mapping_en_overrides(map_balance_df)
         """
         1. Cruza tb_df con map_balance_df para obtener la 'Clasificación balance' de cada cuenta.
         2. Suma los saldos por cada 'Clasificación balance'.
@@ -126,8 +144,8 @@ class BalanceGenerator:
                 orig_cell.value = None
 
         if periodo_actual_str:
-            formatted_actual = format_period_to_spanish_date(periodo_actual_str)
-            formatted_comp = format_period_to_spanish_date(periodo_comp_str) if periodo_comp_str else ""
+            formatted_actual = format_period_date(periodo_actual_str, lang=target_lang)
+            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if periodo_comp_str else ""
             
             for r in range(1, 15):
                 c25 = ws.cell(row=r, column=val25_col_idx)
@@ -399,6 +417,9 @@ class BalanceGenerator:
                 elif _is_total_patrimonio(cell_lower):
                     ws.cell(row=row, column=val25_col_idx).value = patrimonio_totales
                     ws.cell(row=row, column=val24_col_idx).value = patrimonio_totales_24
+
+                if str(target_lang).lower() == 'en':
+                    ws.cell(row=row, column=name_col_idx).value = translate_ifrs_term(cell_name, target_lang='en', overrides_dict=overrides)
 
                 # Note: The template already has SUB-TOTAL and TOTAL formulas built-in natively.
                 # Openpyxl preserves these formulas, so writing the base lines is enough.

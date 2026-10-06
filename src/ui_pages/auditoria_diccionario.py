@@ -96,9 +96,6 @@ def render(empresa_seleccionada, empresa_path):
     st.write("Traza cada línea del Diccionario Maestro hacia las cuentas de tu ERP que la componen (cruzando el Mapeo activo y el Trial Balance).")
     
     is_consolidated = empresa_seleccionada.startswith("[GRUPO]")
-    import importlib
-    import src.core.sabana_builder
-    importlib.reload(src.core.sabana_builder)
     from src.core.sabana_builder import build_consolidated_balance_sabana, build_consolidated_pl_sabana
     
     if is_consolidated:

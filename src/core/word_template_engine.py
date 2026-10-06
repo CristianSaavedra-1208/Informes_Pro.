@@ -855,6 +855,14 @@ class WordTemplateEngine:
         
         unmask_programmatic_tags(doc)
                         
+        target_lang = context.get('target_lang')
+        if not target_lang:
+            try:
+                import streamlit as st
+                target_lang = st.session_state.get('idioma_reporte', 'es')
+            except Exception:
+                target_lang = 'es'
+
         # 3. Procesar e inyectar reportes principales y notas
         paragraphs_to_process = list(doc.paragraphs)
         paragraphs_to_delete = []
@@ -959,7 +967,7 @@ class WordTemplateEngine:
                         dummy_map = pd.DataFrame({'N° de Cuenta': tb_df['cuenta_id'], 'Clasificación balance': tb_df['cuenta_id']})
                         from src.reporting.balance_generator import BalanceGenerator
                         gen = BalanceGenerator(template_bal_path)
-                        result_bytes = gen.generate(tb_df, dummy_map, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                        result_bytes = gen.generate(tb_df, dummy_map, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None, target_lang=target_lang)
                         col_actual = str(periodo_actual)
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_balance_preview(result_bytes, col_actual, col_comp)
@@ -968,7 +976,7 @@ class WordTemplateEngine:
                         tb_comp = TrialBalanceDB.get_trial_balance(empresa_activa, comp_period) if comp_period != "Ninguno" else None
                         from src.reporting.balance_generator import BalanceGenerator
                         gen = BalanceGenerator(os.path.join(empresa_path, "Balance clasificado.xlsx"))
-                        result_bytes = gen.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                        result_bytes = gen.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None, target_lang=target_lang)
                         col_actual = str(periodo_actual)
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_balance_preview(result_bytes, col_actual, col_comp)
@@ -1078,14 +1086,14 @@ class WordTemplateEngine:
                             
                         from src.reporting.er_generator import ERGenerator
                         gen_er = ERGenerator(template_er_path)
-                        _, preview_er = gen_er.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                        _, preview_er = gen_er.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None, target_lang=target_lang)
                     else:
                         pl_df_wide = PlCuboDB.get_pl_cubo(empresa_activa, periodo_actual)
                         pl_df_comp_wide = PlCuboDB.get_pl_cubo(empresa_activa, comp_period) if comp_period != "Ninguno" else None
                         
                         from src.reporting.er_generator import ERGenerator
                         gen_er = ERGenerator(os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx"))
-                        _, preview_er = gen_er.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                        _, preview_er = gen_er.generate(pl_df_wide, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None, target_lang=target_lang)
                     
                     from src.reporting.ori_generator import OriGenerator
                     template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
@@ -1097,7 +1105,8 @@ class WordTemplateEngine:
                             preview_er, 
                             periodo_actual_str=str(periodo_actual), 
                             periodo_comp_str=str(comp_period) if comp_period != "Ninguno" else None,
-                            empresa=empresa_activa
+                            empresa=empresa_activa,
+                            target_lang=target_lang
                         )
                         col_actual = str(periodo_actual)
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
@@ -1134,6 +1143,29 @@ class WordTemplateEngine:
                                     empresa_path=empresa_path,
                                     grupo_name=grupo_name
                                 )
+                        else:
+                            # Cargar Balance para empresa individual
+                            tb_df_p = TrialBalanceDB.get_trial_balance(empresa_activa, periodo_actual)
+                            tb_comp_p = TrialBalanceDB.get_trial_balance(empresa_activa, comp_period) if comp_period != "Ninguno" else None
+                            template_bal_p = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                            if not os.path.exists(template_bal_p):
+                                template_bal_p = os.path.join("templates", "Balance clasificado.xlsx")
+                            from src.reporting.balance_generator import BalanceGenerator
+                            gen_b = BalanceGenerator(template_bal_p)
+                            b_out = gen_b.generate(tb_df_p, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_comp_p, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                            col_act_str = str(periodo_actual)
+                            col_cmp_str = str(comp_period) if comp_period != "Ninguno" else "Comp"
+                            bal_df_pat = self._extract_balance_preview(b_out, col_act_str, col_cmp_str)
+
+                            # Cargar Estado de Resultados para empresa individual
+                            pl_df_wide_p = PlCuboDB.get_pl_cubo(empresa_activa, periodo_actual)
+                            pl_df_comp_wide_p = PlCuboDB.get_pl_cubo(empresa_activa, comp_period) if comp_period != "Ninguno" else None
+                            template_er_p = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                            if not os.path.exists(template_er_p):
+                                template_er_p = os.path.join("templates", "Estado de Resultados Clasificados.xlsx")
+                            from src.reporting.er_generator import ERGenerator
+                            gen_er = ERGenerator(template_er_p)
+                            _, pl_df_pat = gen_er.generate(pl_df_wide_p, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide_p, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
                                 
                         result_bytes = pat_engine.generate(
                             bal_preview_df=bal_df_pat,
@@ -1188,7 +1220,8 @@ class WordTemplateEngine:
                             is_consolidado=True,
                             consolidated_hoja_trabajo_df=df_hoja_act,
                             consolidated_hoja_trabajo_comp_df=df_hoja_comp,
-                            scale_factor=scale_factor
+                            scale_factor=scale_factor,
+                            target_lang=target_lang
                         )
                     else:
                         result_bytes, _ = gen.generate(
@@ -1199,7 +1232,8 @@ class WordTemplateEngine:
                             map_pl_df=map_pl_df,
                             method="Directo",
                             is_consolidado=False,
-                            scale_factor=scale_factor
+                            scale_factor=scale_factor,
+                            target_lang=target_lang
                         )
                         
                     col_actual = str(periodo_actual)
@@ -1280,9 +1314,10 @@ class WordTemplateEngine:
                     except ValueError:
                         pass
 
-                from src.reporting.notes import NOTE_REGISTRY
-                if base_code in NOTE_REGISTRY:
-                    info = NOTE_REGISTRY[base_code]
+                from src.reporting.notes import NOTE_REGISTRY, get_full_note_registry
+                full_registry = get_full_note_registry()
+                if base_code in full_registry:
+                    info = full_registry[base_code]
                     target_sheets = info['sheets']
                     
                     if target_sheets:
@@ -1312,7 +1347,17 @@ class WordTemplateEngine:
                                 periodo_actual_str=periodo_actual,
                                 periodo_comp_str=note_comp,
                                 map_balance_df=map_balance_df,
-                                map_pl_df=map_pl_df
+                                map_pl_df=map_pl_df,
+                                target_lang=target_lang
+                            )
+                            
+                            from src.core.external_notes_manager import ExternalNotesManager
+                            excel_nota_out = ExternalNotesManager.inject_external_data(
+                                excel_nota_out,
+                                empresa=empresa_activa,
+                                periodo_actual=periodo_actual,
+                                periodo_comp=note_comp if note_comp != "Ninguno" else None,
+                                target_lang=target_lang
                             )
                             
                             # Evaluar las fórmulas antes de procesar para evitar NaNs en totales
@@ -1343,7 +1388,9 @@ class WordTemplateEngine:
                             
                             # Inyectar elementos uno a uno antes del párrafo p
                             table_counter = 0
-                            for el_type, el_val in elements:
+                            for item in elements:
+                                el_type = item[0]
+                                el_val = item[1]
                                 if el_type == "text":
                                     new_p = doc.add_paragraph()
                                     run = new_p.add_run(str(el_val))

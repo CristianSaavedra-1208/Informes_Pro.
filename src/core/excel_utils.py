@@ -243,6 +243,15 @@ def extract_named_ranges_from_excel(excel_bytes_io, note_code):
             if sheet_name not in wb.sheetnames:
                 continue
                 
+            from openpyxl.utils.cell import range_boundaries
+            try:
+                min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+                excel_cols = list(range(min_col, max_col + 1))
+                excel_rows = list(range(min_row, max_row + 1))
+            except Exception:
+                excel_cols = None
+                excel_rows = None
+
             ws = wb[sheet_name]
             
             # Obtener celdas del rango
@@ -259,6 +268,11 @@ def extract_named_ranges_from_excel(excel_bytes_io, note_code):
                 data.append(row_vals)
                 
             df = pd.DataFrame(data)
+            if excel_cols:
+                df.attrs['excel_cols'] = excel_cols
+            if excel_rows:
+                df.attrs['excel_rows'] = excel_rows
+            df.attrs['sheet_name'] = sheet_name
             results.append((r_name, df))
         except Exception as ex:
             print(f"Error extrayendo rango nombrado {r_name}: {ex}")

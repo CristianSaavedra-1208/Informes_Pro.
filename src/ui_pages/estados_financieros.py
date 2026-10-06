@@ -4,6 +4,7 @@ import os
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 
 def render(empresa_seleccionada, empresa_path):
+    target_lang = st.session_state.get('idioma_reporte', 'es')
     if "GLOBAL" in empresa_seleccionada:
         st.warning("⚠️ Módulo de Sociedad Activa: Por favor, selecciona una empresa de trabajo específica (ej. Pacifico SpA) en la barra lateral izquierda para acceder a esta sección.")
         st.stop()
@@ -35,12 +36,15 @@ def render(empresa_seleccionada, empresa_path):
     with col_p2:
         periodo_comp = st.selectbox("Periodo Comparativo", lista_opciones, index=1 if len(lista_opciones)>1 else 0, format_func=format_periodo)
         
-    # Cargar dinámicamente desde base de datos a memoria estándar
-    if available_periods and periodo_actual in available_periods:
-        st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
-        st.session_state['tb_df_comp'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
-        st.session_state['pl_df'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
-        st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+    # Cargar dinámicamente desde base de datos a memoria estándar (solo si cambió periodo/empresa)
+    _data_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}"
+    if _data_sig != st.session_state.get('_loaded_data_sig'):
+        if available_periods and periodo_actual in available_periods:
+            st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+            st.session_state['tb_df_comp'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+            st.session_state['pl_df'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
+            st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+        st.session_state['_loaded_data_sig'] = _data_sig
 
     # Detectar cambio de periodo o empresa para invalidar previews desactualizados
     cur_period_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}"
@@ -120,8 +124,9 @@ def render(empresa_seleccionada, empresa_path):
                             tb_df_comp = st.session_state.get('tb_df_comp')
                             map_balance_df = st.session_state['map_balance_df'].copy()
                             
+                            target_lang = st.session_state.get('idioma_reporte', 'es')
                             engine = BalanceGenerator(template_path)
-                            excel_output = engine.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp)
+                            excel_output = engine.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp, target_lang=target_lang)
                             st.session_state['balance_excel_binary'] = excel_output.getvalue()
                             
                             # Read back for on-screen preview
@@ -171,16 +176,14 @@ def render(empresa_seleccionada, empresa_path):
                                 preview_df[col_comp] = pd.to_numeric(preview_df[col_comp], errors='coerce')
                             
                             # Generate Word Version
-                            import importlib
-                            import src.reporting.word_export
-                            importlib.reload(src.reporting.word_export)
                             from src.reporting.word_export import WordExportEngine
                             word_output = WordExportEngine.generate_classified_balance_word(
                                 df=preview_df, 
                                 title="Estado de Situación Financiera Clasificado",
                                 unit=unidad,
                                 entity_name=empresa_seleccionada.replace('[GRUPO] ', ''),
-                                excel_bytes=excel_output.getvalue()
+                                excel_bytes=excel_output.getvalue(),
+                                target_lang=target_lang
                             )
                             
                             st.session_state['preview_df'] = preview_df
@@ -200,7 +203,8 @@ def render(empresa_seleccionada, empresa_path):
                 
                 # Apply global corporate styles
                 from src.reporting.formatting import apply_corporate_style
-                styled_df = apply_corporate_style(preview_df, excel_bytes=st.session_state.get('balance_excel_binary'), unit=unidad)
+                target_lang_active = st.session_state.get('idioma_reporte', 'es')
+                styled_df = apply_corporate_style(preview_df, excel_bytes=st.session_state.get('balance_excel_binary'), unit=unidad, target_lang=target_lang_active)
                 
                 st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
                 st.write("")
@@ -327,13 +331,15 @@ def render(empresa_seleccionada, empresa_path):
                         if not os.path.exists(template_er_path):
                             st.error(f"❌ No se encontró la plantilla base '{template_er_path}' en la carpeta de la empresa.")
                         else:
+                            target_lang = st.session_state.get('idioma_reporte', 'es')
                             engine = ERGenerator(template_er_path)
                             excel_output, preview_df = engine.generate(
                                 pl_df, 
                                 scale_factor=scale_factor, 
                                 pl_df_comp=pl_df_comp, 
                                 periodo_actual_str=periodo_actual, 
-                                periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None
+                                periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None,
+                                target_lang=target_lang
                             )
                             st.session_state['er_preview_df'] = preview_df
                             st.session_state['er_excel_binary'] = excel_output.getvalue()
@@ -358,12 +364,8 @@ def render(empresa_seleccionada, empresa_path):
                 display_df[col] = pd.to_numeric(display_df[col], errors='coerce')
             
 
-            import sys
-            import importlib
-            import src.reporting.formatting
-            importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_df = apply_corporate_style(display_df, excel_bytes=st.session_state.get('er_excel_binary'), unit=unidad_medida)
+            styled_df = apply_corporate_style(display_df, excel_bytes=st.session_state.get('er_excel_binary'), unit=unidad_medida, target_lang=target_lang)
             st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
             st.write("")
             
@@ -634,9 +636,6 @@ def render(empresa_seleccionada, empresa_path):
                         import time
                         start_time = time.time()
                         
-                        import importlib
-                        import src.reporting.cash_flow_generator
-                        importlib.reload(src.reporting.cash_flow_generator)
                         from src.reporting.cash_flow_generator import CashFlowGenerator
                         cf_filename = "Estado de Flujos de Efectivo.xlsx" if metodo_flujo == "Directo" else "Estado de Flujos de Efectivo Indirecto.xlsx"
                         template_cf_path = os.path.join(empresa_path, cf_filename)
@@ -673,6 +672,7 @@ def render(empresa_seleccionada, empresa_path):
                             else:
                                 map_pl_copy = map_pl_copy.copy()
                             
+                            target_lang = st.session_state.get('idioma_reporte', 'es')
                             cf_engine = CashFlowGenerator(template_cf_path)
                             ex_cf, matriz_audit = cf_engine.generate(
                                 empresa=empresa_seleccionada,
@@ -682,7 +682,8 @@ def render(empresa_seleccionada, empresa_path):
                                 map_pl_df=map_pl_copy,
                                 method=metodo_flujo,
                                 is_consolidado=False,
-                                scale_factor=scale_factor_cf
+                                scale_factor=scale_factor_cf,
+                                target_lang=target_lang
                             )
                             
                             st.session_state['flujo_excel_binary'] = ex_cf.getvalue()
@@ -803,10 +804,6 @@ def render(empresa_seleccionada, empresa_path):
                 for col in display_cf.columns[1:]:
                     display_cf[col] = pd.to_numeric(display_cf[col], errors='coerce')
                 
-                import sys
-                import importlib
-                import src.reporting.formatting
-                importlib.reload(sys.modules['src.reporting.formatting'])
                 from src.reporting.formatting import apply_corporate_style
                 styled_cf = apply_corporate_style(display_cf, excel_bytes=st.session_state.get('flujo_excel_binary'), unit=unidad_medida_cf)
                 st.markdown(styled_cf.to_html(index=False), unsafe_allow_html=True)
@@ -903,13 +900,29 @@ def render(empresa_seleccionada, empresa_path):
             if 'preview_df' not in st.session_state or st.session_state['preview_df'] is None:
                 tmpl_bal = os.path.join(empresa_path, "Balance clasificado.xlsx")
                 tb_act = st.session_state.get('tb_df')
+                if tb_act is None or (isinstance(tb_act, pd.DataFrame) and tb_act.empty):
+                    from src.models.trial_balance_db import TrialBalanceDB
+                    tb_act = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+                    st.session_state['tb_df'] = tb_act
+
+                tb_comp = st.session_state.get('tb_df_comp')
+                if (tb_comp is None or (isinstance(tb_comp, pd.DataFrame) and tb_comp.empty)) and periodo_comp != "Ninguno":
+                    from src.models.trial_balance_db import TrialBalanceDB
+                    tb_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp)
+                    st.session_state['tb_df_comp'] = tb_comp
+
                 map_bal = st.session_state.get('map_balance_df')
+                if map_bal is None or (isinstance(map_bal, pd.DataFrame) and map_bal.empty):
+                    map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+                    if os.path.exists(map_bal_path):
+                        map_bal = pd.read_excel(map_bal_path, dtype=str)
+                        st.session_state['map_balance_df'] = map_bal
+
                 if os.path.exists(tmpl_bal) and tb_act is not None and map_bal is not None:
                     from src.reporting.balance_generator import BalanceGenerator
                     from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
                     import openpyxl
                     b_engine = BalanceGenerator(tmpl_bal)
-                    tb_comp = st.session_state.get('tb_df_comp')
                     b_out = b_engine.generate(tb_act, map_bal, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
                     st.session_state['balance_excel_binary'] = b_out.getvalue()
                     b_out.seek(0)
@@ -927,18 +940,16 @@ def render(empresa_seleccionada, empresa_path):
             # Auto-generar ER si no está en sesión
             if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
                 tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
-                from src.core.sabana_builder import build_pl_sabana
                 pl_act = st.session_state.get('pl_df')
-                map_pl = st.session_state.get('map_pl_df')
-                tb_act = st.session_state.get('tb_df')
-                if (pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty)) and tb_act is not None and map_pl is not None:
-                    pl_act = build_pl_sabana(None, map_pl, tb_act)
+                if pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty):
+                    from src.models.pl_cubo_db import PlCuboDB
+                    pl_act = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
                     st.session_state['pl_df'] = pl_act
 
                 pl_cmp = st.session_state.get('pl_df_comp')
-                tb_cmp = st.session_state.get('tb_df_comp')
-                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and tb_cmp is not None and map_pl is not None and periodo_comp != "Ninguno":
-                    pl_cmp = build_pl_sabana(None, map_pl, tb_cmp)
+                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and periodo_comp != "Ninguno":
+                    from src.models.pl_cubo_db import PlCuboDB
+                    pl_cmp = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp)
                     st.session_state['pl_df_comp'] = pl_cmp
 
                 if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
@@ -965,8 +976,9 @@ def render(empresa_seleccionada, empresa_path):
                             bal_df = st.session_state['preview_df'].copy()
                             pl_df = st.session_state['er_preview_df'].copy()
                             
+                            target_lang = st.session_state.get('idioma_reporte', 'es')
                             pat_engine = PatrimonioGenerator(template_pat_path)
-                            ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None, empresa=empresa_seleccionada)
+                            ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None, empresa=empresa_seleccionada, target_lang=target_lang)
                             st.session_state['pat_excel_binary'] = ex_pat
                             
                             ex_pat.seek(0)
@@ -991,10 +1003,6 @@ def render(empresa_seleccionada, empresa_path):
                 disp[col] = pd.to_numeric(disp[col], errors='coerce')
             
 
-            import sys
-            import importlib
-            import src.reporting.formatting
-            importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
             styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'), unit=st.session_state.get('um_bal', 'Miles de pesos (M$)'))
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
@@ -1016,6 +1024,9 @@ def render(empresa_seleccionada, empresa_path):
                     final_docx_pat = generate_word_report(
                         st.session_state['pat_preview_df'], 
                         title="Estado de Cambios en el Patrimonio",
+                        subtitle=f"Expresado en {st.session_state.get('um_bal', 'Miles de pesos (M$)')}",
+                        entity_name=empresa_seleccionada.replace('[GRUPO] ', ''),
+                        unit=st.session_state.get('um_bal', 'Miles de pesos (M$)'),
                         excel_bytes=st.session_state.get('pat_excel_binary')
                     )
                     st.download_button(
@@ -1091,13 +1102,15 @@ def render(empresa_seleccionada, empresa_path):
                         else:
                             pl_df = st.session_state['er_preview_df'].copy()
                             
+                            target_lang = st.session_state.get('idioma_reporte', 'es')
                             ori_engine = OriGenerator(template_ori_path)
                             ex_ori = ori_engine.generate(
                                 pl_df, 
                                 periodo_actual_str=str(periodo_actual), 
                                 periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None,
                                 bal_preview_df=st.session_state.get('preview_df'),
-                                empresa=empresa_seleccionada
+                                empresa=empresa_seleccionada,
+                                target_lang=target_lang
                             )
                             st.session_state['ori_excel_binary'] = ex_ori
                             
@@ -1167,12 +1180,8 @@ def render(empresa_seleccionada, empresa_path):
                 disp[col] = pd.to_numeric(disp[col], errors='coerce')
             
 
-            import sys
-            import importlib
-            import src.reporting.formatting
-            importlib.reload(sys.modules['src.reporting.formatting'])
             from src.reporting.formatting import apply_corporate_style
-            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('ori_excel_binary'), unit=st.session_state.get('um_er', 'M$'))
+            styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('ori_excel_binary'), unit=st.session_state.get('um_er', 'M$'), target_lang=target_lang)
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")

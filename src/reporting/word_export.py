@@ -103,26 +103,28 @@ def apply_table_column_widths(table, num_cols, total_width_inches=7.1):
         hdr_trPr.append(parse_xml(f'<w:tblHeader {nsdecls("w")}/>'))
 
 
-def format_accounting_val(val, is_category_header=False, row_name=""):
+def format_accounting_val(val, is_category_header=False, row_name="", target_lang='es'):
     """Formatea valores numéricos contables idéntico a la plantilla Excel y pantalla."""
     if pd.isna(val) or val is None or str(val).strip().lower() in ["", "nan", "none"]:
         return ""
         
-    is_per_share = "por acción" in str(row_name).lower() or "por accion" in str(row_name).lower()
+    is_per_share = any(x in str(row_name).lower() for x in ["por acción", "por accion", "per share"])
+    is_en = (str(target_lang).lower() == 'en')
     
     # Si es número de punto flotante o entero
     if isinstance(val, (int, float)):
         if is_per_share or (isinstance(val, float) and abs(val) < 10.0 and val != 0 and not val.is_integer()):
             if val < 0:
-                return f"({abs(val):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
+                return f"({abs(val):,.2f})" if is_en else f"({abs(val):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
             else:
-                return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                return f"{val:,.2f}" if is_en else f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         if val == 0:
-            return "0,00" if is_per_share else ("0" if is_category_header else "-")
+            zero_str = "0.00" if (is_per_share and is_en) else ("0,00" if is_per_share else ("0" if is_category_header else "-"))
+            return zero_str
         elif val < 0:
-            return f"({abs(val):,.0f})".replace(",", ".")
+            return f"({abs(val):,.0f})" if is_en else f"({abs(val):,.0f})".replace(",", ".")
         else:
-            return f"{val:,.0f}".replace(",", ".")
+            return f"{val:,.0f}" if is_en else f"{val:,.0f}".replace(",", ".")
             
     try:
         num = float(str(val).replace(",", ""))
@@ -130,15 +132,16 @@ def format_accounting_val(val, is_category_header=False, row_name=""):
             return ""
         if is_per_share or (abs(num) < 10.0 and num != 0 and not num.is_integer()):
             if num < 0:
-                return f"({abs(num):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
+                return f"({abs(num):,.2f})" if is_en else f"({abs(num):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
             else:
-                return f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                return f"{num:,.2f}" if is_en else f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         if num == 0:
-            return "0,00" if is_per_share else ("0" if is_category_header else "-")
+            zero_str = "0.00" if (is_per_share and is_en) else ("0,00" if is_per_share else ("0" if is_category_header else "-"))
+            return zero_str
         elif num < 0:
-            return f"({abs(num):,.0f})".replace(",", ".")
+            return f"({abs(num):,.0f})" if is_en else f"({abs(num):,.0f})".replace(",", ".")
         else:
-            return f"{num:,.0f}".replace(",", ".")
+            return f"{num:,.0f}" if is_en else f"{num:,.0f}".replace(",", ".")
     except:
         if "00:00:00" in str(val):
             return str(val).split(" ")[0]
@@ -151,7 +154,7 @@ def clean_str(s):
     return str(s).replace("\xa0", " ").strip().lower()
 
 
-def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, unit=None, is_miles=None, col_indices=None, compact=False):
+def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, unit=None, is_miles=None, col_indices=None, compact=False, target_lang=None):
     """
     Rellena una tabla de Word aplicando exactamente el mismo formato que la pantalla:
     - Cabecera blanca con borde superior e inferior negro (2px).
@@ -183,11 +186,22 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
             is_miles = False
 
     # 1. CABECERA DE TABLA (Idéntica a pantalla: fondo blanco, texto negro negrita, bordes negros arriba y abajo)
+    if target_lang is None:
+        try:
+            import streamlit as st
+            target_lang = st.session_state.get('idioma_reporte', 'es')
+        except Exception:
+            target_lang = 'es'
+
+    from src.core.ifrs_glossary import translate_ifrs_term
+
     hdr_cells = table.rows[0].cells
     for i, col_name in enumerate(df_cols):
         header_text = str(col_name)
+        if str(target_lang).lower() == 'en':
+            header_text = translate_ifrs_term(header_text, target_lang='en')
         if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"])):
-            if "M$" not in header_text:
+            if "M$" not in header_text and "Th$" not in header_text:
                 header_text = f"{header_text}\nM$"
         hdr_cells[i].text = header_text
         set_cell_bg(hdr_cells[i], "FFFFFF")
@@ -238,7 +252,10 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                 ws = wb.active
 
             ws_cols_mapping = {}
-            if col_indices:
+            excel_cols_from_attrs = getattr(df, 'attrs', {}).get('excel_cols')
+            if excel_cols_from_attrs and len(excel_cols_from_attrs) == num_cols:
+                ws_cols_mapping = {j: excel_cols_from_attrs[j] for j in range(num_cols)}
+            elif col_indices:
                 ws_cols_mapping = {j: col_indices[j] for j in range(num_cols)}
             else:
                 excel_name_col = 1
@@ -266,12 +283,15 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
                 excel_date_cols = []
                 for col in range(1, ws.max_column + 1):
-                    for row in range(1, 15):
+                    for row in range(1, 7):
                         val = ws.cell(row=row, column=col).value
                         if val is not None:
+                            val_str = str(val).strip()
+                            if any(k in val_str.lower() for k in ['saldo inicial', 'saldo final', 'adiciones', 'informe', 'validacion']):
+                                continue
                             is_date = (
                                 isinstance(val, (datetime.datetime, datetime.date)) or
-                                (isinstance(val, str) and re.search(r'20\d{2}', val))
+                                bool(re.search(r'\b20\d{2}\b', val_str))
                             )
                             if is_date:
                                 excel_date_cols.append(col)
@@ -319,6 +339,7 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                     ws_cols_mapping[j] = excel_numeric_cols[idx_m]
 
             # Mapeo secuencial robusto entre DataFrame y Excel (para manejar reportes con múltiples bloques como Patrimonio)
+            excel_name_col = ws_cols_mapping.get(0, 1)
             row_top_borders = {}
             row_bottom_borders = {}
             curr_excel_row = 1
@@ -374,16 +395,27 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                                     except:
                                         pass
 
-                        align = WD_ALIGN_PARAGRAPH.RIGHT if (j in numeric_df_cols or j > 0) else WD_ALIGN_PARAGRAPH.LEFT
-                        if str(df_cols[j]).lower().strip() in ['nota', 'notas']:
+                        val_curr = df_row.iloc[j] if j < len(df_row) else None
+                        val_str = str(val_curr).strip() if val_curr is not None else ""
+                        
+                        def _is_num_cell_word(v):
+                            if pd.isna(v) or v is None or v == "": return False
+                            if isinstance(v, (int, float)): return True
+                            sv = str(v).strip()
+                            if sv in ["-", "—", "–"]: return True
+                            c_v = sv.replace(".", "").replace(",", "").replace("(", "").replace(")", "").replace("$", "").replace("%", "").replace("M$", "").strip()
+                            return c_v.lstrip("-+").isdigit()
+
+                        if _is_num_cell_word(val_curr):
+                            align = WD_ALIGN_PARAGRAPH.RIGHT
+                        elif str(df_cols[j]).lower().strip() in ['nota', 'notas']:
                             align = WD_ALIGN_PARAGRAPH.CENTER
-                        if cell.alignment and cell.alignment.horizontal:
-                            if cell.alignment.horizontal == 'center':
-                                align = WD_ALIGN_PARAGRAPH.CENTER
-                            elif cell.alignment.horizontal == 'left':
-                                align = WD_ALIGN_PARAGRAPH.LEFT
-                            elif cell.alignment.horizontal == 'right':
+                        else:
+                            is_num_col_hdr = (j >= 2) and (val_str.lower() in ["m$", "$", "%", "activos", "pasivos"] or any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202"]))
+                            if is_num_col_hdr:
                                 align = WD_ALIGN_PARAGRAPH.RIGHT
+                            else:
+                                align = WD_ALIGN_PARAGRAPH.LEFT
 
                         fill_bg = None
                         if cell.fill and cell.fill.fill_type == 'solid' and cell.fill.fgColor:
@@ -484,7 +516,9 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
         for j, col_name in enumerate(df_cols):
             val = row[col_name]
-            text_val = format_accounting_val(val, is_category_header=is_category_header, row_name=first_cell_str)
+            text_val = format_accounting_val(val, is_category_header=is_category_header, row_name=first_cell_str, target_lang=target_lang)
+            if j == 0 and str(target_lang).lower() == 'en' and text_val:
+                text_val = translate_ifrs_term(text_val, target_lang='en')
             
             cell = row_cells[j]
             cell.text = text_val
@@ -649,10 +683,34 @@ class WordExportEngine:
         return output
 
     @staticmethod
-    def generate_notes_word(elements, title="Nota", unit="M$", note_code=None, excel_bytes=None, *args, **kwargs):
+    def generate_notes_word(elements, title="Nota", unit="M$", note_code=None, excel_bytes=None, target_lang=None, *args, **kwargs):
         """
         Genera documento Word de Notas con formato contable idéntico a pantalla.
         """
+        if target_lang is None:
+            try:
+                import streamlit as st
+                target_lang = st.session_state.get('idioma_reporte', 'es')
+            except Exception:
+                target_lang = 'es'
+
+        from src.core.ifrs_glossary import translate_ifrs_term
+
+        is_en = str(target_lang).lower() == 'en'
+        display_title = translate_ifrs_term(title, target_lang='en') if is_en else title
+
+        if is_en:
+            if "Miles" in str(unit):
+                display_unit = "Thousands of Pesos (M$)"
+            elif "Millones" in str(unit):
+                display_unit = "Millions of Pesos (MM$)"
+            elif "Unidades" in str(unit):
+                display_unit = "Units ($)"
+            else:
+                display_unit = translate_ifrs_term(str(unit), target_lang='en')
+        else:
+            display_unit = f"Expresado en {unit}" if not str(unit).startswith("Expresado") else unit
+
         doc = Document()
         
         for section in doc.sections:
@@ -661,7 +719,7 @@ class WordExportEngine:
             section.left_margin = Inches(0.85)
             section.right_margin = Inches(0.85)
         
-        heading = doc.add_heading(title, level=1)
+        heading = doc.add_heading(display_title, level=1)
         heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for r in heading.runs:
             r.font.name = 'Arial'
@@ -669,7 +727,7 @@ class WordExportEngine:
             r.font.color.rgb = RGBColor(31, 78, 120)
             r.font.bold = True
             
-        subtitle = doc.add_paragraph(f"Expresado en {unit}")
+        subtitle = doc.add_paragraph(f"({display_unit})" if not display_unit.startswith("(") else display_unit)
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for r in subtitle.runs:
             r.font.name = 'Arial'
@@ -680,27 +738,41 @@ class WordExportEngine:
         
         table_counter = 0
         for item in elements:
-            if len(item) == 3:
+            if len(item) == 4:
+                el_type, el_val, sh_name, explicit_code = item
+            elif len(item) == 3:
                 el_type, el_val, sh_name = item
+                explicit_code = None
             else:
                 el_type, el_val = item[0], item[1]
                 sh_name = None
+                explicit_code = None
 
             if el_type == "text":
                 p = doc.add_paragraph()
                 p.paragraph_format.space_before = Pt(4)
                 p.paragraph_format.space_after = Pt(2)
-                run = p.add_run(str(el_val))
+                txt_disp = str(el_val)
+                if is_en:
+                    txt_disp = translate_ifrs_term(txt_disp, target_lang='en')
+                run = p.add_run(txt_disp)
                 run.font.bold = True
                 run.font.name = 'Arial'
                 run.font.size = Pt(9.5)
             else:
-                chunk_df = el_val.dropna(how='all', axis=0).reset_index(drop=True)
+                valid_cols = [c for c in el_val.columns if not el_val[c].dropna().empty]
+                chunk_df = el_val[valid_cols].dropna(how='all', axis=0).reset_index(drop=True)
                 if chunk_df.empty:
                     continue
+                raw_excel_cols = getattr(el_val, 'attrs', {}).get('excel_cols')
+                if raw_excel_cols and len(raw_excel_cols) >= len(valid_cols):
+                    chunk_df.attrs['excel_cols'] = [raw_excel_cols[c] if isinstance(c, int) and c < len(raw_excel_cols) else raw_excel_cols[i] for i, c in enumerate(valid_cols)]
                     
-                table_counter += 1
-                sub_code = f"{note_code}.{table_counter}" if note_code else f"Cuadro {table_counter}"
+                if explicit_code:
+                    sub_code = explicit_code
+                else:
+                    table_counter += 1
+                    sub_code = f"{note_code}.{table_counter}" if note_code else (f"Table {table_counter}" if is_en else f"Cuadro {table_counter}")
                 
                 p = doc.add_paragraph()
                 p.paragraph_format.space_before = Pt(6)
@@ -713,7 +785,7 @@ class WordExportEngine:
                 
                 num_cols = len(chunk_df.columns)
                 table = doc.add_table(rows=1, cols=num_cols)
-                populate_word_table_styled(table, chunk_df, excel_bytes=excel_bytes, sheet_name=sh_name, unit=unit)
+                populate_word_table_styled(table, chunk_df, excel_bytes=excel_bytes, sheet_name=sh_name, unit=unit, target_lang=target_lang)
                 doc.add_paragraph()
                 
         output = BytesIO()
@@ -726,6 +798,20 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
     """
     Exporta cualquier estado financiero (ER, Flujo, Patrimonio, ORI, etc.) a Word con formato idéntico a pantalla.
     """
+    target_lang = kwargs.get('target_lang')
+    if target_lang is None:
+        try:
+            import streamlit as st
+            target_lang = st.session_state.get('idioma_reporte', 'es')
+        except Exception:
+            target_lang = 'es'
+
+    from src.core.ifrs_glossary import translate_ifrs_term
+
+    if str(target_lang).lower() == 'en':
+        title = translate_ifrs_term(title, target_lang='en')
+        subtitle = translate_ifrs_term(subtitle, target_lang='en')
+
     doc = Document()
     
     for section in doc.sections:
@@ -766,7 +852,7 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
         
     num_cols = len(df.columns)
     table = doc.add_table(rows=1, cols=num_cols)
-    populate_word_table_styled(table, df, excel_bytes=excel_bytes, sheet_name=sheet_name, unit=unit or subtitle, is_miles=is_miles)
+    populate_word_table_styled(table, df, excel_bytes=excel_bytes, sheet_name=sheet_name, unit=unit or subtitle, is_miles=is_miles, target_lang=target_lang)
 
     # Pie inferior
     p_footer_space = doc.add_paragraph()

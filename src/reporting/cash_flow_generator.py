@@ -6,6 +6,8 @@ from src.models.database import SessionLocal
 from src.models.cash_flow_db import CashFlowAdjustment
 from src.models.trial_balance_db import TrialBalanceDB
 
+from src.core.ifrs_glossary import translate_ifrs_term
+
 class CashFlowGenerator:
     def __init__(self, template_path):
         self.template_path = template_path
@@ -20,7 +22,18 @@ class CashFlowGenerator:
                  is_consolidado=False, 
                  consolidated_hoja_trabajo_df=None,
                  consolidated_hoja_trabajo_comp_df=None,
-                 scale_factor=1.0):
+                 scale_factor=1.0,
+                 target_lang=None):
+        """
+        Genera el Estado de Flujos de Efectivo (EFE) inyectando los saldos en la plantilla.
+        Soporta cálculo a nivel de cuenta contable y aplicación de ajustes de depuración (Ingreso/Egreso Caja).
+        """
+        if target_lang is None:
+            try:
+                import streamlit as st
+                target_lang = st.session_state.get('idioma_reporte', 'es')
+            except Exception:
+                target_lang = 'es'
         """
         Genera el Estado de Flujos de Efectivo (EFE) inyectando los saldos en la plantilla.
         Soporta cálculo a nivel de cuenta contable y aplicación de ajustes de depuración (Ingreso/Egreso Caja).
@@ -338,15 +351,18 @@ class CashFlowGenerator:
                 elif "incremento" in nm_norm and "neto" in nm_norm:
                     ws.cell(row=row, column=val24_col_idx).value = (cash_actual_comp - cash_prior_comp) / scale_factor
 
+                if str(target_lang).lower() == 'en':
+                    ws.cell(row=row, column=name_col_idx).value = translate_ifrs_term(cell_name.strip(), target_lang='en')
+
         # Reemplazar cabeceras de fechas en el excel si están especificadas
         if periodo_actual_str and periodo_comp_str:
             for r in range(1, 10):
                 c25 = ws.cell(row=r, column=val25_col_idx)
                 c24 = ws.cell(row=r, column=val24_col_idx)
                 if c25.value and isinstance(c25.value, str) and ("20" in c25.value or "Actual" in c25.value or "31-12" in c25.value):
-                    c25.value = self._format_period_to_spanish_date(periodo_actual_str)
+                    c25.value = self._format_period_to_spanish_date(periodo_actual_str, target_lang=target_lang)
                 if c24.value and isinstance(c24.value, str) and ("20" in c24.value or "Anterior" in c24.value or "31-12" in c24.value):
-                    c24.value = self._format_period_to_spanish_date(periodo_comp_str)
+                    c24.value = self._format_period_to_spanish_date(periodo_comp_str, target_lang=target_lang)
 
         output = BytesIO()
         wb.save(output)
@@ -544,7 +560,7 @@ class CashFlowGenerator:
             pass
         return None
 
-    def _format_period_to_spanish_date(self, period_str):
+    def _format_period_to_spanish_date(self, period_str, target_lang='es'):
         if not period_str:
             return ""
         try:
@@ -554,12 +570,20 @@ class CashFlowGenerator:
                 year = int(parts[0])
                 month = int(parts[1])
                 last_day = calendar.monthrange(year, month)[1]
-                months_es = {
-                    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
-                    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
-                    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
-                }
-                return f"{last_day} de {months_es[month]} {year}"
+                if str(target_lang).lower() == 'en':
+                    months_en = {
+                        1: "January", 2: "February", 3: "March", 4: "April",
+                        5: "May", 6: "June", 7: "July", 8: "August",
+                        9: "September", 10: "October", 11: "November", 12: "December"
+                    }
+                    return f"{months_en[month]} {last_day}, {year}"
+                else:
+                    months_es = {
+                        1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+                        5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+                        9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+                    }
+                    return f"{last_day} de {months_es[month]} {year}"
         except:
             pass
         return period_str

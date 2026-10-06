@@ -6,6 +6,20 @@ import re
 import datetime
 import calendar
 
+def normalize_company_name(name):
+    if not name:
+        return ""
+    n = name.strip().lower()
+    if 'pacifico' in n:
+        return 'pacifico'
+    if 'parent' in n:
+        return 'parent'
+    if 'holdco' in n or 'holco' in n:
+        return 'holdco'
+    if 'consolidado' in n or 'grupo' in n:
+        return 'consolidado'
+    return n
+
 def clean_label(text):
     if text is None:
         return ""
@@ -106,6 +120,152 @@ SECTION_TITLE_TO_PL_RUBRO = {
     "otros ingresos por funcion": "otros ingresos por funcion",
 }
 
+def shift_formula_rows(formula_str, row_shift):
+    if not isinstance(formula_str, str) or not formula_str.startswith('='):
+        return formula_str
+    def replace_cell_ref(match):
+        col = match.group(1)
+        row = int(match.group(2))
+        return f"{col}{row + row_shift}"
+    return re.sub(r'([A-Za-z]+)(\d+)', replace_cell_ref, formula_str)
+
+def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_comp_str="2025-Dic", ext_cmp_ws=None):
+    if not periodo_comp_str or str(periodo_comp_str).strip() in ["None", "Ninguno", ""]:
+        for r in range(1, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                cell = ws.cell(r, c)
+                if cell.value and isinstance(cell.value, str) and "[COMPARATIVO]" in cell.value.upper():
+                    cleaned = re.sub(r'\[COMPARATIVO\]', '', cell.value, flags=re.IGNORECASE).strip()
+                    cell.value = cleaned if cleaned else None
+        return
+
+    act_year = re.search(r'20\d{2}', str(periodo_actual_str))
+    act_yr_str = act_year.group(0) if act_year else "2026"
+
+    cmp_year = re.search(r'20\d{2}', str(periodo_comp_str))
+    cmp_yr_str = cmp_year.group(0) if cmp_year else "2025"
+
+    act_date_str = format_date_dots(periodo_actual_str)
+    cmp_date_str = format_date_dots(periodo_comp_str)
+    act_init_str = f"01.01.{act_yr_str}"
+    cmp_init_str = f"01.01.{cmp_yr_str}"
+
+    comp_locations = []
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            cell_val = ws.cell(r, c).value
+            if cell_val and isinstance(cell_val, str) and "[COMPARATIVO]" in cell_val.upper():
+                comp_locations.append((r, c))
+
+    for comp_r, comp_c in reversed(comp_locations):
+        start_row = comp_r
+
+        # Localizar si este bloque comparativo tiene código #Nxx.y en ext_cmp_ws para ajustar desfase de filas
+        comp_code_ext_r0 = None
+        if ext_cmp_ws:
+            marker_str = str(ws.cell(comp_r, comp_c).value or '')
+            m_code = re.search(r'#N\d+\.\d+', marker_str)
+            if m_code:
+                code_tag = m_code.group(0)
+                for r_scan in range(1, ext_cmp_ws.max_row + 1):
+                    for c_scan in range(1, ext_cmp_ws.max_column + 1):
+                        v_scan = ext_cmp_ws.cell(r_scan, c_scan).value
+                        if v_scan and isinstance(v_scan, str) and code_tag in v_scan:
+                            comp_code_ext_r0 = r_scan
+                            break
+                    if comp_code_ext_r0 is not None:
+                        break
+
+        end_row = start_row
+        for r in range(start_row + 2, min(start_row + 35, ws.max_row + 1)):
+            label_cell = ""
+            for c_lbl in range(1, min(4, ws.max_column + 1)):
+                v_lbl = ws.cell(r, c_lbl).value
+                if v_lbl is not None:
+                    label_cell += " " + str(v_lbl).strip().lower()
+            
+            if "saldo final" in label_cell or ("total" in label_cell and "sub" not in label_cell):
+                end_row = r
+                break
+        
+        if end_row <= start_row:
+            end_row = min(start_row + 15, ws.max_row)
+
+        # 1. Actualizar fechas en el bloque actual (Block 1)
+        for r_orig in range(start_row, end_row + 1):
+            for c_orig in range(1, ws.max_column + 1):
+                cell_o = ws.cell(r_orig, c_orig)
+                if cell_o.value and isinstance(cell_o.value, str):
+                    val_low = cell_o.value.strip().lower()
+                    if "saldo final" in val_low:
+                        cell_o.value = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', act_date_str, cell_o.value)
+                    elif "saldo inicial" in val_low:
+                        cell_o.value = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', act_init_str, cell_o.value)
+
+        block_height = end_row - start_row + 1
+        insert_at = end_row + 2
+        row_shift = insert_at - start_row
+
+        ws.insert_rows(insert_at, amount=block_height + 1)
+
+        # 2. Construir el bloque comparativo (Block 2)
+        for offset in range(block_height):
+            orig_r = start_row + offset
+            target_r = insert_at + offset
+            for c in range(1, ws.max_column + 1):
+                orig_cell = ws.cell(orig_r, c)
+                target_cell = ws.cell(target_r, c)
+                
+                val = orig_cell.value
+                if val is not None:
+                    if isinstance(val, (int, float)) and val == int(act_yr_str):
+                        target_cell.value = int(cmp_yr_str)
+                    elif isinstance(val, str):
+                        if val.startswith('='):
+                            target_cell.value = shift_formula_rows(val, row_shift)
+                        else:
+                            val_new = val
+                            val_lower = val.strip().lower()
+                            if "saldo inicial" in val_lower:
+                                val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_init_str, val_new)
+                            elif "saldo final" in val_lower:
+                                val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_date_str, val_new)
+                            else:
+                                val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_date_str, val_new)
+
+                            val_new = val_new.replace(act_yr_str, cmp_yr_str)
+                            val_new = re.sub(r'\[COMPARATIVO\]', '', val_new, flags=re.IGNORECASE).strip()
+                            target_cell.value = val_new if val_new else None
+                    else:
+                        if ext_cmp_ws:
+                            ext_row = (comp_code_ext_r0 + offset) if comp_code_ext_r0 is not None else orig_r
+                            if ext_row <= ext_cmp_ws.max_row:
+                                cmp_val = ext_cmp_ws.cell(ext_row, c).value
+                                target_cell.value = cmp_val
+                            else:
+                                target_cell.value = val if isinstance(val, (int, float)) and val != 0 else None
+                        else:
+                            target_cell.value = val if isinstance(val, (int, float)) and val != 0 else None
+
+                if orig_cell.has_style:
+                    target_cell.number_format = orig_cell.number_format
+                    try:
+                        import openpyxl
+                        target_cell.font = openpyxl.styles.Font(
+                            name=orig_cell.font.name,
+                            size=orig_cell.font.size,
+                            bold=orig_cell.font.bold,
+                            italic=orig_cell.font.italic,
+                            color=orig_cell.font.color
+                        )
+                    except Exception:
+                        pass
+
+        marker_cell = ws.cell(comp_r, comp_c)
+        if marker_cell.value and isinstance(marker_cell.value, str):
+            cleaned = re.sub(r'\[COMPARATIVO\]', '', marker_cell.value, flags=re.IGNORECASE).strip()
+            marker_cell.value = cleaned if cleaned else None
+
 def detect_row_section_rubro(ws, current_row):
     for r in range(current_row - 1, 0, -1):
         for c in range(1, min(6, ws.max_column + 1)):
@@ -199,6 +359,12 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
         if filter_sign == 'depr' and val > 0:
             continue
 
+        sheet_title_low = str(ws.title).strip().lower()
+        if sheet_title_low in ['intangibles', 'intangible']:
+            clasif_lbl = str(detail.get('clasificacion_bal', '')).lower()
+            if clasif_lbl and 'intangib' not in clasif_lbl:
+                continue
+
         if status != "unknown":
             clasif = detail['clasificacion_bal'].lower()
             is_nc = any(nc_kw in clasif for nc_kw in ["no corriente", "no-corriente", "largo plazo", "propiedad", "activo fijo", "intangib", "derecho", "plusvalia", "diferid"])
@@ -213,20 +379,27 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
 
 
 def format_date_dots(period_str):
-    if not period_str or period_str == "Ninguno":
+    if not period_str or str(period_str).strip() in ["Ninguno", "None", ""]:
         return ""
     try:
-        parts = period_str.strip().split('-')
+        parts = str(period_str).strip().split('-')
         if len(parts) >= 2:
-            year = parts[0]
-            month = parts[1]
-            last_day = str(calendar.monthrange(int(year), int(month))[1]).zfill(2)
-            return f"{last_day}.{month}.{year}"
-    except:
+            year = int(parts[0])
+            m_part = parts[1].strip()
+            months = {'ene':1,'feb':2,'mar':3,'abr':4,'may':5,'jun':6,'jul':7,'ago':8,'sep':9,'oct':10,'nov':11,'dic':12,
+                      'jan':1,'apr':4,'aug':8,'dec':12}
+            if m_part.isdigit():
+                month = int(m_part)
+            else:
+                month = months.get(m_part.lower()[:3], 12)
+            last_day = str(calendar.monthrange(year, month)[1]).zfill(2)
+            m_two = str(month).zfill(2)
+            return f"{last_day}.{m_two}.{year}"
+    except Exception:
         pass
-    return period_str
+    return str(period_str)
 
-def format_period_to_spanish_date(period_str):
+def format_period_to_spanish_date(period_str, target_lang='es'):
     if not period_str or period_str == "Ninguno":
         return ""
     try:
@@ -235,13 +408,20 @@ def format_period_to_spanish_date(period_str):
             year = int(parts[0])
             month = int(parts[1])
             last_day = calendar.monthrange(year, month)[1]
-            months_es = {
-                1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
-                5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
-                9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
-            }
-            month_name = months_es[month]
-            return f"{last_day} de {month_name} {year}"
+            if str(target_lang).lower() == 'en':
+                months_en = {
+                    1: "January", 2: "February", 3: "March", 4: "April",
+                    5: "May", 6: "June", 7: "July", 8: "August",
+                    9: "September", 10: "October", 11: "November", 12: "December"
+                }
+                return f"{months_en[month]} {last_day}, {year}"
+            else:
+                months_es = {
+                    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+                    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+                    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
+                }
+                return f"{last_day} de {months_es[month]} {year}"
     except Exception:
         pass
     return period_str
@@ -613,7 +793,8 @@ class NoteGenerator:
                  periodo_actual_str=None,
                  periodo_comp_str=None,
                  map_balance_df=None,
-                 map_pl_df=None):
+                 map_pl_df=None,
+                 target_lang='es'):
         """
         Genera un Excel de notas filtrando y llenando las pestañas indicadas 
         según el contexto consolidado o individual.
@@ -625,8 +806,15 @@ class NoteGenerator:
         wb = load_workbook(self.template_path)
         
         # 1. Eliminar hojas no relacionadas (preservando DB_DATA)
+        matching_sheets = [s for s in sheet_names if s in wb.sheetnames]
+        fallback_name = None
+        if not matching_sheets and "DB_DATA" not in wb.sheetnames:
+            fallback_name = sheet_names[0] if sheet_names else "Nota"
+            ws_fb = wb.create_sheet(title=fallback_name)
+            ws_fb.cell(row=1, column=1, value=f"La nota '{fallback_name}' no se encuentra en la plantilla actual.")
+
         for name in list(wb.sheetnames):
-            if name not in sheet_names and name != "DB_DATA":
+            if name not in sheet_names and name != "DB_DATA" and name != fallback_name:
                 wb.remove(wb[name])
 
         # 1.5 Volcar base de datos plana a DB_DATA
@@ -795,8 +983,8 @@ class NoteGenerator:
                 col_year = None
                 col_period_type = None
                 
-                # Buscar en filas 1 a 12
-                for r in range(1, 13):
+                # Buscar en filas 1 a 6 (cabeceras legítimas de columnas)
+                for r in range(1, 7):
                     val = get_merged_cell_value(ws, r, c)
                     if val is None:
                         continue
@@ -810,26 +998,33 @@ class NoteGenerator:
 
                     val_lower = str(val).strip().lower()
                     
-                    # Buscar coincidencia dinámica con alguna empresa real
-                    for co in real_companies:
-                        co_clean = co.replace("SpA", "").replace("Parent", "").strip().lower()
-                        if len(co_clean) > 2 and co_clean in val_lower:
-                            col_entity = co
-                            break
+                    # Buscar coincidencia con la empresa activa primero
+                    act_norm = normalize_company_name(active_entity_name)
+                    if act_norm and act_norm in val_lower:
+                        col_entity = active_entity_name
+                    else:
+                        for co in real_companies:
+                            co_norm = normalize_company_name(co)
+                            if co_norm and co_norm in val_lower:
+                                col_entity = co
+                                break
                             
                     if not col_entity:
                         if 'consolidado' in val_lower or 'grupo' in val_lower:
                             col_entity = 'Consolidado'
                         elif 'pacifico' in val_lower:
-                            col_entity = 'Pacifico SpA'
+                            col_entity = active_entity_name if 'pacifico' in active_entity_name.lower() else 'Pacifico Cable SpA'
+                        elif 'parent' in val_lower:
+                            col_entity = active_entity_name if 'parent' in active_entity_name.lower() else 'Db Terra Chile Parent SpA'
                         elif 'holdco' in val_lower or 'holco' in val_lower:
-                            col_entity = 'DB Holdco Terra SpA'
+                            col_entity = active_entity_name if 'holdco' in active_entity_name.lower() else 'Db Terra Chile Holdco SpA'
                     
-                    # Buscar año en texto
+                    # Buscar año en texto (no confundir filas descriptivas de movimientos ni notas de auditoría con cabeceras)
                     if col_year is None:
-                        match = re.search(r'(202\d)', val_lower)
-                        if match:
-                            col_year = int(match.group(1))
+                        if not any(k in val_lower for k in ['saldo inicial', 'saldo final', 'adiciones', 'desapropiaciones', 'bajas', 'transferencias', 'informe', 'validacion']):
+                            match = re.search(r'\b(202\d)\b', val_lower)
+                            if match:
+                                col_year = int(match.group(1))
                         
                     # Usar límites de palabra o regex más estrictos para evitar falsos positivos con 'composición', 'compañía', etc.
                     if re.search(r'\bcomparativ[ao]s?\b|\bcomp\b|\bcomparativa\b', val_lower):
@@ -838,19 +1033,47 @@ class NoteGenerator:
                         col_period_type = 'actual'
                         
                 # --- Validar si es columna descriptiva de texto (no de datos) ---
-                # Si en las cabeceras hay palabras como 'detalle', 'nombre', 'concepto', etc., no es columna de datos.
+                # Si en las cabeceras hay palabras descriptivas o de movimientos, no es columna de datos.
                 is_label_col = False
-                for r in range(1, 13):
+                for r in range(1, 15):
                     val_h = get_merged_cell_value(ws, r, c)
                     if val_h is not None and not isinstance(val_h, (_dt.datetime, _dt.date)):
                         val_h_clean = clean_label(val_h)
                         # Usar límites de palabra \b para evitar falsos positivos como 'rut' dentro de 'bruto'
-                        if re.search(r'\b(detalle|nombre|concepto|cuenta|descripcion|nombre entidad|rut|codigo|especificacion|glosa|item|tipo de relacion|relacion)\b', val_h_clean):
+                        if re.search(r'\b(detalle|nombre|concepto|cuenta|descripcion|nombre entidad|rut|codigo|especificacion|glosa|item|tipo de relacion|relacion|saldo inicial|saldo final|adiciones|desapropiaciones|transferencias|deterioro|gasto por depreciacion)\b', val_h_clean):
                             is_label_col = True
                             break
 
                 if is_label_col:
                     continue
+
+                has_data_header = False
+                for r in range(1, 7):
+                    vh = ws.cell(row=r, column=c).value
+                    if vh is not None and str(vh).strip() != '':
+                        vhs = str(vh).strip().lower()
+                        if any(k in vhs for k in ['bruto', 'depreciaci', 'acumulada', 'neto', 'm$', '$', 'costo']) or isinstance(vh, (_dt.datetime, _dt.date)) or re.search(r'\b202\d\b', vhs):
+                            has_data_header = True
+                            break
+
+                if not has_data_header:
+                    continue
+
+                if col_year is None:
+                    for c_adj in [c + 1, c - 1, c + 2, c - 2]:
+                        if 1 <= c_adj <= ws.max_column:
+                            for r_adj in range(1, 7):
+                                v_adj = get_merged_cell_value(ws, r_adj, c_adj)
+                                if v_adj is not None:
+                                    if isinstance(v_adj, (_dt.datetime, _dt.date)):
+                                        col_year = v_adj.year
+                                        break
+                                    m_yr = re.search(r'\b(202\d)\b', str(v_adj))
+                                    if m_yr:
+                                        col_year = int(m_yr.group(1))
+                                        break
+                            if col_year:
+                                break
 
                 if col_entity or col_year or col_period_type:
                     # Si hay año pero no entidad, asignar la entidad activa
@@ -962,13 +1185,18 @@ class NoteGenerator:
                                 break
                     
                     val_found = None
-                    for c_b in range(col_idx, 0, -1):
-                        val_b = get_merged_cell_value(ws_obj, r_b, c_b)
-                        if val_b is not None:
-                            if c_b < col_idx and c_b not in col_mapping:
-                                break
-                            val_found = val_b
-                            break
+                    for c_b in [col_idx, col_idx + 1, col_idx - 1]:
+                        if 1 <= c_b <= ws_obj.max_column:
+                            val_b = get_merged_cell_value(ws_obj, r_b, c_b)
+                            if val_b is not None:
+                                if isinstance(val_b, (_dt.datetime, _dt.date)):
+                                    val_found = val_b
+                                    break
+                                val_str_b = str(val_b).strip()
+                                match_b = re.search(r'\b(202\d|199\d)\b', val_str_b)
+                                if match_b:
+                                    val_found = val_b
+                                    break
                     
                     if val_found is not None:
                         if isinstance(val_found, (datetime.datetime, datetime.date)):
@@ -991,33 +1219,50 @@ class NoteGenerator:
             _comp_mo    = periodo_comp_str.split('-')[1] if periodo_comp_str and '-' in (periodo_comp_str or '') else ''
 
             for r in range(1, ws.max_row + 1):
+                # 1. Recolectar celdas con fechas o palabras clave de fecha en la fila r
+                row_date_cells = []
                 for c in range(1, ws.max_column + 1):
                     val = ws.cell(row=r, column=c).value
-                    if val and isinstance(val, str):
-                        val_str = val
-                        val_lower_trimmed = val.strip().lower()
-                        if val_lower_trimmed in ["fecha  actual", "fecha actual", "fecha_actual", "actual"]:
-                            val_str = _actual_dot
-                        elif val_lower_trimmed in ["fecha  comparativa", "fecha comparativa", "fecha_comparativa", "comparativa", "comparativo"]:
-                            val_str = _comp_dot
-                        else:
-                            # Reemplazo dinámico según el tipo de periodo de la columna mapeada
-                            col_info = col_mapping.get(c)
-                            if col_info:
-                                col_per_type = col_info.get('period_type') or template_year_to_period_type.get(col_info['year'])
-                                target_dot = _actual_dot if col_per_type == 'actual' else _comp_dot
-                                
-                                # 1. Detectar y reemplazar fechas completas (dd.mm.yyyy)
-                                date_pattern = re.search(r'\d{1,2}[.\-,]\d{1,2}[.\-,]\d{4}', val)
-                                if date_pattern:
-                                    val_str = re.sub(r'\d{1,2}[.\-,]\d{1,2}[.\-,]\d{4}', target_dot, val)
-                                else:
-                                    # 2. Detectar y reemplazar años solos (202x)
-                                    year_pattern = re.search(r'\b(202\d)\b', val)
-                                    if year_pattern:
-                                        target_yr = target_dot.split('.')[-1] if target_dot else year_pattern.group(1)
-                                        val_str = re.sub(r'\b202\d\b', target_yr, val)
-                        ws.cell(row=r, column=c).value = val_str
+                    if val is None:
+                        continue
+                    is_d = False
+                    if isinstance(val, (datetime.datetime, datetime.date)):
+                        is_d = True
+                    elif isinstance(val, str):
+                        v_low = val.strip().lower()
+                        if len(v_low) > 25 or re.match(r'^\d+[\)\.\-]', v_low) or re.match(r'^[a-z][\)\.\-]', v_low):
+                            is_d = False
+                        elif any(kw in v_low for kw in ['saldo', 'detalle', 'concepto', 'tipo', 'adicion', 'amortiz', 'desapropia', 'gasto', 'transferen', 'total', 'cambios', 'vencimiento', 'movimiento', 'reconciliacion', 'pasivo', 'activo', 'instrumentos', 'composicion', 'efectos', 'los saldos', 'conciliacion', 'la composicion']):
+                            is_d = False
+                        elif v_low in ["fecha  actual", "fecha actual", "fecha_actual", "actual", "fecha  comparativa", "fecha comparativa", "fecha_comparativa", "comparativa", "comparativo"]:
+                            is_d = True
+                        elif re.search(r'(\d{4})[.\-,](\d{1,2})[.\-,](\d{1,2})', val) or re.search(r'(\d{1,2})[.\-,](\d{1,2})[.\-,](\d{4})', val) or re.search(r'^\s*202\d\s*$', val):
+                            is_d = True
+                    if is_d:
+                        row_date_cells.append(c)
+
+                # 2. Si hay 2 o más columnas con fechas en la fila, la primera (izquierda) es actual, la segunda es comp
+                if len(row_date_cells) >= 2:
+                    row_date_cells.sort()
+                    c_act = row_date_cells[0]
+                    c_cmp = row_date_cells[1]
+                    ws.cell(row=r, column=c_act).value = _actual_dot
+                    ws.cell(row=r, column=c_cmp).value = _comp_dot
+                elif len(row_date_cells) == 1:
+                    c = row_date_cells[0]
+                    val = ws.cell(row=r, column=c).value
+                    col_info = col_mapping.get(c)
+                    target_dot = _actual_dot
+                    if col_info and col_info.get('period_type') == 'comp':
+                        target_dot = _comp_dot
+                    elif isinstance(val, (datetime.datetime, datetime.date)):
+                        if template_year_to_period_type.get(val.year) == 'comp':
+                            target_dot = _comp_dot
+                    elif isinstance(val, str):
+                        v_low = val.strip().lower()
+                        if v_low in ["fecha  comparativa", "fecha comparativa", "fecha_comparativa", "comparativa", "comparativo"]:
+                            target_dot = _comp_dot
+                    ws.cell(row=r, column=c).value = target_dot
 
             # Si es reporte individual, remapear todas las columnas de 'Consolidado' a la empresa activa
             if not is_consolidated:
@@ -1074,7 +1319,7 @@ class NoteGenerator:
                             has_year_in_row = True
                             break
 
-                # Contar celdas de texto en las columnas activas de datos para identificar cabeceras apiladas
+                # Contar celdas de texto en las columnas activas y totales para identificar cabeceras apiladas o de matriz
                 string_cells_count = 0
                 for c_temp in active_cols:
                     val_temp = ws.cell(row=row, column=c_temp).value
@@ -1084,11 +1329,66 @@ class NoteGenerator:
                         except ValueError:
                             string_cells_count += 1
 
-                if first_text is None or any(kw in first_text for kw in HEADER_KEYWORDS) or has_year_in_row or string_cells_count > 1:
+                total_string_cells = sum(1 for c_temp in range(1, ws.max_column + 1) if ws.cell(row=row, column=c_temp).value is not None and isinstance(ws.cell(row=row, column=c_temp).value, str) and not str(ws.cell(row=row, column=c_temp).value).startswith('='))
+
+                is_intro_text = (
+                    first_text.startswith('a continuacion') or
+                    first_text.startswith('los pagos') or
+                    first_text.startswith('las notas') or
+                    (len(first_text.split()) > 5 and len(first_text) > 35)
+                ) if first_text else False
+
+                if first_text is None or any(kw in first_text for kw in HEADER_KEYWORDS) or has_year_in_row or string_cells_count > 1 or total_string_cells >= 3 or is_intro_text:
                     continue
 
+                # Si es una fila de datos legítima, verificar si pertenece a un bloque con cabecera de fechas
+                # y no a una tabla de revelación manual (ej. vencimientos de arriendos)
+                has_date_hdr = False
+                for c_chk in active_cols:
+                    for r_hdr_chk in range(row - 1, max(0, row - 12), -1):
+                        v_hdr = get_merged_cell_value(ws, r_hdr_chk, c_chk)
+                        if v_hdr is not None:
+                            if isinstance(v_hdr, (_dt.datetime, _dt.date)) or re.search(r'\b(202\d)\b', str(v_hdr)):
+                                has_date_hdr = True
+                                break
+                    if has_date_hdr:
+                        break
 
-                # Si es una fila de datos legítima, limpiar los valores obsoletos
+                has_share_hdr = False
+                if ws.title.lower() in ['patrimonio', 'patrimonio'] and row > 10:
+                    has_share_hdr = True
+                else:
+                    for c_chk in range(1, min(6, ws.max_column + 1)):
+                        v_chk = get_merged_cell_value(ws, row, c_chk)
+                        if v_chk is not None:
+                            v_chk_clean = clean_label(v_chk)
+                            if any(kw in v_chk_clean for kw in ['accionista', 'acciones', 'participacion', 'parent', 'holdco', 'adiciones', 'saldo final', 'saldo inicial', 'movimiento']):
+                                has_share_hdr = True
+                                break
+
+                is_manual_disclosure = False
+                MANUAL_HEADER_KEYWORDS = [
+                    'traspaso', 'traspasos', 'vencimiento', 'vencimientos', 'sin descontar', 
+                    'compromiso', 'compromisos', 'garantia', 'garantias', 'hipoteca', 'prenda', 
+                    'litigio', 'litigios', 'contingencia', 'contingencias', 'tasa de interes', 
+                    'vida util', 'vidas utiles'
+                ]
+                for r_hdr_chk in range(row - 1, max(0, row - 15), -1):
+                    for c_lbl in range(1, min(6, ws.max_column + 1)):
+                        v_hdr = ws.cell(row=r_hdr_chk, column=c_lbl).value
+                        if v_hdr is not None:
+                            v_hdr_clean = clean_label(v_hdr)
+                            if any(kw in v_hdr_clean for kw in MANUAL_HEADER_KEYWORDS):
+                                is_manual_disclosure = True
+                                break
+                    if is_manual_disclosure:
+                        break
+
+                if not has_date_hdr or has_share_hdr or is_manual_disclosure:
+                    # Es una tabla con cabeceras propias, revelación manual o de acciones fijas -> PRESERVAR
+                    continue
+
+                # Si es una fila de datos de un bloque con fechas, limpiar valores obsoletos que no sean fórmulas
                 for c in active_cols:
                     cell = ws.cell(row=row, column=c)
                     if cell.value is not None:
@@ -1108,7 +1408,7 @@ class NoteGenerator:
                     cell_val = ws.cell(row=row, column=c_idx).value
                     if cell_val is not None and isinstance(cell_val, str):
                         cell_clean = cell_val.strip().lower()
-                        if cell_clean == "total" or cell_clean.startswith("total ") or cell_clean.startswith("total:"):
+                        if cell_clean.startswith("total") or "saldo final" in cell_clean:
                             is_total_row = True
                             total_col = c_idx
                             break
@@ -1118,17 +1418,21 @@ class NoteGenerator:
                         if col_idx > (total_col or 2) and col_idx in col_mapping:
                             # Calcular la suma leyendo las celdas en el rango (last_total_row + 1) a (row - 1)
                             sum_val = 0.0
+                            has_vals_in_col = False
                             for r in range(last_total_row + 1, row):
                                 val_cell = ws.cell(row=r, column=col_idx).value
                                 if val_cell is not None:
                                     try:
                                         sum_val += float(val_cell)
+                                        has_vals_in_col = True
                                     except:
                                         pass
                             
                             cell = ws.cell(row=row, column=col_idx)
-                            # Conservar la fórmula en la celda si ya existe en la plantilla, de lo contrario escribir la suma
-                            if not (isinstance(cell.value, str) and cell.value.startswith('=')):
+                            # Conservar la fórmula en la celda si ya existe en la plantilla, de lo contrario escribir la suma solo si hay datos en la columna
+                            if isinstance(cell.value, str) and cell.value.startswith('='):
+                                pass
+                            elif has_vals_in_col:
                                 cell.value = sum_val
                                 cell.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
                     last_total_row = row
@@ -1146,6 +1450,8 @@ class NoteGenerator:
                             break
                 if is_header_row:
                     continue
+
+                sheet_title_lower = str(ws.title).strip().lower()
 
                 # Buscar etiqueta descriptiva
                 desc_col = None
@@ -1168,9 +1474,38 @@ class NoteGenerator:
                                     string_cells_count += 1
                         
                         sample_ctx_temp = entity_contexts.get(active_entity_name, {}).get('actual', {}) if entity_contexts else {}
-                        is_in_ctx = any(cell_clean in sample_ctx_temp.get(k, {}) for k in ['nota1', 'nota2', 'pl'])
+                        is_in_ctx = any(cell_clean in sample_ctx_temp.get(k, {}) for k in ['nota1', 'nota2'])
+                        if not is_in_ctx and sample_ctx_temp.get('pl'):
+                            for r_data in sample_ctx_temp['pl'].values():
+                                if isinstance(r_data, dict) and cell_clean in r_data:
+                                    is_in_ctx = True
+                                    break
+
+                        # Identificar si la fila es un título de sección de P&L previo a la tabla de datos
+                        is_section_header = False
+                        if is_results_note and cell_clean in SECTION_TITLE_TO_PL_RUBRO:
+                            for r_next in range(row + 1, min(row + 4, ws.max_row + 1)):
+                                for c_chk in range(1, ws.max_column + 1):
+                                    v_chk = ws.cell(row=r_next, column=c_chk).value
+                                    if v_chk is not None:
+                                        v_chk_str = str(v_chk).strip().lower()
+                                        if isinstance(v_chk, (datetime.datetime, datetime.date)) or re.search(r'202\d', v_chk_str) or v_chk_str in ['m$', '$', '%']:
+                                            is_section_header = True
+                                            break
+                                if is_section_header:
+                                    break
+
+                        is_intro_text = (
+                            cell_clean.startswith('a continuacion') or
+                            cell_clean.startswith('los pagos') or
+                            cell_clean.startswith('las notas') or
+                            (len(cell_clean.split()) > 5 and len(cell_clean) > 35)
+                        )
+                        total_string_cells = sum(1 for c_temp in range(1, ws.max_column + 1) if ws.cell(row=row, column=c_temp).value is not None and isinstance(ws.cell(row=row, column=c_temp).value, str) and not str(ws.cell(row=row, column=c_temp).value).startswith('='))
                         is_header = False
-                        if not is_in_ctx:
+                        if is_section_header or is_intro_text or total_string_cells >= 3:
+                            is_header = True
+                        elif not is_in_ctx:
                             if cell_val.isupper():
                                 is_header = True
                             elif cell_clean in HEADER_KEYWORDS or any(cell_clean.startswith(kw + ' ') for kw in HEADER_KEYWORDS) or string_cells_count > 1:
@@ -1217,11 +1552,6 @@ class NoteGenerator:
                                     matched_key = cell_clean
                                     match_type = 'pl'
                                     matched_rubro = section_rubro
-                                # NUEVO: Si la clave ES el rubro mismo (fila de Total del rubro)
-                                elif cell_clean == section_rubro or cell_clean in section_rubro or section_rubro in cell_clean:
-                                    matched_key = section_rubro
-                                    match_type = 'pl'
-                                    matched_rubro = section_rubro
                             
                             if matched_key is None:
                                 rubros_to_search = allowed_rubros_for_sheet if allowed_rubros_for_sheet else list(sample_context.get('pl', {}).keys())
@@ -1234,18 +1564,8 @@ class NoteGenerator:
                                         match_type = 'pl'
                                         matched_rubro = rubro_clean
                                         break
-                                    # NUEVO: Si la etiqueta de la fila coincide con el nombre del rubro
-                                    # (fila de total de ese rubro), sumar todo el rubro
-                                    if rubro_clean and (cell_clean == rubro_clean
-                                            or cell_clean in rubro_clean
-                                            or rubro_clean in cell_clean
-                                            or 'total ' + rubro_clean in cell_clean
-                                            or cell_clean.replace('total ', '') == rubro_clean):
-                                        matched_key = rubro_clean
-                                        match_type = 'pl'
-                                        matched_rubro = rubro_clean
-                                        break
 
+                            sheet_title_lower = str(ws.title).strip().lower()
                             LABEL_ALIASES = {
                                 'bodega central (*)': 'mercaderias',
                                 'bodega central': 'mercaderias',
@@ -1255,14 +1575,26 @@ class NoteGenerator:
                                 'bodega de operaciones': 'mercaderias',
                                 'licencias': 'licencias',
                                 'derecho de uso (1)': 'derecho de uso (1)',
+                                'saldo inicial': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo inicial',
+                                'saldo final': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo final',
+                                'plusvalia': 'plusvalia por adquisiciones de empresas',
+                                'plusvalía': 'plusvalia por adquisiciones de empresas',
+                                'capital emitido': 'capital emitido',
+                                'otras reservas': 'otras reservas',
+                                'resultados acumulados': 'ganancias (perdidas) acumuladas',
+                                'ganancias perdidas acumuladas': 'ganancias (perdidas) acumuladas',
                             }
                             if matched_key is None:
                                 if cell_clean in sample_context.get('nota1', {}):
                                     matched_key = cell_clean
                                     match_type = 'nota1'
-                                elif cell_clean in LABEL_ALIASES and LABEL_ALIASES[cell_clean] in sample_context.get('nota1', {}):
-                                    matched_key = LABEL_ALIASES[cell_clean]
-                                    match_type = 'nota1'
+                                elif cell_clean in LABEL_ALIASES:
+                                    alias_target = LABEL_ALIASES[cell_clean]
+                                    for k_ctx in sample_context.get('nota1', {}):
+                                        if clean_label(k_ctx) == clean_label(alias_target) or k_ctx == alias_target:
+                                            matched_key = k_ctx
+                                            match_type = 'nota1'
+                                            break
                                 elif cell_clean in sample_context.get('nota2', {}):
                                     matched_key = cell_clean
                                     match_type = 'nota2'
@@ -1306,7 +1638,23 @@ class NoteGenerator:
                                 if matched_key is not None:
                                     break
 
-                if desc_col is not None:
+                        if sheet_title_lower in ['patrimonio', 'patrimonio']:
+                            # Si la fila pertenece a la subtabla de estructura/movimiento de acciones, NO matchear cuentas contables monetarias
+                            is_share_row = False
+                            if row > 10:
+                                is_share_row = True
+                            else:
+                                for c_chk in range(1, min(6, ws.max_column + 1)):
+                                    v_chk = get_merged_cell_value(ws, row, c_chk)
+                                    if v_chk is not None:
+                                        v_chk_clean = clean_label(v_chk)
+                                        if any(kw in v_chk_clean for kw in ['accionista', 'acciones', 'participacion', 'parent', 'holdco', 'adiciones', 'saldo final', 'saldo inicial', 'movimiento']):
+                                            is_share_row = True
+                                            break
+                            if is_share_row and cell_clean not in ['capital emitido', 'otras reservas', 'resultados acumulados', 'total']:
+                                matched_key = None
+
+                if desc_col is not None and matched_key is not None:
                     extra_words = []
                     for c_idx in range(1, min(5, ws.max_column + 1)):
                         if c_idx != desc_col and c_idx not in col_mapping:
@@ -1385,7 +1733,7 @@ class NoteGenerator:
                                     cell_lbl = ws.cell(row=r_idx, column=c_lbl).value
                                     if cell_lbl is not None:
                                         cell_lbl_clean = clean_label(cell_lbl)
-                                        if ("total" in cell_lbl_clean and "sub" not in cell_lbl_clean) or "transaccion" in cell_lbl_clean or "las principales" in cell_lbl_clean or "la composicion" in cell_lbl_clean:
+                                        if ("total" in cell_lbl_clean and "sub" not in cell_lbl_clean) or "transaccion" in cell_lbl_clean or "las principales" in cell_lbl_clean or "la composicion" in cell_lbl_clean or "saldo final" in cell_lbl_clean or "a continuacion" in cell_lbl_clean or "los pagos" in cell_lbl_clean:
                                             is_boundary = True
                                             break
                                 if is_boundary:
@@ -1393,18 +1741,45 @@ class NoteGenerator:
                                 
                                 val_h = get_merged_cell_value(ws, r_idx, c)
                                 if val_h is None and c in col_mapping:
-                                    for c_adj in [c + 1, c + 2, c - 1, c - 2]:
-                                        if 1 <= c_adj <= ws.max_column:
-                                            val_adj_h = get_merged_cell_value(ws, r_idx, c_adj)
-                                            if val_adj_h is not None and (isinstance(val_adj_h, (datetime.datetime, datetime.date)) or re.search(r'(202\d)', str(val_adj_h))):
-                                                val_h = val_adj_h
-                                                break
+                                    # Solo buscar en columnas adyacentes si la columna 'c' tiene alguna celda de encabezado en este bloque
+                                    has_any_hdr_in_c = any(
+                                        ws.cell(row=chk_r, column=c).value is not None 
+                                        for chk_r in range(r_idx, row)
+                                    )
+                                    if has_any_hdr_in_c:
+                                        for c_adj in [c + 1, c + 2, c - 1, c - 2]:
+                                            if 1 <= c_adj <= ws.max_column:
+                                                val_adj_h = get_merged_cell_value(ws, r_idx, c_adj)
+                                                if val_adj_h is not None and (isinstance(val_adj_h, (datetime.datetime, datetime.date)) or re.search(r'(202\d)', str(val_adj_h))):
+                                                    val_h = val_adj_h
+                                                    break
                                 if val_h is not None:
                                     if isinstance(val_h, (datetime.datetime, datetime.date)) or re.search(r'(202\d)', str(val_h)):
                                         has_header_in_block = True
                                         break
                         
                         if not has_header_in_block:
+                            continue
+
+                        is_manual_disc_block = False
+                        MANUAL_HEADER_KEYWORDS = [
+                            'traspaso', 'traspasos', 'vencimiento', 'vencimientos', 'sin descontar', 
+                            'compromiso', 'compromisos', 'garantia', 'garantias', 'hipoteca', 'prenda', 
+                            'litigio', 'litigios', 'contingencia', 'contingencias', 'tasa de interes', 
+                            'vida util', 'vidas utiles'
+                        ]
+                        for r_hdr_chk in range(row - 1, max(0, row - 15), -1):
+                            for c_lbl in range(1, min(6, ws.max_column + 1)):
+                                v_hdr = ws.cell(row=r_hdr_chk, column=c_lbl).value
+                                if v_hdr is not None:
+                                    v_hdr_clean = clean_label(v_hdr)
+                                    if any(kw in v_hdr_clean for kw in MANUAL_HEADER_KEYWORDS):
+                                        is_manual_disc_block = True
+                                        break
+                            if is_manual_disc_block:
+                                break
+
+                        if is_manual_disc_block:
                             continue
                             
                         col_headers = []
@@ -1741,9 +2116,14 @@ class NoteGenerator:
             col_letter_map = {get_column_letter(c): get_column_letter(c) for c in range(1, ws.max_column + 1)}
             
             if not is_consolidated:
+                def _is_same_entity(e1, e2):
+                    if not e1 or not e2:
+                        return True
+                    return normalize_company_name(e1) == normalize_company_name(e2)
+
                 # Solo filtrar si hay columnas que pertenecen a otra empresa que no sea la activa ni Consolidado
                 has_other_entities = any(
-                    info['entity'] is not None and info['entity'] != active_entity_name and info['entity'] != 'Consolidado'
+                    info['entity'] is not None and not _is_same_entity(info['entity'], active_entity_name) and info['entity'] != 'Consolidado'
                     for info in col_mapping.values()
                 )
                 
@@ -1752,7 +2132,7 @@ class NoteGenerator:
                     for c in range(3, ws.max_column + 1):
                         info = col_mapping.get(c)
                         # Mantener si pertenece a la empresa activa, o si no se tiene mapeado de entidad
-                        if info and (info['entity'] == active_entity_name or info['entity'] is None):
+                        if info and (_is_same_entity(info['entity'], active_entity_name) or info['entity'] is None):
                             columns_to_keep.add(c)
                             
                     # Construir col_letter_map con los índices nuevos resultantes
@@ -1766,8 +2146,19 @@ class NoteGenerator:
                         if c not in columns_to_keep:
                             ws.delete_cols(c)
 
+            # Duplicar cuadros marcados con [COMPARATIVO] para el período comparativo
+            process_comparative_tables_in_ws(ws, periodo_actual_str=periodo_actual_str, periodo_comp_str=periodo_comp_str)
+
             # Corregir letras de columna en las fórmulas después de reubicar/filtrar columnas
             fix_formulas_column_letters(ws, col_letter_map)
+
+            if str(target_lang).lower() == 'en':
+                from src.core.ifrs_glossary import translate_ifrs_term
+                for r in range(1, ws.max_row + 1):
+                    for c in range(1, ws.max_column + 1):
+                        cell_val = ws.cell(row=r, column=c).value
+                        if cell_val and isinstance(cell_val, str) and not cell_val.startswith('='):
+                            ws.cell(row=r, column=c).value = translate_ifrs_term(cell_val.strip(), target_lang='en')
 
         # 5. Guardar libro resultante
         output = BytesIO()

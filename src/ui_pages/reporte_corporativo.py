@@ -201,9 +201,6 @@ def render(empresa_seleccionada, empresa_path):
         if st.button("Generar Reporte Corporativo", type="primary", use_container_width=True):
             with st.spinner("Procesando plantilla e inyectando datos financieros..."):
                 try:
-                    import importlib
-                    import src.core.word_template_engine
-                    importlib.reload(src.core.word_template_engine)
                     from src.core.word_template_engine import WordTemplateEngine
                     
                     # Crear una copia de los bytes subidos

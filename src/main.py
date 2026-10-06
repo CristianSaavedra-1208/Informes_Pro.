@@ -1,4 +1,4 @@
-# Streamlit hot-reload trigger - force reload 2
+# Streamlit hot-reload trigger - force reload 3
 import streamlit as st
 import pandas as pd
 import os
@@ -188,8 +188,16 @@ def main():
     with st.sidebar.container():
         st.subheader("🏢 Empresa Activa")
         
-        # Cargar empresas para armar el selector principal
-        real_empresas = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
+        # Cargar empresas para armar el selector principal (filtrando carpetas sin archivos de datos)
+        all_dirs = sorted([d for d in os.listdir(empresas_dir) if os.path.isdir(os.path.join(empresas_dir, d))])
+        real_empresas = []
+        for d in all_dirs:
+            p = os.path.join(empresas_dir, d)
+            root_files = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
+            if root_files or d.startswith("[GRUPO]"):
+                real_empresas.append(d)
+        if not real_empresas:
+            real_empresas = all_dirs
         
         if not real_empresas:
             st.warning("Crea una empresa.")
@@ -251,6 +259,24 @@ def main():
                 st.rerun()
         else:
             st.success(f"**Empresa activa:**\n\n{st.session_state['empresa_activa']}")
+
+        # --- SELECTOR DE IDIOMA DEL REPORTE (MULTILENGUAJE ES/EN) ---
+        st.markdown("<div style='margin-top: 10px; padding-top: 8px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
+        st.subheader("🌐 Idioma de Reportes")
+        if 'idioma_reporte' not in st.session_state:
+            st.session_state['idioma_reporte'] = 'es'
+
+        opciones_idioma = {"🇪🇸 Español": "es", "🇺🇸 English": "en"}
+        idioma_actual_key = "🇪🇸 Español" if st.session_state.get('idioma_reporte', 'es') == 'es' else "🇺🇸 English"
+
+        idioma_seleccionado_label = st.radio(
+            "Selecciona el idioma de salida:",
+            options=list(opciones_idioma.keys()),
+            index=0 if idioma_actual_key == "🇪🇸 Español" else 1,
+            key="radio_idioma_reporte",
+            horizontal=True
+        )
+        st.session_state['idioma_reporte'] = opciones_idioma[idioma_seleccionado_label]
 
         # Usuario Logueado y Botón de Cerrar Sesión directo resaltado en Azul
         st.markdown("<div style='margin-top: 14px; padding-top: 10px; border-top: 1px solid #e2e8f0;'></div>", unsafe_allow_html=True)
@@ -396,36 +422,20 @@ def main():
                 pass
     
 
-    import importlib
-    import src.core.excel_utils as excel_utils
     import src.ui_pages.inicio as pg_inicio
-    importlib.reload(pg_inicio)
     import src.ui_pages.cargas_de_datos as pg_cargas
-    importlib.reload(pg_cargas)
     import src.ui_pages.organizacion_de_cuentas as pg_map
-    importlib.reload(pg_map)
     import src.ui_pages.ajustes_manuales as pg_ajustes
-    importlib.reload(pg_ajustes)
     import src.ui_pages.consolidacion as pg_cons
-    importlib.reload(pg_cons)
     import src.ui_pages.estados_financieros as pg_estados
-    importlib.reload(pg_estados)
     import src.ui_pages.informes_y_notas as pg_informes
-    importlib.reload(pg_informes)
     import src.ui_pages.cierre_y_memoria_historica as pg_cierre
-    importlib.reload(pg_cierre)
     import src.ui_pages.validacion_saldos as pg_val
-    importlib.reload(pg_val)
     import src.ui_pages.parametros_globales as pg_param
-    importlib.reload(pg_param)
     import src.ui_pages.configuraciones as pg_conf
-    importlib.reload(pg_conf)
     import src.ui_pages.reportes_consolidados as pg_reportes_cons
-    importlib.reload(pg_reportes_cons)
     import src.ui_pages.reporte_corporativo as pg_reporte_corp
-    importlib.reload(pg_reporte_corp)
     import src.ui_pages.auditoria_diccionario as pg_audit
-    importlib.reload(pg_audit)
 
     # Definir wrappers para st.navigation
     def run_inicio(): pg_inicio.render(empresa_seleccionada, empresa_path)
@@ -434,7 +444,15 @@ def main():
     def run_ajustes(): pg_ajustes.render(empresa_seleccionada, empresa_path)
     def run_cons(): pg_cons.render(empresa_seleccionada, empresa_path)
     def run_estados(): pg_estados.render(empresa_seleccionada, empresa_path)
-    def run_informes(): pg_informes.render(empresa_seleccionada, empresa_path)
+    def run_informes():
+        import importlib
+        import src.reporting.notes as notes_module
+        importlib.reload(notes_module)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
+        import src.ui_pages.informes_y_notas as pg_informes
+        importlib.reload(pg_informes)
+        pg_informes.render(empresa_seleccionada, empresa_path)
     def run_val(): pg_val.render(empresa_seleccionada, empresa_path)
     def run_cierre(): pg_cierre.render(empresa_seleccionada, empresa_path)
     def run_audit(): pg_audit.render(empresa_seleccionada, empresa_path)

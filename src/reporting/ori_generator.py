@@ -2,11 +2,13 @@ import pandas as pd
 import openpyxl
 from io import BytesIO
 
+from src.core.ifrs_glossary import translate_ifrs_term
+
 class OriGenerator:
     def __init__(self, template_path):
         self.template_path = template_path
 
-    def generate(self, pl_preview_df=None, periodo_actual_str=None, periodo_comp_str=None, bal_preview_df=None, empresa=None):
+    def generate(self, pl_preview_df=None, periodo_actual_str=None, periodo_comp_str=None, bal_preview_df=None, empresa=None, target_lang='es'):
         """
         Genera el formato de Resultados Integrales (ORI) inyectando la ganancia proveniente del ER y sumando líneas de Otros Resultados Integrales.
         pl_preview_df: DataFrame generado por ERGenerator (con 'Clasificación', col_actual, col_comp)
@@ -260,6 +262,12 @@ class OriGenerator:
                     c25.value = periodo_actual_str
                 if c24.value and isinstance(c24.value, str) and ("20" in c24.value or "Anterior" in c24.value):
                     c24.value = periodo_comp_str
+        
+        if str(target_lang).lower() == 'en':
+            for r in range(1, ws.max_row + 1):
+                cell = ws.cell(row=r, column=name_col_idx)
+                if cell.value and isinstance(cell.value, str):
+                    cell.value = translate_ifrs_term(cell.value.strip(), target_lang='en')
         
         output = BytesIO()
         wb.save(output)

@@ -59,16 +59,43 @@ class ExcelExportEngine:
                     
         return output.getvalue()
 
-def generate_excel_report(df, title="Reporte Financiero", subtitle="Expresado en pesos"):
+def generate_excel_report(df, title="Reporte Financiero", subtitle="Expresado en pesos", target_lang=None):
     """
     Función helper genérica para exportar cualquier DataFrame 
-    a Excel con un estilo corporativo (azul/blanco).
+    a Excel con un estilo corporativo (azul/blanco) e integración multilenguaje.
     """
+    if target_lang is None:
+        try:
+            import streamlit as st
+            target_lang = st.session_state.get('idioma_reporte', 'es')
+        except Exception:
+            target_lang = 'es'
+
+    from src.core.ifrs_glossary import translate_ifrs_term
+
+    if str(target_lang).lower() == 'en':
+        title = translate_ifrs_term(title, target_lang='en')
+        subtitle = translate_ifrs_term(subtitle, target_lang='en')
+
     output = io.BytesIO()
     
     is_miles = any(m in str(subtitle).lower() for m in ["miles", "m$", "mch$"])
     df_to_export = df.copy()
-    if is_miles:
+
+    if str(target_lang).lower() == 'en':
+        # Traducir los nombres de columna y los textos de la primera columna
+        new_cols = []
+        for i, col in enumerate(df_to_export.columns):
+            c_translated = translate_ifrs_term(str(col), target_lang='en')
+            if is_miles and (any(char.isdigit() for char in c_translated) or (i > 0 and c_translated.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro", "código"])):
+                if "M$" not in c_translated and "Th$" not in c_translated:
+                    c_translated = f"{c_translated}\nM$"
+            new_cols.append(c_translated)
+        df_to_export.columns = new_cols
+
+        if len(df_to_export) > 0:
+            df_to_export.iloc[:, 0] = df_to_export.iloc[:, 0].apply(lambda x: translate_ifrs_term(str(x), target_lang='en') if pd.notna(x) else x)
+    elif is_miles:
         new_cols = []
         for i, col in enumerate(df_to_export.columns):
             col_str = str(col)
