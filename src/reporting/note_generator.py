@@ -1230,7 +1230,7 @@ class NoteGenerator:
                         is_d = True
                     elif isinstance(val, str):
                         v_low = val.strip().lower()
-                        if len(v_low) > 25 or re.match(r'^\d+[\)\.\-]', v_low) or re.match(r'^[a-z][\)\.\-]', v_low):
+                        if len(v_low) > 25 or re.match(r'^(?:\d+|[a-z])[\)\.\-]\s+', v_low):
                             is_d = False
                         elif any(kw in v_low for kw in ['saldo', 'detalle', 'concepto', 'tipo', 'adicion', 'amortiz', 'desapropia', 'gasto', 'transferen', 'total', 'cambios', 'vencimiento', 'movimiento', 'reconciliacion', 'pasivo', 'activo', 'instrumentos', 'composicion', 'efectos', 'los saldos', 'conciliacion', 'la composicion']):
                             is_d = False

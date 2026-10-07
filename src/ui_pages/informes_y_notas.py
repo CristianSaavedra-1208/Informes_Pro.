@@ -477,11 +477,9 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
             from src.core.sabana_manager import SabanaManager
             SabanaManager.clear_sabana_cache()
 
-            template_nota = os.path.join(empresa_path, "Plantilla de notas_v1.xlsx")
+            template_nota = "Plantilla de notas_v1.xlsx"
             if not os.path.exists(template_nota):
-                template_nota = "Plantilla de notas_v1.xlsx"
-            if not os.path.exists(template_nota):
-                st.error("❌ No se encontró la plantilla maestra de notas 'Plantilla de notas_v1.xlsx'.")
+                st.error("❌ No se encontró la plantilla maestra de notas 'Plantilla de notas_v1.xlsx' en la raíz.")
             else:
                 st.info(f"Procesando y mapeando saldos para {selected_label}...")
                 
@@ -976,10 +974,8 @@ def render(empresa_seleccionada, empresa_path):
     with main_tab_viz:
         is_consolidated = empresa_seleccionada.startswith("[GRUPO] ")
 
-        # Cargar registro completo actualizado (incluyendo pestañas adicionales descubiertas en la plantilla activa)
-        template_nota_activa = os.path.join(empresa_path, "Plantilla de notas_v1.xlsx")
-        if not os.path.exists(template_nota_activa):
-            template_nota_activa = "Plantilla de notas_v1.xlsx"
+        # Cargar registro completo actualizado desde la plantilla maestra global
+        template_nota_activa = "Plantilla de notas_v1.xlsx"
 
         full_registry = get_full_note_registry(template_nota_activa)
         sheet_name_map.update({code: info['sheets'] for code, info in full_registry.items()})

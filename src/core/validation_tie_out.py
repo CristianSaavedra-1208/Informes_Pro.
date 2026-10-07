@@ -298,9 +298,7 @@ class ValidationTieOutEngine:
             sab_bal = build_balance_sabana(tb_df, map_bal_df) if tb_df is not None and not tb_df.empty else pd.DataFrame()
 
             # --- GENERAR Y EVALUAR PLANTILLA DE NOTAS PARA OBTENER SUMAS VISUALES REALES ---
-            template_nota = os.path.join(empresa_dir, "Plantilla de notas_v1.xlsx")
-            if not os.path.exists(template_nota):
-                template_nota = "Plantilla de notas_v1.xlsx"
+            template_nota = "Plantilla de notas_v1.xlsx"
 
             wb_eval = None
             try:
