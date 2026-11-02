@@ -143,9 +143,11 @@ class BalanceGenerator:
                     target_cell.font = copy(orig_cell.font)
                 orig_cell.value = None
 
+        has_comp = bool(tb_df_comp is not None and not tb_df_comp.empty and str(periodo_comp_str).strip().lower() not in ["ninguno", "none", "", "comp"])
+        
         if periodo_actual_str:
             formatted_actual = format_period_date(periodo_actual_str, lang=target_lang)
-            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if periodo_comp_str else ""
+            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if (periodo_comp_str and has_comp) else ""
             
             for r in range(1, 15):
                 c25 = ws.cell(row=r, column=val25_col_idx)
@@ -161,15 +163,16 @@ class BalanceGenerator:
                     if is_date_or_year:
                         c25.value = formatted_actual
                         
-                # Check for c24
-                v24 = c24.value
-                if v24 is not None:
-                    is_date_or_year_comp = (
-                        isinstance(v24, (datetime.datetime, datetime.date)) or
-                        (isinstance(v24, str) and ("20" in v24 or "Anterior" in v24))
-                    )
-                    if is_date_or_year_comp:
-                        c24.value = formatted_comp if periodo_comp_str else ""
+                # Check for c24 - ONLY update if has_comp is True
+                if has_comp:
+                    v24 = c24.value
+                    if v24 is not None:
+                        is_date_or_year_comp = (
+                            isinstance(v24, (datetime.datetime, datetime.date)) or
+                            (isinstance(v24, str) and ("20" in v24 or "Anterior" in v24))
+                        )
+                        if is_date_or_year_comp:
+                            c24.value = formatted_comp
 
         
         # Trackers for 2025 totals
@@ -241,33 +244,22 @@ class BalanceGenerator:
                     
                 # Load comparative either dynamically or statically
                 val24 = 0.0
-                if tb_df_comp is not None and not tb_df_comp.empty:
+                if has_comp and tb_df_comp is not None and not tb_df_comp.empty:
                     if cell_name_clean in sums_comp_dict and cell_name_clean not in ["Resultados acumulados", "Ganancias (pérdidas) acumuladas"]:
                         raw_val24 = sums_comp_dict[cell_name_clean]
                         if pd.isna(raw_val24) or raw_val24 is None:
                             raw_val24 = 0.0
                         val24 = (raw_val24 / scale_factor) * (-1 if current_section in ["Pasivos Corrientes", "Pasivos No Corrientes", "Patrimonio"] else 1)
+                        val24 = round(val24)
                         ws.cell(row=row, column=val24_col_idx).value = val24
                     elif cell_name_clean in ["Resultados acumulados", "Ganancias (pérdidas) acumuladas"]:
-                        mapped_bal_sum_comp = merged_comp[mapped_mask_comp]['saldo_final'].sum()
-                        if pd.isna(mapped_bal_sum_comp) or abs(mapped_bal_sum_comp) < 10.0:
-                            resid_comp = 0.0
-                        else:
-                            resid_comp = pl_residual_comp
-                            if pd.isna(resid_comp):
-                                resid_comp = 0.0
-                        base_accum_comp = sums_comp_dict.get(cell_name_clean, 0)
-                        if pd.isna(base_accum_comp) or base_accum_comp is None:
-                            base_accum_comp = 0.0
-                        final_resid_comp = (base_accum_comp + resid_comp) / scale_factor
-                        val24 = final_resid_comp * (-1 if current_section in ["Pasivos Corrientes", "Pasivos No Corrientes", "Patrimonio"] else 1)
-                        ws.cell(row=row, column=val24_col_idx).value = val24
+                        pass
                 else:
                     val24_dirty = ws.cell(row=row, column=val24_col_idx).value
                     if val24_dirty is not None:
                         try:
                             clean_str_val = str(val24_dirty).replace(',', '').replace(' ', '').strip()
-                            if clean_str_val: val24 = float(clean_str_val)
+                            if clean_str_val: val24 = round(float(clean_str_val))
                         except (ValueError, TypeError): val24 = 0.0
 
                 # Check if this row matches a mapped classification for 2025 (and isn't the special P&L residual row)
@@ -282,6 +274,7 @@ class BalanceGenerator:
                     if current_section in ["Pasivos Corrientes", "Pasivos No Corrientes", "Patrimonio"]:
                         visual_val = val * -1
                         
+                    visual_val = round(visual_val)
                     ws.cell(row=row, column=val25_col_idx).value = visual_val
                     
                     # Accumulate for subtotals (2025) using VISUAL values so totals match what the user sees
@@ -300,38 +293,22 @@ class BalanceGenerator:
                             patrimonio_controladora += visual_val
                         patrimonio_totales += visual_val
                 
-                # Check if this is the target row for the P&L residual
+                # Check if this is the target row for the P&L residual / Resultados acumulados
                 if cell_name_clean in ["Resultados acumulados", "Ganancias (pérdidas) acumuladas"]:
-                    mapped_bal_sum = merged_df[mapped_mask]['saldo_final'].sum()
-                    if pd.isna(mapped_bal_sum) or abs(mapped_bal_sum) < 10.0:
-                        resid = 0.0
-                    else:
-                        resid = pl_residual / scale_factor
-                        if pd.isna(resid):
-                            resid = 0.0
-                    current_val_raw = sums_dict.get(cell_name_clean, 0)
-                    if pd.isna(current_val_raw) or current_val_raw is None:
-                        current_val_raw = 0.0
-                    current_val = current_val_raw / scale_factor
-                    final_resid = current_val + resid
-                    
-                    visual_final_resid = final_resid
-                    if current_section in ["Pasivos Corrientes", "Pasivos No Corrientes", "Patrimonio"]:
-                        visual_final_resid = final_resid * -1
-                        
-                    ws.cell(row=row, column=val25_col_idx).value = visual_final_resid
-                    
-                    if current_section == "Activos Corrientes":
-                        subtotal_corriente += visual_final_resid
-                    elif current_section == "Activos No Corrientes":
-                        subtotal_no_corriente += visual_final_resid
-                    elif current_section == "Pasivos Corrientes":
-                        subtotal_corriente += visual_final_resid
-                    elif current_section == "Pasivos No Corrientes":
-                        subtotal_no_corriente += visual_final_resid
-                    elif current_section == "Patrimonio":
+                    # De acuerdo a NIIF y la ecuación fundamental del Estado de Situación Financiera:
+                    # Activos = Pasivos + Patrimonio
+                    # Resultados Acumulados cuadra exactamente el balance absorbiendo el resultado del ejercicio y el redondeo de presentación
+                    if tb_df is not None and not tb_df.empty:
+                        visual_final_resid = round(activos_totales - pasivos_totales - patrimonio_totales)
+                        ws.cell(row=row, column=val25_col_idx).value = visual_final_resid
                         patrimonio_controladora += visual_final_resid
                         patrimonio_totales += visual_final_resid
+                        
+                    if has_comp and tb_df_comp is not None and not tb_df_comp.empty:
+                        val24 = round(activos_totales_24 - pasivos_totales_24 - patrimonio_totales_24)
+                        ws.cell(row=row, column=val24_col_idx).value = val24
+                        patrimonio_controladora_24 += val24
+                        patrimonio_totales_24 += val24
                         
                 # Independent accumulator for 2024 lines that just have pure static data
                 # Since 2024 lines aren't driven by sums_dict matching, we accumulate them if they exist
@@ -356,67 +333,78 @@ class BalanceGenerator:
                 
                 # We always accumulate whatever is sitting in val24 after processing
                 # EXCEPT if this row is a total row, because then val24 will contain the Old Total, which we overwrite.
-                if not _is_any_total:
+                # Also exclude Resultados acumulados since it was already accumulated directly above.
+                if not _is_any_total and cell_name_clean not in ["Resultados acumulados", "Ganancias (pérdidas) acumuladas"]:
+                    val24_round = round(val24)
                     if current_section == "Activos Corrientes":
-                        subtotal_corriente_24 += val24
+                        subtotal_corriente_24 += val24_round
                     elif current_section == "Activos No Corrientes":
-                        subtotal_no_corriente_24 += val24
+                        subtotal_no_corriente_24 += val24_round
                     elif current_section == "Pasivos Corrientes":
-                        subtotal_corriente_24 += val24
+                        subtotal_corriente_24 += val24_round
                     elif current_section == "Pasivos No Corrientes":
-                        subtotal_no_corriente_24 += val24
+                        subtotal_no_corriente_24 += val24_round
                     elif current_section == "Patrimonio":
                         if _is_participaciones_no_controladoras(cell_lower):
-                            patrimonio_no_controladora_24 += val24
+                            patrimonio_no_controladora_24 += val24_round
                         else:
-                            patrimonio_controladora_24 += val24
-                        patrimonio_totales_24 += val24
+                            patrimonio_controladora_24 += val24_round
+                        patrimonio_totales_24 += val24_round
                 
                 # Inyeccion de totales/subtotales usando deteccion flexible (no exacta)
                 if _is_total_activos_corrientes(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = subtotal_corriente
-                    ws.cell(row=row, column=val24_col_idx).value = subtotal_corriente_24
-                    activos_totales += subtotal_corriente
-                    activos_totales_24 += subtotal_corriente_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(subtotal_corriente)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(subtotal_corriente_24)
+                    activos_totales += round(subtotal_corriente)
+                    activos_totales_24 += round(subtotal_corriente_24)
                     subtotal_corriente = 0.0  # reset 
                     subtotal_corriente_24 = 0.0
                 elif _is_total_activos_no_corrientes(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = subtotal_no_corriente
-                    ws.cell(row=row, column=val24_col_idx).value = subtotal_no_corriente_24
-                    activos_totales += subtotal_no_corriente
-                    activos_totales_24 += subtotal_no_corriente_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(subtotal_no_corriente)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(subtotal_no_corriente_24)
+                    activos_totales += round(subtotal_no_corriente)
+                    activos_totales_24 += round(subtotal_no_corriente_24)
                     subtotal_no_corriente = 0.0  # reset
                     subtotal_no_corriente_24 = 0.0
                 elif _is_total_activos(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = activos_totales
-                    ws.cell(row=row, column=val24_col_idx).value = activos_totales_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(activos_totales)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(activos_totales_24)
                 # The trackers now hold "Visual Sums" which represent true expected accounting arithmetic
                 elif _is_total_pasivos_corrientes(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = subtotal_corriente
-                    ws.cell(row=row, column=val24_col_idx).value = subtotal_corriente_24
-                    pasivos_totales += subtotal_corriente
-                    pasivos_totales_24 += subtotal_corriente_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(subtotal_corriente)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(subtotal_corriente_24)
+                    pasivos_totales += round(subtotal_corriente)
+                    pasivos_totales_24 += round(subtotal_corriente_24)
                     subtotal_corriente = 0.0
                     subtotal_corriente_24 = 0.0
                 elif _is_total_pasivos_no_corrientes(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = subtotal_no_corriente
-                    ws.cell(row=row, column=val24_col_idx).value = subtotal_no_corriente_24
-                    pasivos_totales += subtotal_no_corriente
-                    pasivos_totales_24 += subtotal_no_corriente_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(subtotal_no_corriente)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(subtotal_no_corriente_24)
+                    pasivos_totales += round(subtotal_no_corriente)
+                    pasivos_totales_24 += round(subtotal_no_corriente_24)
                     subtotal_no_corriente = 0.0
                     subtotal_no_corriente_24 = 0.0
                 elif _is_total_pasivos(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = pasivos_totales
-                    ws.cell(row=row, column=val24_col_idx).value = pasivos_totales_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(pasivos_totales)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(pasivos_totales_24)
                 elif _is_patrimonio_controladora(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = patrimonio_controladora
-                    ws.cell(row=row, column=val24_col_idx).value = patrimonio_controladora_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(patrimonio_controladora)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(patrimonio_controladora_24)
                 elif _is_total_pasivos_patrimonio(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = (pasivos_totales + patrimonio_totales)
-                    ws.cell(row=row, column=val24_col_idx).value = (pasivos_totales_24 + patrimonio_totales_24)
+                    ws.cell(row=row, column=val25_col_idx).value = round(pasivos_totales + patrimonio_totales)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(pasivos_totales_24 + patrimonio_totales_24)
                 elif _is_total_patrimonio(cell_lower):
-                    ws.cell(row=row, column=val25_col_idx).value = patrimonio_totales
-                    ws.cell(row=row, column=val24_col_idx).value = patrimonio_totales_24
+                    ws.cell(row=row, column=val25_col_idx).value = round(patrimonio_totales)
+                    if has_comp:
+                        ws.cell(row=row, column=val24_col_idx).value = round(patrimonio_totales_24)
 
                 if str(target_lang).lower() == 'en':
                     ws.cell(row=row, column=name_col_idx).value = translate_ifrs_term(cell_name, target_lang='en', overrides_dict=overrides)

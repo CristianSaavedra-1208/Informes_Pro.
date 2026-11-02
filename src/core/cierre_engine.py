@@ -123,6 +123,20 @@ def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
             if pd.notna(r.rubro) and str(r.rubro).strip():
                 key = ('P&L', str(r.rubro).strip())
                 summaries[key] = summaries.get(key, 0.0) + float(r.monto)
+
+        # Inyectar ajustes de auditoría individual para rubros de P&L
+        if not str(empresa).startswith("[GRUPO]"):
+            from src.models.audit_adjustment import AuditAdjustmentRecord
+            from src.core.consolidacion_engine import is_pl_account
+            adj_records = db.query(AuditAdjustmentRecord).filter(
+                AuditAdjustmentRecord.empresa == empresa,
+                AuditAdjustmentRecord.periodo == periodo
+            ).all()
+            for adj in adj_records:
+                if adj.linea_item and is_pl_account(adj.linea_item):
+                    monto_pl = float(adj.debe - adj.haber)
+                    key = ('P&L', str(adj.linea_item).strip())
+                    summaries[key] = summaries.get(key, 0.0) + monto_pl
                 
         # 6. Guardar registros de detalle en bloque
         db.bulk_save_objects(details)
@@ -139,12 +153,21 @@ def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
             ))
         db.bulk_save_objects(sum_records)
         
-        # 8. Borrar data viva
+        # 8. Borrar memoria activa del TB (se conservan los ajustes de auditoría en audit_adjustments para historial y trazabilidad)
         db.query(TrialBalanceRecord).filter_by(empresa=empresa, periodo=periodo).delete()
-        db.query(AuditAdjustmentRecord).filter_by(empresa=empresa, periodo=periodo).delete()
         
         db.commit()
-        return True, f"Cierre ejecutado correctamente para {periodo}. Se guardaron {len(details)} registros en memoria histórica."
+
+        # 9. Generar Snapshot inmutable en Bóveda de Cierre Histórico
+        try:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            snap_ok, snap_msg = SnapshotVaultManager.create_snapshot(empresa, periodo, user="Usuario Cierre")
+            if not snap_ok:
+                print(f"Aviso al crear Snapshot en Bóveda para {empresa} {periodo}: {snap_msg}")
+        except Exception as e_snap:
+            print(f"Error al invocar Bóveda de Snapshots: {e_snap}")
+
+        return True, f"Cierre ejecutado correctamente para {periodo}. Se guardaron {len(details)} registros en memoria histórica y se congeló el Snapshot oficial en Bóveda."
     except Exception as e:
         db.rollback()
         return False, str(e)
@@ -156,7 +179,7 @@ def reversar_cierre_periodo(empresa: str, periodo: str):
     """
     Deshace el cierre de un periodo:
     1. Toma los registros detallados de HistoricalDetailRecord.
-    2. Los reinserta en TrialBalanceRecord (memoria activa).
+    2. Los reinserta en TrialBalanceRecord (memoria activa), omitiendo las cuentas 9999xxx que ya existen en audit_adjustments.
     3. Elimina los registros históricos (detalles y resúmenes) de ese periodo.
     """
     db = SessionLocal()
@@ -169,6 +192,9 @@ def reversar_cierre_periodo(empresa: str, periodo: str):
         # Preparar para memoria activa
         tb_records = []
         for h in historicos:
+            # Las cuentas de auditoría (serie 9999) ya viven en audit_adjustments para no duplicar saldos
+            if str(h.cuenta_id).strip().startswith('9999'):
+                continue
             tb_records.append(TrialBalanceRecord(
                 empresa=empresa,
                 periodo=periodo,
@@ -191,7 +217,15 @@ def reversar_cierre_periodo(empresa: str, periodo: str):
         db.query(HistoricalDataRecord).filter_by(empresa=empresa, periodo=periodo).delete()
         
         db.commit()
-        return True, f"El periodo {periodo} ha sido restaurado exitosamente a la memoria activa."
+
+        # Archivar e invalidar Snapshot en Bóveda
+        try:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            SnapshotVaultManager.archive_snapshot(empresa, periodo, user="Usuario Reapertura")
+        except Exception as e_arch:
+            print(f"Aviso al archivar Snapshot en Bóveda para {empresa} {periodo}: {e_arch}")
+
+        return True, f"El periodo {periodo} ha sido restaurado exitosamente a la memoria activa y el snapshot ha sido archivado."
     except Exception as e:
         db.rollback()
         return False, str(e)

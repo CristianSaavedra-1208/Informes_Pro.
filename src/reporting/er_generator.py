@@ -117,10 +117,12 @@ class ERGenerator:
         val25_col_idx = date_cols[0] if len(date_cols) >= 1 else 3
         val24_col_idx = date_cols[1] if len(date_cols) >= 2 else 4
 
+        has_comp = bool(pl_df_comp is not None and not pl_df_comp.empty and str(periodo_comp_str).strip().lower() not in ["ninguno", "none", "", "comp"])
+
         # 3. Limpiar y actualizar los encabezados de fechas
         if periodo_actual_str:
             formatted_actual = format_period_date(periodo_actual_str, lang=target_lang)
-            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if periodo_comp_str else ""
+            formatted_comp = format_period_date(periodo_comp_str, lang=target_lang) if (periodo_comp_str and has_comp) else ""
             
             for row in range(1, 5):
                 cell_25 = ws.cell(row=row, column=val25_col_idx)
@@ -136,14 +138,15 @@ class ERGenerator:
                     if is_date_or_year:
                         cell_25.value = formatted_actual
                         
-                if cell_24.value is not None:
+                # Reemplazar celda comparativa SOLO si has_comp es True
+                if has_comp and cell_24.value is not None:
                     is_date_or_year_comp = (
                         isinstance(cell_24.value, (datetime.datetime, datetime.date)) or
                         (isinstance(cell_24.value, str) and ("20" in cell_24.value or "Anterior" in cell_24.value)) or
                         (isinstance(cell_24.value, (int, float)) and 2000 <= cell_24.value <= 2100)
                     )
                     if is_date_or_year_comp:
-                        cell_24.value = formatted_comp if periodo_comp_str else ""
+                        cell_24.value = formatted_comp
 
         # 4. Funciones de normalización de strings
         def sanitize(text):
@@ -226,17 +229,17 @@ class ERGenerator:
                     val_25 = resultados_2025.get(clasif_secreta, 0.0)
                     if pd.isna(val_25) or val_25 is None:
                         val_25 = 0.0
+                    val_25 = round(val_25)
                     ws.cell(row=row, column=val25_col_idx).value = val_25
                     rolling_sum_25 += val_25
 
-                    if resultados_comp:
+                    if has_comp and resultados_comp:
                         val_24 = resultados_comp.get(clasif_secreta, 0.0)
                         if pd.isna(val_24) or val_24 is None:
                             val_24 = 0.0
+                        val_24 = round(val_24)
                         ws.cell(row=row, column=val24_col_idx).value = val_24
                         rolling_sum_24 += val_24
-                    else:
-                        ws.cell(row=row, column=val24_col_idx).value = 0.0
 
                 # B) Subtotal o Fórmulas
                 else:
@@ -280,11 +283,9 @@ class ERGenerator:
 
                     es_subtotal = is_subtotal_row(cell_name)
                     if es_subtotal and clasif_secreta not in resultados_2025 and (not resultados_comp or clasif_secreta not in resultados_comp):
-                        ws.cell(row=row, column=val25_col_idx).value = rolling_sum_25
-                        if resultados_comp:
-                            ws.cell(row=row, column=val24_col_idx).value = rolling_sum_24
-                        else:
-                            ws.cell(row=row, column=val24_col_idx).value = 0.0
+                        ws.cell(row=row, column=val25_col_idx).value = round(rolling_sum_25)
+                        if has_comp and resultados_comp:
+                            ws.cell(row=row, column=val24_col_idx).value = round(rolling_sum_24)
 
                 if str(target_lang).lower() == 'en' and cell_name and isinstance(cell_name, str):
                     ws.cell(row=row, column=clasif_col_idx).value = translate_ifrs_term(cell_name.strip(), target_lang='en', overrides_dict=overrides)

@@ -46,13 +46,23 @@ def render(empresa_seleccionada, empresa_path):
             st.session_state['pl_df_comp'] = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
         st.session_state['_loaded_data_sig'] = _data_sig
 
-    # Detectar cambio de periodo o empresa para invalidar previews desactualizados
-    cur_period_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}"
+    # Detectar cambio de periodo, empresa o versión del generador para invalidar previews desactualizados
+    _BAL_GEN_VERSION = "20261022_audit_v5"
+    cur_period_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}_{_BAL_GEN_VERSION}"
     if st.session_state.get('last_selected_period_sig') != cur_period_sig:
         st.session_state['last_selected_period_sig'] = cur_period_sig
-        for k in ['preview_df', 'balance_excel_binary', 'balance_word_binary', 'er_preview_df', 'er_excel_binary', 'flujo_preview_df', 'pat_preview_df', 'ori_preview_df']:
+        for k in [
+            'preview_df', 'balance_excel_binary', 'balance_word_binary', 
+            'er_preview_df', 'er_excel_binary', 'flujo_preview_df', 
+            'pat_preview_df', 'ori_preview_df',
+            'tb_df', 'tb_df_comp', 'pl_df', 'pl_df_comp', '_loaded_data_sig'
+        ]:
             if k in st.session_state:
                 del st.session_state[k]
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
 
     # Garantizar carga de mapeos desde disco si no están en sesión
     if 'map_balance_df' not in st.session_state or st.session_state['map_balance_df'] is None or (isinstance(st.session_state['map_balance_df'], pd.DataFrame) and st.session_state['map_balance_df'].empty):
@@ -114,14 +124,24 @@ def render(empresa_seleccionada, empresa_path):
                     import time
                     start_time = time.time()
                     try:
+                        import importlib
+                        import src.reporting.balance_generator as bg_mod
+                        importlib.reload(bg_mod)
                         from src.reporting.balance_generator import BalanceGenerator
                         
                         template_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
                         if not os.path.exists(template_path):
                             st.error(f"❌ No se encontró la plantilla base '{template_path}' en la carpeta de la empresa activa.")
                         else:
-                            tb_df = st.session_state['tb_df'].copy()
-                            tb_df_comp = st.session_state.get('tb_df_comp')
+                            # Recargar Trial Balance fresco para incluir los últimos ajustes de auditoría
+                            import importlib
+                            import src.models.trial_balance_db as tb_db_mod
+                            importlib.reload(tb_db_mod)
+                            from src.models.trial_balance_db import TrialBalanceDB
+                            tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+                            tb_df_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+                            st.session_state['tb_df'] = tb_df
+                            st.session_state['tb_df_comp'] = tb_df_comp
                             map_balance_df = st.session_state['map_balance_df'].copy()
                             
                             target_lang = st.session_state.get('idioma_reporte', 'es')
@@ -206,6 +226,8 @@ def render(empresa_seleccionada, empresa_path):
                 target_lang_active = st.session_state.get('idioma_reporte', 'es')
                 styled_df = apply_corporate_style(preview_df, excel_bytes=st.session_state.get('balance_excel_binary'), unit=unidad, target_lang=target_lang_active)
                 
+                label_estado = "Financial Statement" if str(target_lang_active).lower() == "en" else "Estado"
+                st.markdown(f"**📍 {label_estado} `{{{{#BALANCE}}}}`**")
                 st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
                 st.write("")
                  
@@ -298,25 +320,29 @@ def render(empresa_seleccionada, empresa_path):
             btn_run_er = st.form_submit_button("🚀 Ejecutar E.R. Clasificados", type="primary", use_container_width=True)
 
         if btn_run_er:
+            import importlib
+            import src.models.pl_cubo_db as pl_cubo_mod
+            importlib.reload(pl_cubo_mod)
             from src.core.sabana_builder import build_pl_sabana
+            from src.models.pl_cubo_db import PlCuboDB
             
-            # Obtener o derivar P&L actual
-            pl_df = st.session_state.get('pl_df')
+            # Recargar P&L fresco desde BD para incorporar los últimos ajustes de auditoría
+            pl_df = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
             if pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty):
                 tb_act = st.session_state.get('tb_df')
                 map_pl_df = st.session_state.get('map_pl_df')
                 if tb_act is not None and not tb_act.empty and map_pl_df is not None:
                     pl_df = build_pl_sabana(None, map_pl_df, tb_act)
-                    st.session_state['pl_df'] = pl_df
+            st.session_state['pl_df'] = pl_df
 
-            # Obtener o derivar P&L comparativo
-            pl_df_comp = st.session_state.get('pl_df_comp')
+            # Recargar P&L comparativo fresco
+            pl_df_comp = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
             if (pl_df_comp is None or (isinstance(pl_df_comp, pd.DataFrame) and pl_df_comp.empty)) and periodo_comp != "Ninguno":
                 tb_comp = st.session_state.get('tb_df_comp')
                 map_pl_df = st.session_state.get('map_pl_df')
                 if tb_comp is not None and not tb_comp.empty and map_pl_df is not None:
                     pl_df_comp = build_pl_sabana(None, map_pl_df, tb_comp)
-                    st.session_state['pl_df_comp'] = pl_df_comp
+            st.session_state['pl_df_comp'] = pl_df_comp
 
             if pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty):
                 st.warning(f"⚠️ No se ha encontrado el P&L ni el Trial Balance para el periodo {periodo_actual}. Sube el archivo correspondiente en 'Cargas de datos'.")
@@ -325,6 +351,9 @@ def render(empresa_seleccionada, empresa_path):
                     try:
                         import time
                         start_time = time.time()
+                        import importlib
+                        import src.reporting.er_generator as erg_mod
+                        importlib.reload(erg_mod)
                         from src.reporting.er_generator import ERGenerator
                         
                         template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
@@ -366,6 +395,8 @@ def render(empresa_seleccionada, empresa_path):
 
             from src.reporting.formatting import apply_corporate_style
             styled_df = apply_corporate_style(display_df, excel_bytes=st.session_state.get('er_excel_binary'), unit=unidad_medida, target_lang=target_lang)
+            label_estado = "Financial Statement" if str(target_lang).lower() == "en" else "Estado"
+            st.markdown(f"**📍 {label_estado} `{{{{#ER}}}}`**")
             st.markdown(styled_df.to_html(index=False), unsafe_allow_html=True)
             st.write("")
             
@@ -806,6 +837,8 @@ def render(empresa_seleccionada, empresa_path):
                 
                 from src.reporting.formatting import apply_corporate_style
                 styled_cf = apply_corporate_style(display_cf, excel_bytes=st.session_state.get('flujo_excel_binary'), unit=unidad_medida_cf)
+                label_estado = "Financial Statement" if str(target_lang).lower() == "en" else "Estado"
+                st.markdown(f"**📍 {label_estado} `{{{{#EFE}}}}`**")
                 st.markdown(styled_cf.to_html(index=False), unsafe_allow_html=True)
                 
             with tab_view2:
@@ -919,6 +952,9 @@ def render(empresa_seleccionada, empresa_path):
                         st.session_state['map_balance_df'] = map_bal
 
                 if os.path.exists(tmpl_bal) and tb_act is not None and map_bal is not None:
+                    import importlib
+                    import src.reporting.balance_generator as bg_mod
+                    importlib.reload(bg_mod)
                     from src.reporting.balance_generator import BalanceGenerator
                     from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
                     import openpyxl
@@ -1005,6 +1041,8 @@ def render(empresa_seleccionada, empresa_path):
 
             from src.reporting.formatting import apply_corporate_style
             styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('pat_excel_binary'), unit=st.session_state.get('um_bal', 'Miles de pesos (M$)'))
+            label_estado = "Financial Statement" if str(target_lang).lower() == "en" else "Estado"
+            st.markdown(f"**📍 {label_estado} `{{{{#PATRIMONIO}}}}`**")
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")
@@ -1182,6 +1220,8 @@ def render(empresa_seleccionada, empresa_path):
 
             from src.reporting.formatting import apply_corporate_style
             styled_c = apply_corporate_style(disp, excel_bytes=st.session_state.get('ori_excel_binary'), unit=st.session_state.get('um_er', 'M$'), target_lang=target_lang)
+            label_estado = "Financial Statement" if str(target_lang).lower() == "en" else "Estado"
+            st.markdown(f"**📍 {label_estado} `{{{{#ORI}}}}`**")
             st.markdown(styled_c.to_html(index=False), unsafe_allow_html=True)
             
             st.write("")

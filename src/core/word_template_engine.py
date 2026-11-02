@@ -1,7 +1,9 @@
 import os
 import sys
+import re
 import pandas as pd
 from io import BytesIO
+import docx
 from docx import Document
 from docxtpl import DocxTemplate
 from docx.oxml import parse_xml
@@ -19,6 +21,18 @@ from src.models.trial_balance_db import TrialBalanceDB
 from src.models.pl_cubo_db import PlCuboDB
 
 from docx.shared import Inches, Pt, RGBColor
+from src.reporting.word_table_formatter import (
+    clean_table_df,
+    is_valid_note_table,
+    classify_columns,
+    compute_optimal_column_widths,
+    apply_table_formatting_and_widths,
+    set_cell_nowrap,
+    set_table_width,
+    get_dynamic_font_and_spacing,
+    should_use_landscape,
+    create_section_break_xml,
+)
 
 def set_cell_bg(cell, fill_color):
     """Inyecta XML shading para cambiar el color de fondo de una celda de Word."""
@@ -47,10 +61,46 @@ def set_cell_borders(cell, top=None, bottom=None):
     borders_xml += '</w:tcBorders>'
     tcPr.append(parse_xml(borders_xml))
 
-def apply_table_column_widths(table, num_cols, total_width_inches=6.8):
-    """Calcula y aplica anchos de columna óptimos para informes financieros."""
+def set_table_metadata(tbl, tag_code):
+    """Asigna metadatos invisibles w:tblCaption y w:tblDescription a la tabla para actualización in-place futura."""
+    try:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        tblPr = tbl._tbl.tblPr
+        for child in list(tblPr):
+            if child.tag.endswith(('tblCaption', 'tblDescription')):
+                tblPr.remove(child)
+        caption = OxmlElement('w:tblCaption')
+        caption.set(qn('w:val'), str(tag_code))
+        tblPr.append(caption)
+        desc = OxmlElement('w:tblDescription')
+        desc.set(qn('w:val'), str(tag_code))
+        tblPr.append(desc)
+    except Exception:
+        pass
+
+def get_table_metadata(tbl):
+    """Lee metadatos invisibles w:tblCaption o w:tblDescription de la tabla de Word."""
+    try:
+        caps = tbl._tbl.xpath('.//w:tblPr/w:tblCaption/@w:val')
+        if caps and str(caps[0]).strip():
+            return str(caps[0]).strip()
+        descs = tbl._tbl.xpath('.//w:tblPr/w:tblDescription/@w:val')
+        if descs and str(descs[0]).strip():
+            return str(descs[0]).strip()
+    except Exception:
+        pass
+    return None
+
+def apply_table_column_widths(table, num_cols, total_width_inches=6.85, df=None):
+    """Calcula y aplica anchos de columna óptimos para informes financieros (100% de margen a margen)."""
     table.autofit = False
+    set_table_width(table, total_width_inches)
     
+    if df is not None:
+        apply_table_formatting_and_widths(table, df, total_width_inches=total_width_inches)
+        return
+
     if num_cols <= 1:
         col_widths = [total_width_inches]
     elif num_cols == 2:
@@ -58,22 +108,28 @@ def apply_table_column_widths(table, num_cols, total_width_inches=6.8):
     elif num_cols == 3:
         col_widths = [total_width_inches * 0.64, total_width_inches * 0.18, total_width_inches * 0.18]
     elif num_cols == 4:
-        col_widths = [total_width_inches * 0.58, total_width_inches * 0.10, total_width_inches * 0.16, total_width_inches * 0.16]
+        col_widths = [total_width_inches * 0.56, total_width_inches * 0.10, total_width_inches * 0.17, total_width_inches * 0.17]
     else:
-        col0 = max(3.2, total_width_inches - (1.1 * (num_cols - 1)))
-        rem = max(0.8, (total_width_inches - col0) / (num_cols - 1))
+        col0 = max(2.8, total_width_inches - (0.95 * (num_cols - 1)))
+        rem = max(0.6, (total_width_inches - col0) / (num_cols - 1))
         col_widths = [col0] + [rem] * (num_cols - 1)
+        factor = total_width_inches / sum(col_widths)
+        col_widths = [w * factor for w in col_widths]
 
-    for row in table.rows:
+    for row_idx, row in enumerate(table.rows):
         trPr = row._tr.get_or_add_trPr()
-        trPr.append(parse_xml(f'<w:cantSplit {nsdecls("w")}/>'))
+        if not any(c.tag.endswith('cantSplit') for c in trPr):
+            trPr.append(parse_xml(f'<w:cantSplit {nsdecls("w")}/>'))
+        if row_idx == 0 and not any(c.tag.endswith('tblHeader') for c in trPr):
+            trPr.append(parse_xml(f'<w:tblHeader {nsdecls("w")}/>'))
         for j, cell in enumerate(row.cells):
             if j < len(col_widths):
                 cell.width = Inches(col_widths[j])
-
-    if len(table.rows) > 0:
-        hdr_trPr = table.rows[0]._tr.get_or_add_trPr()
-        hdr_trPr.append(parse_xml(f'<w:tblHeader {nsdecls("w")}/>'))
+                tcPr = cell._tc.get_or_add_tcPr()
+                for c in list(tcPr):
+                    if c.tag.endswith('tcW'):
+                        tcPr.remove(c)
+                tcPr.append(parse_xml(f'<w:tcW {nsdecls("w")} w:w="{int(round(col_widths[j] * 1440))}" w:type="dxa"/>'))
 
 def move_element_before(target_p, new_element):
     """Mueve un elemento XML de Word (párrafo o tabla) justo antes del párrafo objetivo."""
@@ -84,17 +140,17 @@ def move_element_before(target_p, new_element):
 def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
     """Rellena y da estilo corporativo a una tabla de Word idéntico a la pantalla."""
     table.style = 'Normal Table'
+    df = clean_table_df(df)
     num_cols = len(df.columns)
+    col_classes = classify_columns(df)
+    is_landscape = should_use_landscape(num_cols)
+    total_width_inches = 9.60 if is_landscape else (7.50 if is_balance else 6.85)
     
-    # Configuración de espaciados según si es balance clasificado (modo compacto 1 página)
-    pad_top = 15 if is_balance else 30
-    pad_bottom = 15 if is_balance else 30
-    pad_lr = 40 if is_balance else 50
-    p_spacing = Pt(8.0) if is_balance else Pt(10.0)
-    base_font_size = 7.0 if is_balance else 8.0
-    hdr_font_size = 7.5 if is_balance else 8.5
-    hdr_pad_v = 12 if is_balance else 20
-    hdr_line_spacing = Pt(8.0) if is_balance else Pt(9.5)
+    # Configuración de espaciados dinámicos según columnas y orientación
+    base_font_size, hdr_font_size, p_spacing, pad_top, pad_lr = get_dynamic_font_and_spacing(num_cols, is_compact=is_balance, is_landscape=is_landscape)
+    pad_bottom = pad_top
+    hdr_pad_v = pad_top
+    hdr_line_spacing = Pt(p_spacing.pt - 0.5) if hasattr(p_spacing, 'pt') else Pt(8.5)
 
     # Fila de cabecera
     is_miles = any(m in str(unit).lower() for m in ["miles", "m$", "mch$"])
@@ -105,17 +161,24 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
             if "M$" not in header_text:
                 header_text = f"{header_text}\nM$"
         hdr_cells[i].text = header_text
-        set_cell_bg(hdr_cells[i], "FFFFFF")
+        set_cell_bg(hdr_cells[i], "E8EEF6")
         set_cell_margins(hdr_cells[i], top=hdr_pad_v, bottom=hdr_pad_v, left=pad_lr, right=pad_lr)
-        set_cell_borders(hdr_cells[i], top={'val': 'single', 'sz': '12', 'color': '000000'}, bottom={'val': 'single', 'sz': '12', 'color': '000000'})
+        set_cell_borders(hdr_cells[i], top=None, bottom={'val': 'single', 'sz': '8', 'color': '1F3864'})
         for p in hdr_cells[i].paragraphs:
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after = Pt(0)
             p.paragraph_format.line_spacing = hdr_line_spacing
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT if i == 0 else WD_ALIGN_PARAGRAPH.RIGHT
+            if i < len(col_classes) and col_classes[i] == 'numeric':
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                set_cell_nowrap(hdr_cells[i])
+            elif i < len(col_classes) and col_classes[i] == 'note':
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                set_cell_nowrap(hdr_cells[i])
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             for run in p.runs:
                 run.font.bold = True
-                run.font.color.rgb = RGBColor(0, 0, 0)
+                run.font.color.rgb = RGBColor(31, 56, 100) # #1F3864
                 run.font.name = 'Arial'
                 run.font.size = Pt(hdr_font_size)
                 
@@ -149,8 +212,8 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
             "procedentes de actividades de financiación", "total resultados integrales", "total resultados"
         ])
 
-        is_even = (row_i % 2 == 1)
-        bg_color = "E3F0FE" if is_even else "FFFFFF"
+        # Estilo auditado Big 4: fondo blanco sin cebrado
+        bg_color = "FFFFFF"
 
         for col_idx, col_name in enumerate(df.columns):
             val = row_vals[col_name]
@@ -176,20 +239,38 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
             set_cell_bg(cell, bg_color)
             set_cell_margins(cell, top=pad_top, bottom=pad_bottom, left=pad_lr, right=pad_lr)
             
+            # En estilo modelo base: líneas definidas y no continuas
             if is_grand_total:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'double', 'sz': '12', 'color': '000000'})
+                if col_idx == 0:
+                    top_b = None
+                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
+                else:
+                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                    bottom_b = {'val': 'double', 'sz': '6', 'color': '404040'}
             elif is_subtotal:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'single', 'sz': '6', 'color': '000000'})
+                if col_idx == 0:
+                    top_b = None
+                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
+                else:
+                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
             else:
-                set_cell_borders(cell, top=None, bottom=None)
+                top_b = None
+                bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+            
+            set_cell_borders(cell, top=top_b, bottom=bottom_b)
 
             for p in cell.paragraphs:
                 p.paragraph_format.space_before = Pt(0) if is_balance else Pt(0.5)
                 p.paragraph_format.space_after = Pt(0) if is_balance else Pt(0.5)
                 p.paragraph_format.line_spacing = p_spacing
                 
-                if col_idx in numeric_cols or isinstance(val, (int, float)) or col_idx > 0:
+                if col_idx < len(col_classes) and col_classes[col_idx] == 'numeric':
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    set_cell_nowrap(cell)
+                elif col_idx < len(col_classes) and col_classes[col_idx] == 'note':
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    set_cell_nowrap(cell)
                 else:
                     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                     
@@ -200,13 +281,21 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
                         run.font.bold = True
                     run.font.color.rgb = RGBColor(0, 0, 0)
 
-    apply_table_column_widths(table, num_cols, total_width_inches=6.8)
+    apply_table_formatting_and_widths(table, df, classifications=col_classes, total_width_inches=total_width_inches, is_compact=is_balance, is_landscape=is_landscape)
 
 def populate_notes_docx_table(table, chunk_df):
     """Rellena y da estilo a una tabla de notas en base a un DataFrame de openpyxl/slicing."""
     table.style = 'Normal Table'
+    chunk_df = clean_table_df(chunk_df)
     num_cols = len(chunk_df.columns)
-    numeric_cols = chunk_df.select_dtypes(include=['number']).columns.tolist()
+    col_classes = classify_columns(chunk_df)
+    is_landscape = should_use_landscape(num_cols)
+    total_width_inches = 9.60 if is_landscape else 6.85
+    
+    base_font_size, hdr_font_size, p_spacing, pad_top, pad_lr = get_dynamic_font_and_spacing(num_cols, is_compact=False, is_landscape=is_landscape)
+    pad_bottom = pad_top
+    hdr_pad_v = pad_top
+    hdr_line_spacing = Pt(p_spacing.pt - 0.5) if hasattr(p_spacing, 'pt') else Pt(8.5)
     
     in_header = True
     for row_i, (_, row) in enumerate(chunk_df.iterrows()):
@@ -225,8 +314,7 @@ def populate_notes_docx_table(table, chunk_df):
         is_grand_total = any(x in first_cell_val for x in ["total general", "total final", "saldo final", "total patrimonio", "total activos", "total pasivos y patrimonio", "patrimonio total"])
         is_subtotal = not is_grand_total and any(x in first_cell_val for x in ["total", "sub total", "subtotal", "ganancia bruta", "total resultados integrales"])
         
-        is_even = (row_i % 2 == 1)
-        bg_color = "FFFFFF" if in_header else ("E3F0FE" if is_even else "FFFFFF")
+        bg_color = "EBF1F7" if in_header else "FFFFFF"
             
         for col_idx, col_name in enumerate(chunk_df.columns):
             val = row[col_name]
@@ -249,35 +337,322 @@ def populate_notes_docx_table(table, chunk_df):
             cell = row_cells[col_idx]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=30, bottom=30, left=50, right=50)
+            set_cell_margins(cell, top=hdr_pad_v if in_header else pad_top, bottom=hdr_pad_v if in_header else pad_bottom, left=pad_lr, right=pad_lr)
             
+            # En estilo modelo base: cabecera 1F3864 y líneas no continuas
             if in_header:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '12', 'color': '000000'}, bottom={'val': 'single', 'sz': '12', 'color': '000000'})
+                set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '8', 'color': '1F3864'})
             elif is_grand_total:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'double', 'sz': '12', 'color': '000000'})
+                if col_idx == 0:
+                    set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
+                else:
+                    set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '404040'}, bottom={'val': 'double', 'sz': '6', 'color': '404040'})
             elif is_subtotal:
-                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '000000'}, bottom={'val': 'single', 'sz': '6', 'color': '000000'})
+                if col_idx == 0:
+                    set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
+                else:
+                    set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '404040'}, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
             else:
-                set_cell_borders(cell, top=None, bottom=None)
+                set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'E1E1E1'})
                 
             for p in cell.paragraphs:
                 p.paragraph_format.space_before = Pt(0.5)
                 p.paragraph_format.space_after = Pt(0.5)
-                p.paragraph_format.line_spacing = Pt(10.0)
+                p.paragraph_format.line_spacing = hdr_line_spacing if in_header else p_spacing
                 
-                if col_idx > 0 or col_idx in numeric_cols or isinstance(val, (int, float)):
+                if col_idx < len(col_classes) and col_classes[col_idx] == 'numeric':
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    set_cell_nowrap(cell)
+                elif col_idx < len(col_classes) and col_classes[col_idx] == 'note':
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    set_cell_nowrap(cell)
                 else:
                     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(8.5)
+                    run.font.size = Pt(hdr_font_size if in_header else base_font_size)
                     if in_header or is_grand_total or is_subtotal:
                         run.font.bold = True
-                    run.font.color.rgb = RGBColor(0, 0, 0)
+                    run.font.color.rgb = RGBColor(31, 56, 100) if in_header else RGBColor(0, 0, 0)
                         
-    apply_table_column_widths(table, num_cols, total_width_inches=6.8)
+    apply_table_formatting_and_widths(table, chunk_df, classifications=col_classes, total_width_inches=total_width_inches, is_compact=False, is_landscape=is_landscape)
+
+def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=None, periodo_comp="Ninguno"):
+    """
+    Actualiza los valores numéricos y fechas de una tabla de Word existente sin alterar
+    sus anchos de columnas (w:tcW), márgenes (w:tcMar), bordes (w:tcBorders) ni tipografía.
+    Soporta mapeo semántico por concepto (columna 0) y mapeo posicional 1 a 1.
+    Si periodo_comp == 'Ninguno', BLINDA completamente cualquier columna o bloque correspondiente
+    a períodos anteriores (ej. 2025, 2024), preservando 100% intactos sus valores y formatos preexistentes.
+    """
+    if table is None or df is None:
+        return
+        
+    import unicodedata
+    import re
+    import numpy as np
+    
+    clean_df = clean_table_df(df)
+    if clean_df.empty:
+        return
+
+    is_no_comp = (not periodo_comp) or str(periodo_comp).strip().lower() in ["ninguno", "none", ""]
+    act_year = str(periodo_actual)[:4] if periodo_actual and len(str(periodo_actual)) >= 4 else None
+
+    def normalize_text(text):
+        if not text:
+            return ""
+        s = str(text).lower().strip()
+        s = unicodedata.normalize('NFKD', s).encode('ASCII', 'ignore').decode('utf-8')
+        s = re.sub(r'[^a-z0-9]', '', s)
+        return s
+
+    def format_num_val(val):
+        if pd.isna(val) or val is None or str(val).strip().lower() in ["", "nan", "none"]:
+            return ""
+        if isinstance(val, (int, float, np.number)):
+            if val == 0:
+                return "-"
+            elif val < 0:
+                return f"({abs(val):,.0f})".replace(",", ".")
+            else:
+                return f"{val:,.0f}".replace(",", ".")
+        return str(val).strip()
+
+    def set_cell_value(cell, text_val, align_right=False):
+        first_p = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+        
+        # Eliminar párrafos adicionales en la celda si los hubiera
+        for extra_p in list(cell.paragraphs[1:]):
+            p_elm = extra_p._p
+            if p_elm.getparent() is not None:
+                p_elm.getparent().remove(p_elm)
+                
+        if first_p.runs:
+            r0 = first_p.runs[0]
+            r0.text = str(text_val)
+            for extra_r in list(first_p.runs[1:]):
+                r_elm = extra_r._r
+                if r_elm.getparent() is not None:
+                    r_elm.getparent().remove(r_elm)
+        else:
+            first_p.add_run(str(text_val))
+            
+        if align_right:
+            first_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+    num_rows_tbl = len(table.rows)
+    num_cols_tbl = len(table.columns)
+    df_cols = list(clean_df.columns)
+    
+    # 1. Detectar años presentes en las cabeceras de Word (primeras filas, excluyendo col 0 de conceptos)
+    tbl_col_years = {}
+    for r_idx in range(min(4, num_rows_tbl)):
+        row = table.rows[r_idx]
+        for c_idx in range(1, len(row.cells)):
+            txt = row.cells[c_idx].text.strip()
+            years = re.findall(r'20\d{2}', txt)
+            if years and c_idx not in tbl_col_years:
+                tbl_col_years[c_idx] = years[0]
+
+    # Columnas que pertenecen a períodos comparativos (ej. 2025, 2024)
+    protected_tbl_cols = set()
+    if is_no_comp and act_year:
+        for c_idx, yr in tbl_col_years.items():
+            if yr != act_year:
+                protected_tbl_cols.add(c_idx)
+
+    # 2. Mapeo de columnas de clean_df a columnas de table (df_col_idx -> tbl_col_idx)
+    col_mapping = {}
+    
+    if not tbl_col_years:
+        # La tabla no tiene columnas por fecha (ej. Patrimonio), sino componentes en columnas
+        for j in range(min(num_cols_tbl, len(df_cols))):
+            col_mapping[j] = j
+    elif is_no_comp:
+        # Modo estricto sin comparativo: SOLO mapear columna de concepto y columna del período actual
+        col_mapping[0] = 0
+        
+        # Buscar columna en Word del año actual que no esté protegida
+        act_tbl_col = None
+        if act_year:
+            for c_idx, yr in tbl_col_years.items():
+                if yr == act_year:
+                    act_tbl_col = c_idx
+                    break
+        if act_tbl_col is None:
+            for c_idx in range(1, num_cols_tbl):
+                if c_idx not in protected_tbl_cols:
+                    act_tbl_col = c_idx
+                    break
+
+        # Buscar en df la columna del período actual
+        df_act_idx = 1
+        for j, col_name in enumerate(df_cols):
+            if j == 0:
+                continue
+            if str(col_name).strip().lower() in ['nota', 'notas']:
+                for tj in range(1, num_cols_tbl):
+                    if tj not in protected_tbl_cols and "nota" in table.rows[0].cells[tj].text.lower():
+                        col_mapping[j] = tj
+                        break
+                continue
+            if act_year and act_year in str(col_name):
+                df_act_idx = j
+                break
+        
+        if act_tbl_col is not None and act_tbl_col not in protected_tbl_cols:
+            col_mapping[df_act_idx] = act_tbl_col
+            
+            # Opcional: actualizar fecha en cabecera de la columna actual en Word si corresponde
+            if periodo_actual:
+                for hr_idx in range(min(2, num_rows_tbl)):
+                    hdr_cell = table.rows[hr_idx].cells[act_tbl_col]
+                    hdr_txt = hdr_cell.text
+                    if act_year and act_year in hdr_txt:
+                        m_date = re.search(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2})?', hdr_txt)
+                        if m_date:
+                            matched_str = m_date.group(0)
+                            from src.reporting.note_generator import format_date_dots
+                            dot_date = format_date_dots(periodo_actual)
+                            if "-" in matched_str and len(matched_str) >= 8:
+                                new_date_str = dot_date.replace(".", "-")
+                            elif "." in matched_str and len(matched_str) >= 8:
+                                new_date_str = dot_date
+                            elif "/" in matched_str and len(matched_str) >= 8:
+                                new_date_str = dot_date.replace(".", "/")
+                            else:
+                                new_date_str = str(periodo_actual)
+                            updated_hdr = hdr_txt.replace(matched_str, new_date_str)
+                            set_cell_value(hdr_cell, updated_hdr, align_right=True)
+    else:
+        # Modo con comparativo normal
+        if num_cols_tbl == len(df_cols):
+            for j in range(num_cols_tbl):
+                col_mapping[j] = j
+        else:
+            used_tbl_cols = set()
+            col_mapping[0] = 0
+            used_tbl_cols.add(0)
+            for df_idx, col_name in enumerate(df_cols):
+                if df_idx == 0:
+                    continue
+                col_str = str(col_name)
+                df_years = re.findall(r'20\d{2}', col_str)
+                if df_years:
+                    df_yr = df_years[0]
+                    for tbl_c, tbl_yr in tbl_col_years.items():
+                        if tbl_yr == df_yr and tbl_c not in used_tbl_cols:
+                            col_mapping[df_idx] = tbl_c
+                            used_tbl_cols.add(tbl_c)
+                            break
+            if len(col_mapping) <= 1:
+                for df_idx in range(1, len(df_cols)):
+                    if df_idx < num_cols_tbl:
+                        col_mapping[df_idx] = df_idx
+
+    # 3. Mapeo de filas
+    # Caso 1: Coincidencia posicional exacta de filas (SOLO si no es tabla multi-bloque)
+    is_multi_block = any("2025" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0) and any("2026" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0)
+    
+    if num_rows_tbl == len(clean_df) and not is_multi_block:
+        for r_idx in range(num_rows_tbl):
+            df_row = clean_df.iloc[r_idx]
+            tbl_row = table.rows[r_idx]
+            for df_c_idx, tbl_c_idx in col_mapping.items():
+                if df_c_idx == 0:
+                    continue
+                if tbl_c_idx >= len(tbl_row.cells) or tbl_c_idx in protected_tbl_cols:
+                    continue
+                val = df_row.iloc[df_c_idx]
+                fmt_val = format_num_val(val)
+                is_num = isinstance(val, (int, float, np.number))
+                # NUNCA vaciar celda si df tiene vacío/NaN
+                if fmt_val != "":
+                    set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
+        return
+
+    # Caso 2: Coincidencia semántica por concepto en Columna 0
+    df_concepts = {}
+    for df_r_idx, (_, df_row) in enumerate(clean_df.iterrows()):
+        concept_raw = str(df_row.iloc[0])
+        c_norm = normalize_text(concept_raw)
+        if c_norm and c_norm not in ['nan', 'none', 'm', 'detalle', 'concepto'] and c_norm not in df_concepts:
+            df_concepts[c_norm] = df_row
+
+    # Rastrear sección de año en tablas verticales apiladas (ej. Patrimonio)
+    current_section_year = act_year
+
+    for tbl_r_idx, tbl_row in enumerate(table.rows):
+        if not tbl_row.cells:
+            continue
+        c_cell = tbl_row.cells[0]
+        c_text = c_cell.text.strip()
+        c_norm = normalize_text(c_text)
+        
+        # Detectar cambio de bloque o año en filas
+        row_full_text = ' '.join(c.text for c in tbl_row.cells)
+        found_years = re.findall(r'20\d{2}', row_full_text)
+        if found_years:
+            current_section_year = found_years[0]
+            
+        # BLINDAJE: Si no hay comparativo y la fila o bloque es de un año anterior, NO MODIFICAR
+        if is_no_comp and act_year and current_section_year and current_section_year != act_year:
+            continue
+        
+        # Detección especial de fila de saldo de cierre en Patrimonio
+        is_closing_patrimonio = (
+            "saldoal" in c_norm and 
+            "1deenero" not in c_norm and 
+            "inicial" not in c_norm and 
+            (not act_year or act_year in c_text)
+        )
+        
+        matched_df_row = None
+        if is_closing_patrimonio:
+            for _, df_r_cand in clean_df.iterrows():
+                cand_norm = normalize_text(str(df_r_cand.iloc[0]))
+                if "saldoal" in cand_norm and "1deenero" not in cand_norm and "inicial" not in cand_norm and (not act_year or act_year in str(df_r_cand.iloc[0])):
+                    matched_df_row = df_r_cand
+                    # Actualizar fecha de la celda de Word a la nueva fecha de cierre
+                    if df_r_cand.iloc[0] and str(df_r_cand.iloc[0]).strip():
+                        c_cell.text = str(df_r_cand.iloc[0]).strip()
+                    break
+                cand_c0 = str(df_r_cand.iloc[0]).lower().strip()
+                if "saldo al" in cand_c0 and "1 de enero" not in cand_c0 and (not act_year or act_year in cand_c0):
+                    matched_df_row = df_r_cand
+                    # Actualizar fecha de la celda de Word a la nueva fecha de cierre
+                    if df_r_cand.iloc[0] and str(df_r_cand.iloc[0]).strip():
+                        c_cell.text = str(df_r_cand.iloc[0]).strip()
+                    break
+        elif c_norm in df_concepts:
+            matched_df_row = df_concepts[c_norm]
+        else:
+            for df_c_norm, df_r_candidate in df_concepts.items():
+                if len(c_norm) >= 7 and (c_norm in df_c_norm or df_c_norm in c_norm):
+                    # Evitar emparejamientos cruzados entre años
+                    cand_str = str(df_r_candidate.iloc[0])
+                    cand_yrs = re.findall(r'20\d{2}', cand_str)
+                    row_yrs = re.findall(r'20\d{2}', c_text)
+                    if cand_yrs and row_yrs and cand_yrs[0] != row_yrs[0]:
+                        continue
+                    matched_df_row = df_r_candidate
+                    break
+                    
+        if matched_df_row is not None:
+            for df_c_idx, tbl_c_idx in col_mapping.items():
+                if df_c_idx == 0:
+                    continue # Preservar texto de Columna 0
+                if tbl_c_idx in protected_tbl_cols:
+                    continue # BLINDAJE: Columna protegida
+                if tbl_c_idx < len(tbl_row.cells):
+                    val = matched_df_row.iloc[df_c_idx]
+                    fmt_val = format_num_val(val)
+                    is_num = isinstance(val, (int, float, np.number))
+                    # NUNCA vaciar celda si el valor de origen es vacío/NaN
+                    if fmt_val != "":
+                        set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
 
 def load_mappings_for_entity(empresa):
     """Carga los mapeos de balance y PL para una entidad."""
@@ -727,9 +1102,7 @@ class WordTemplateEngine:
         )
         return bal_df, pl_df, result_bytes_bal, result_bytes_er
 
-    def process(self, empresa_activa, periodo_actual, periodo_comp, scale_factor=1.0, use_ifrs_auto=True, include_headers=True):
-        doc = DocxTemplate(self.template_bytes_io)
-        
+    def process(self, empresa_activa, periodo_actual, periodo_comp="Ninguno", scale_factor=1.0, use_ifrs_auto=True, include_headers=True, progress_callback=None):
         is_consolidated = empresa_activa.startswith("[GRUPO]")
         empresa_path = os.path.join("data", "empresas", empresa_activa)
         
@@ -741,20 +1114,25 @@ class WordTemplateEngine:
         periodo_comp_str = str(periodo_comp)
         
         # Calcular periodos comparativos específicos según reglas IFRS o manuales
-        periodo_comp_balance = periodo_comp
-        periodo_comp_resultados = periodo_comp
-        
-        if use_ifrs_auto:
-            try:
-                parts = str(periodo_actual).split('-')
-                if len(parts) >= 2:
-                    year = int(parts[0])
-                    month = parts[1]
-                    prev_year = str(year - 1)
-                    periodo_comp_balance = f"{prev_year}-12"
-                    periodo_comp_resultados = f"{prev_year}-{month}"
-            except Exception:
-                pass
+        is_no_comp_param = (not periodo_comp) or str(periodo_comp).strip().lower() in ["ninguno", "none", ""]
+        if is_no_comp_param:
+            periodo_comp = "Ninguno"
+            periodo_comp_balance = "Ninguno"
+            periodo_comp_resultados = "Ninguno"
+        else:
+            periodo_comp_balance = periodo_comp
+            periodo_comp_resultados = periodo_comp
+            if use_ifrs_auto:
+                try:
+                    parts = str(periodo_actual).split('-')
+                    if len(parts) >= 2:
+                        year = int(parts[0])
+                        month = parts[1]
+                        prev_year = str(year - 1)
+                        periodo_comp_balance = f"{prev_year}-12"
+                        periodo_comp_resultados = f"{prev_year}-{month}"
+                except Exception:
+                    pass
         
         from src.core.excel_utils import format_periodo
         txt_periodo_act = format_periodo(periodo_actual)
@@ -782,10 +1160,23 @@ class WordTemplateEngine:
                 else:
                     raise ValueError(f"No hay información financiera cargada para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Por favor verifica que la empresa matriz tenga cargado dicho periodo.")
         else:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            has_snap = SnapshotVaultManager.has_active_snapshot(empresa_activa, periodo_actual)
             tb_check = TrialBalanceDB.get_trial_balance(empresa_activa, periodo_actual)
-            if tb_check is None or tb_check.empty:
+            if (tb_check is None or tb_check.empty) and not has_snap:
                 raise ValueError(f"No se encontraron saldos de Balance para la empresa '{empresa_activa}' en el periodo {periodo_actual}. Por favor sube el archivo en '1️⃣ Cargas de datos'.")
             val_utilidad_pesos = -1 * PlCuboDB.get_pl_cubo_total_sum(empresa_activa, periodo_actual)
+            # Si no hay saldo en Cubo pero hay snapshot, obtener utilidad de snapshot ER
+            if val_utilidad_pesos == 0.0 and has_snap:
+                er_snap = SnapshotVaultManager.get_statement(empresa_activa, periodo_actual, "#ER", scale_factor=1.0)
+                if er_snap and er_snap[0] is not None:
+                    er_df = er_snap[0]
+                    # Buscar fila de ganancia/resultado del ejercicio
+                    for _, r_er in er_df.iterrows():
+                        r_name = str(r_er.iloc[0]).lower().strip()
+                        if any(k in r_name for k in ["ganancia (pérdida) del ejercicio", "ganancia (perdida) del ejercicio", "resultado del ejercicio"]):
+                            val_utilidad_pesos = float(r_er.iloc[1]) if pd.notna(r_er.iloc[1]) else 0.0
+                            break
             
         txt_utilidad_neta = ""
         if val_utilidad_pesos < 0:
@@ -805,56 +1196,41 @@ class WordTemplateEngine:
             "utilidad_neta": txt_utilidad_neta
         }
 
-        # Ocultar temporalmente los marcadores programáticos {{# para evitar errores de sintaxis en Jinja2
-        def mask_programmatic_tags(doc_obj):
-            for p in doc_obj.paragraphs:
-                if "{{#" in p.text:
-                    p.text = p.text.replace("{{#", "__HASH_TAG__")
-            for table in doc_obj.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            if "{{#" in p.text:
-                                p.text = p.text.replace("{{#", "__HASH_TAG__")
+        # Cargar documento docx y procesar variables de plantilla de forma ultrarrápida
+        self.template_bytes_io.seek(0)
+        doc = Document(self.template_bytes_io)
 
-        # Restaurar marcadores programáticos {{#
-        def unmask_programmatic_tags(doc_obj):
-            doc_to_use = doc_obj.docx if hasattr(doc_obj, 'docx') and doc_obj.docx is not None else doc_obj
-            for p in doc_to_use.paragraphs:
-                if "__HASH_TAG__" in p.text:
-                    p.text = p.text.replace("__HASH_TAG__", "{{#")
-            for table in doc_to_use.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            if "__HASH_TAG__" in p.text:
-                                p.text = p.text.replace("__HASH_TAG__", "{{#")
-
-        # Cargar plantilla con python-docx primero para enmascarar de forma segura
+        # Detectar si hay variables de texto tipo {{VARIABLE}} (no {{#...}})
+        import zipfile
+        has_jinja_vars = False
         try:
             self.template_bytes_io.seek(0)
-            doc_mask = Document(self.template_bytes_io)
-            mask_programmatic_tags(doc_mask)
-            
-            temp_io = BytesIO()
-            doc_mask.save(temp_io)
-            temp_io.seek(0)
-            
-            doc = DocxTemplate(temp_io)
-        except Exception as e:
-            # Fallback en caso de problemas con la carga inicial
-            self.template_bytes_io.seek(0)
-            doc = DocxTemplate(self.template_bytes_io)
-            try:
-                mask_programmatic_tags(doc)
-            except Exception:
-                pass
+            with zipfile.ZipFile(self.template_bytes_io) as z:
+                for name in z.namelist():
+                    if name.startswith('word/') and name.endswith('.xml'):
+                        c_xml = z.read(name).decode('utf-8', errors='ignore')
+                        if re.search(r'\{\{\s*[^#\s]', c_xml):
+                            has_jinja_vars = True
+                            break
+        except Exception:
+            has_jinja_vars = False
 
-        # Renderizar variables Jinja2 de forma nativa con docxtpl
-        doc.render(context)
-        
-        unmask_programmatic_tags(doc)
-                        
+        if has_jinja_vars:
+            def replace_vars(p_obj):
+                for k, v in context.items():
+                    if k in p_obj.text:
+                        p_obj.text = re.sub(r'\{\{\s*' + re.escape(k) + r'\s*\}\}', str(v), p_obj.text)
+
+            for p in doc.paragraphs:
+                if '{{' in p.text:
+                    replace_vars(p)
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            if '{{' in p.text:
+                                replace_vars(p)
+
         target_lang = context.get('target_lang')
         if not target_lang:
             try:
@@ -864,42 +1240,177 @@ class WordTemplateEngine:
                 target_lang = 'es'
 
         # 3. Procesar e inyectar reportes principales y notas
-        paragraphs_to_process = list(doc.paragraphs)
+        # Recolectar todos los párrafos (tanto del cuerpo principal como de tablas)
+        all_paragraphs = list(doc.paragraphs)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        all_paragraphs.append(p)
+
+        matched_items = []
+        seen_tags = set()
+
+        # 1. Párrafos con etiquetas {{#...}}
+        for p in all_paragraphs:
+            text_clean = p.text.replace('\xa0', ' ').replace('\u200b', '')
+            m = re.search(r'\{\{\s*(#[\w\.\:\-]+)\s*\}\}', text_clean)
+            if m:
+                tag = m.group(1).strip()
+                matched_items.append(('paragraph', p, tag))
+                seen_tags.add(tag.split(':', 1)[0].strip().upper())
+
+        # 2. Tablas existentes con metadatos w:tblCaption / w:tblDescription
+        for tbl in doc.tables:
+            meta = get_table_metadata(tbl)
+            if meta:
+                meta_clean = meta.strip()
+                base_meta = meta_clean.split(':', 1)[0].strip().upper()
+                if base_meta not in seen_tags:
+                    matched_items.append(('table', tbl, meta_clean))
+                    seen_tags.add(base_meta)
+
+        # 3. Detección inteligente por títulos y contexto para tablas NO marcadas aún
+        # (SOLO si no se detectaron etiquetas explícitas ni metadatos previos)
+        if not matched_items:
+            seen_table_elements = {target._tbl for item_type, target, _ in matched_items if item_type == 'table'}
+            
+            def is_statement_heading(txt):
+                txt_clean = txt.strip().upper()
+                if len(txt_clean) > 80:
+                    return None
+                if any(w in txt_clean for w in ['REGISTRAD', 'ADJUNTO', 'PRESENTACIÓN EN', 'ADOPCIÓN', 'DESCRIT', 'RECLASIFICACI', 'DURANTE EL AÑO', 'RESPECTIVAMENTE']):
+                    return None
+                if any(p in txt_clean for p in ['ESTADO DE SITUACIÓN FINANCIERA', 'ESTADOS SEPARADOS DE SITUACIÓN FINANCIERA', 'BALANCE GENERAL', 'BALANCE CLASIFICADO']):
+                    return '#BALANCE'
+                if any(p in txt_clean for p in ['ESTADO DE RESULTADO INTEGRAL', 'ESTADOS SEPARADOS DE RESULTADOS INTEGRALES', 'ESTADO DE OTROS RESULTADOS INTEGRALES']):
+                    return '#ORI'
+                if any(p in txt_clean for p in ['ESTADO DE RESULTADOS', 'ESTADOS SEPARADOS DE RESULTADOS', 'ESTADO DE RESULTADO POR FUNCIÓN']):
+                    return '#ER'
+                if any(p in txt_clean for p in ['ESTADO DE CAMBIOS EN EL PATRIMONIO', 'ESTADOS SEPARADOS DE CAMBIOS EN EL PATRIMONIO']):
+                    return '#PATRIMONIO'
+                if any(p in txt_clean for p in ['ESTADO DE FLUJOS DE EFECTIVO', 'ESTADOS SEPARADOS DE FLUJOS DE EFECTIVO']):
+                    return '#EFE'
+                return None
+
+            current_sec = None
+            sec_tbl_idx = 0
+            for el in doc.element.body:
+                if el.tag.endswith('p'):
+                    txt = el.text.strip().upper() if el.text else ''
+                    m_n = re.match(r'^NOTA\s+(\d+)', txt)
+                    if m_n:
+                        current_sec = f"#N{int(m_n.group(1)):02d}"
+                        sec_tbl_idx = 0
+                    elif not (current_sec and current_sec.startswith('#N')):
+                        stmt = is_statement_heading(txt)
+                        if stmt:
+                            current_sec = stmt
+                            sec_tbl_idx = 0
+                elif el.tag.endswith('tbl'):
+                    if el in seen_table_elements:
+                        continue
+                    if current_sec:
+                        sec_tbl_idx += 1
+                        if current_sec.startswith('#N'):
+                            code = f"{current_sec}.{sec_tbl_idx}"
+                            tbl_obj = docx.table.Table(el, doc)
+                            matched_items.append(('table', tbl_obj, code))
+                            seen_table_elements.add(el)
+                        elif current_sec not in seen_tags and sec_tbl_idx == 1:
+                            code = current_sec
+                            tbl_obj = docx.table.Table(el, doc)
+                            matched_items.append(('table', tbl_obj, code))
+                            seen_tags.add(current_sec)
+                            seen_table_elements.add(el)
+
+        total_tags = len(matched_items)
+        self.total_tags_found = total_tags
+
+        # Caches para optimizar drásticamente la velocidad
+        contexts_cache = {}
+        def get_entity_contexts(comp_period_str):
+            if comp_period_str not in contexts_cache:
+                from src.ui_pages.informes_y_notas import load_all_entity_contexts
+                contexts_cache[comp_period_str] = load_all_entity_contexts(
+                    active_entity=empresa_activa,
+                    periodo_actual=periodo_actual,
+                    periodo_comp=comp_period_str,
+                    map_balance_df=map_balance_df,
+                    map_pl_df=map_pl_df
+                )
+            return contexts_cache[comp_period_str]
+
+        hoja_trabajo_cache = {}
+        def get_consolidated_hoja(g_id, p_str):
+            if p_str not in hoja_trabajo_cache:
+                from src.core.consolidacion_engine import generar_hoja_trabajo
+                df_h, _ = generar_hoja_trabajo(g_id, p_str)
+                hoja_trabajo_cache[p_str] = df_h
+            return hoja_trabajo_cache[p_str]
+
+        statements_cache = {}  # Key: (base_code_clean, comp_period) -> (preview_df, report_name)
+        note_elements_cache = {}  # Key: (base_code, note_comp) -> list of elements
+
+        template_nota = "Plantilla de notas_v1.xlsx"
+        engine_notes = None
+        if os.path.exists(template_nota):
+            from src.reporting.note_generator import NoteGenerator
+            engine_notes = NoteGenerator(template_nota)
+
         paragraphs_to_delete = []
         
-        for p in paragraphs_to_process:
-            tag = p.text.strip()
-            if not (tag.startswith("{{#") and tag.endswith("}}")):
-                continue
+        for idx, (item_type, target_item, tag_content) in enumerate(matched_items):
+            p = target_item if item_type == 'paragraph' else None
+            old_tbl = target_item if item_type == 'table' else None
+            if progress_callback:
+                try:
+                    progress_callback(idx + 1, total_tags, f"{{{{{tag_content}}}}}")
+                except Exception:
+                    pass
+
+            try:
+                if ":" in tag_content:
+                    parts = tag_content.split(":", 1)
+                    code = parts[0].strip() # ej. #BALANCE
+                    override_period = parts[1].strip() # ej. 2025-12
+                else:
+                    code = tag_content
+                    override_period = None
                 
-            tag_content = tag.replace("{{", "").replace("}}", "").strip() # ej. #BALANCE:2025-12 o #BALANCE o #N04:2025-06
-            if ":" in tag_content:
-                parts = tag_content.split(":", 1)
-                code = parts[0].strip() # ej. #BALANCE
-                override_period = parts[1].strip() # ej. 2025-12
-            else:
-                code = tag_content
-                override_period = None
-            
-            # Normalizar código para detectar si es solo tabla o con encabezado completo
-            code_upper = code.upper()
-            is_only_table = (not include_headers) or code_upper.startswith("#TABLA_") or code_upper.endswith("_TABLA")
-            base_code_clean = code_upper
-            if base_code_clean.startswith("#TABLA_"):
-                base_code_clean = "#" + base_code_clean.replace("#TABLA_", "")
-            elif base_code_clean.endswith("_TABLA"):
-                base_code_clean = base_code_clean.replace("_TABLA", "")
-            
-            # --- CASO REPORTES PRINCIPALES ---
-            if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#EFE", "#ORI", "#PATRIMONIO"]:
-                # Generar reporte a DataFrame
+                # Normalizar código para detectar si es solo tabla o con encabezado completo
+                code_upper = code.upper()
+                is_only_table = (not include_headers) or code_upper.startswith("#TABLA_") or code_upper.endswith("_TABLA")
+                base_code_clean = code_upper
+                if base_code_clean.startswith("#TABLA_"):
+                    base_code_clean = "#" + base_code_clean.replace("#TABLA_", "")
+                elif base_code_clean.endswith("_TABLA"):
+                    base_code_clean = base_code_clean.replace("_TABLA", "")
+                
+                # --- CASO REPORTES PRINCIPALES ---
                 preview_df = None
                 report_name = ""
+                result_bytes = None
                 
                 # Seleccionar comparativo dinámico o manual (IFRS: Balance, EFE y Patrimonio usan cierre anual anterior; ER y ORI usan mismo periodo anterior)
                 comp_period = override_period if override_period else (periodo_comp_balance if base_code_clean in ["#BALANCE", "#ESF", "#EFE", "#PATRIMONIO"] else periodo_comp_resultados)
                 
-                if base_code_clean in ["#BALANCE", "#ESF"]:
+                stmt_cache_key = (base_code_clean, comp_period)
+                if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"] and stmt_cache_key in statements_cache:
+                    preview_df, report_name = statements_cache[stmt_cache_key]
+                elif base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"] and SnapshotVaultManager.has_active_snapshot(empresa_activa, periodo_actual):
+                    snap_stmt = SnapshotVaultManager.get_statement(
+                        empresa=empresa_activa,
+                        periodo_actual=periodo_actual,
+                        code=base_code_clean,
+                        comp_period=comp_period,
+                        scale_factor=scale_factor
+                    )
+                    if snap_stmt and snap_stmt[0] is not None:
+                        preview_df, report_name = snap_stmt
+                        statements_cache[stmt_cache_key] = (preview_df, report_name)
+                
+                if preview_df is None and base_code_clean in ["#BALANCE", "#ESF"]:
                     report_name = "ESTADO DE SITUACIÓN FINANCIERA CONSOLIDADO" if is_consolidated else "ESTADO DE SITUACIÓN FINANCIERA CLASIFICADO"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
@@ -909,15 +1420,14 @@ class WordTemplateEngine:
                             grupo_id = grupo_obj.id
                         finally:
                             db.close()
-                        from src.core.consolidacion_engine import generar_hoja_trabajo
-                        df_hoja_act, msg_act = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        df_hoja_act = get_consolidated_hoja(grupo_id, periodo_actual)
                         if df_hoja_act is None:
                             raise ValueError(f"No hay datos para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Verifica que la empresa matriz tenga cargado dicho periodo.")
                             
                         df_hoja_comp = None
                         if comp_period != "Ninguno":
-                            df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
-                            
+                            df_hoja_comp = get_consolidated_hoja(grupo_id, comp_period)
+                        
                         def clean_str(s):
                             if pd.isna(s): return ""
                             return str(s).strip().lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
@@ -981,7 +1491,7 @@ class WordTemplateEngine:
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_balance_preview(result_bytes, col_actual, col_comp)
                         
-                elif base_code_clean == "#ER":
+                elif preview_df is None and base_code_clean == "#ER":
                     report_name = "ESTADO DE RESULTADOS CONSOLIDADO" if is_consolidated else "ESTADO DE RESULTADOS CLASIFICADOS"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
@@ -991,14 +1501,13 @@ class WordTemplateEngine:
                             grupo_id = grupo_obj.id
                         finally:
                             db.close()
-                        from src.core.consolidacion_engine import generar_hoja_trabajo
-                        df_hoja_act, msg_act = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        df_hoja_act = get_consolidated_hoja(grupo_id, periodo_actual)
                         if df_hoja_act is None:
                             raise ValueError(f"No hay datos para consolidar el grupo '{grupo_name}' en el periodo {periodo_actual}. Verifica que la empresa matriz tenga cargado dicho periodo.")
                             
                         df_hoja_comp = None
                         if comp_period != "Ninguno":
-                            df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
+                            df_hoja_comp = get_consolidated_hoja(grupo_id, comp_period)
                             
                         def clean_str(s):
                             if pd.isna(s): return ""
@@ -1049,7 +1558,7 @@ class WordTemplateEngine:
                         col_comp = str(comp_period) if comp_period != "Ninguno" else "Comp"
                         preview_df = self._extract_er_preview(result_bytes, col_actual, col_comp)
                         
-                elif base_code_clean == "#ORI":
+                elif preview_df is None and base_code_clean == "#ORI":
                     report_name = "ESTADO DE RESULTADOS INTEGRALES CONSOLIDADO" if is_consolidated else "ESTADO DE RESULTADOS INTEGRALES"
                     if is_consolidated:
                         grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
@@ -1114,7 +1623,7 @@ class WordTemplateEngine:
                     else:
                         preview_df = None
                         
-                elif base_code_clean == "#PATRIMONIO":
+                elif preview_df is None and base_code_clean == "#PATRIMONIO":
                     report_name = "ESTADO DE CAMBIOS EN EL PATRIMONIO CONSOLIDADO" if is_consolidated else "ESTADO DE CAMBIOS EN EL PATRIMONIO"
                     template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
                     if not os.path.exists(template_pat_path):
@@ -1186,7 +1695,7 @@ class WordTemplateEngine:
                     else:
                         preview_df = None
                         
-                elif base_code_clean == "#EFE":
+                elif preview_df is None and base_code_clean == "#EFE":
                     report_name = "ESTADO DE FLUJOS DE EFECTIVO CONSOLIDADO" if is_consolidated else "ESTADO DE FLUJOS DE EFECTIVO"
                     cf_filename = "Estado de Flujos de Efectivo.xlsx"
                     template_cf_path = os.path.join(empresa_path, cf_filename)
@@ -1205,10 +1714,10 @@ class WordTemplateEngine:
                             grupo_id = grupo_obj.id if grupo_obj else None
                         finally:
                             db.close()
-                        df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_actual)
+                        df_hoja_act = get_consolidated_hoja(grupo_id, periodo_actual)
                         df_hoja_comp = None
                         if comp_period != "Ninguno":
-                            df_hoja_comp, _ = generar_hoja_trabajo(grupo_id, comp_period)
+                            df_hoja_comp = get_consolidated_hoja(grupo_id, comp_period)
                             
                         result_bytes, _ = gen.generate(
                             empresa=empresa_activa,
@@ -1241,10 +1750,12 @@ class WordTemplateEngine:
                     preview_df = self._extract_cf_preview(result_bytes, col_actual, col_comp)
                     
                 if preview_df is not None:
+                    if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"]:
+                        statements_cache[stmt_cache_key] = (preview_df, report_name)
                     is_bal = (base_code_clean == "#BALANCE" or "balance" in str(report_name).lower() or len(preview_df) >= 30)
                     
-                    # Inyectar encabezado institucional superior si no es solo tabla
-                    if not is_only_table:
+                    # Inyectar encabezado institucional superior si no es solo tabla y es un párrafo nuevo
+                    if (not is_only_table) and item_type == 'paragraph':
                         # 1. Nombre de la Entidad
                         p_ent = doc.add_paragraph()
                         p_ent.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1292,131 +1803,227 @@ class WordTemplateEngine:
                         r_unit.font.color.rgb = RGBColor(90, 90, 90)
                         move_element_before(p, p_sub._p)
 
-                    # Inyectar tabla en la posición de p
-                    unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
-                    tbl = doc.add_table(rows=1, cols=len(preview_df.columns))
-                    from src.reporting.word_export import populate_word_table_styled
-                    ex_b = result_bytes.getvalue() if (result_bytes is not None and hasattr(result_bytes, 'getvalue')) else (result_bytes if isinstance(result_bytes, bytes) else None)
-                    populate_word_table_styled(tbl, preview_df, excel_bytes=ex_b, unit=unit_str, compact=is_bal)
-                    
-                    move_element_before(p, tbl._tbl)
-                    paragraphs_to_delete.append(p)
-                    
-            # --- CASO NOTAS ---
-            else:
-                base_code = code
-                table_idx = None
-                if "." in code:
-                    parts_dot = code.split(".", 1)
-                    base_code = parts_dot[0].strip()
-                    try:
-                        table_idx = int(parts_dot[1].strip()) - 1
-                    except ValueError:
-                        pass
+                    # Inyectar o actualizar tabla
+                    is_landscape = should_use_landscape(len(preview_df.columns), tag_code=tag_content)
+                    if item_type == 'paragraph':
+                        unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
+                        tbl = doc.add_table(rows=1, cols=len(preview_df.columns))
+                        from src.reporting.word_export import populate_word_table_styled
+                        ex_b = result_bytes.getvalue() if (result_bytes is not None and hasattr(result_bytes, 'getvalue')) else (result_bytes if isinstance(result_bytes, bytes) else None)
+                        populate_word_table_styled(tbl, preview_df, excel_bytes=ex_b, unit=unit_str, compact=is_bal)
+                        set_table_metadata(tbl, base_code_clean)
+                        
+                        if is_landscape:
+                            sec_before = create_section_break_xml(is_landscape=False)
+                            sec_after = create_section_break_xml(is_landscape=True)
+                            move_element_before(p, sec_before)
+                            move_element_before(p, tbl._tbl)
+                            move_element_before(p, sec_after)
+                        else:
+                            move_element_before(p, tbl._tbl)
+                        paragraphs_to_delete.append(p)
 
-                from src.reporting.notes import NOTE_REGISTRY, get_full_note_registry
-                full_registry = get_full_note_registry()
-                if base_code in full_registry:
-                    info = full_registry[base_code]
-                    target_sheets = info['sheets']
+                        # Si justo después de este párrafo hay una tabla heredada sin metadata, removerla para evitar duplicación
+                        nxt = p._p.getnext()
+                        if nxt is not None and nxt.tag.endswith('p') and not (nxt.text and nxt.text.strip()):
+                            nxt = nxt.getnext()
+                        if nxt is not None and nxt.tag.endswith('tbl'):
+                            try:
+                                t_obj = docx.table.Table(nxt, doc)
+                                if not get_table_metadata(t_obj):
+                                    nxt.getparent().remove(nxt)
+                            except Exception:
+                                pass
+                    else:
+                        # item_type == 'table': Actualización in-place respetando anchos y estilos nativos de Word
+                        update_table_cells_inplace(old_tbl, preview_df, periodo_actual=periodo_actual, periodo_comp=comp_period)
+                        set_table_metadata(old_tbl, base_code_clean)
+                        
+                        # Actualizar texto del subtítulo de período en el párrafo previo si existe
+                        prev_p = old_tbl._tbl.getprevious()
+                        if prev_p is not None and prev_p.tag.endswith('p'):
+                            col_dates = [str(c) for c in preview_df.columns if any(char.isdigit() for char in str(c))]
+                            is_no_comp = (not comp_period) or str(comp_period).strip().lower() in ["ninguno", "none", ""]
+                            p_obj = docx.text.paragraph.Paragraph(prev_p, doc)
+                            if "al 202" in p_obj.text.lower() or "expresado en" in p_obj.text.lower():
+                                if is_no_comp and any(yr in p_obj.text for yr in ["2024", "2025", "2023"]):
+                                    # Preservar el subtítulo del template que ya incluye el período anterior auditado
+                                    pass
+                                else:
+                                    period_str = f"Al {col_dates[0]} y {col_dates[1]}" if len(col_dates) >= 2 else (f"Al {col_dates[0]}" if col_dates else "")
+                                    unit_label = "M$ (Miles de pesos)" if scale_factor == 1000.0 else "Ch$ (Pesos)"
+                                    p_obj.text = ""
+                                    if period_str:
+                                        r_per = p_obj.add_run(f"{period_str}\n")
+                                        r_per.font.name = 'Arial'
+                                        r_per.font.size = Pt(7.5) if is_bal else Pt(8.5)
+                                        r_per.font.italic = True
+                                    r_unit = p_obj.add_run(f"(Expresado en {unit_label})")
+                                    r_unit.font.name = 'Arial'
+                                    r_unit.font.size = Pt(7.5) if is_bal else Pt(8)
+                                    r_unit.font.italic = True
+                                    r_unit.font.color.rgb = RGBColor(90, 90, 90)
+                                    p_obj.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     
-                    if target_sheets:
-                        template_nota = "Plantilla de notas_v1.xlsx"
-                        if os.path.exists(template_nota):
-                            category = info.get('category', 'resultados')
-                            is_balance_note = category in ["activos_corrientes", "activos_no_corrientes", "pasivos_corrientes", "pasivos_no_corrientes", "patrimonio"]
-                            note_comp = override_period if override_period else (periodo_comp_balance if is_balance_note else periodo_comp_resultados)
-                            
-                            from src.ui_pages.informes_y_notas import load_all_entity_contexts
-                            entity_contexts = load_all_entity_contexts(
-                                active_entity=empresa_activa,
-                                periodo_actual=periodo_actual,
-                                periodo_comp=note_comp,
-                                map_balance_df=map_balance_df,
-                                map_pl_df=map_pl_df
-                            )
-                            
-                            from src.reporting.note_generator import NoteGenerator
-                            engine = NoteGenerator(template_nota)
-                            excel_nota_out = engine.generate(
-                                sheet_names=target_sheets,
-                                entity_contexts=entity_contexts,
-                                active_entity_name=empresa_activa,
-                                is_consolidated=is_consolidated,
-                                scale_factor=scale_factor,
-                                periodo_actual_str=periodo_actual,
-                                periodo_comp_str=note_comp,
-                                map_balance_df=map_balance_df,
-                                map_pl_df=map_pl_df,
-                                target_lang=target_lang
-                            )
-                            
-                            from src.core.external_notes_manager import ExternalNotesManager
-                            excel_nota_out = ExternalNotesManager.inject_external_data(
-                                excel_nota_out,
-                                empresa=empresa_activa,
-                                periodo_actual=periodo_actual,
-                                periodo_comp=note_comp if note_comp != "Ninguno" else None,
-                                target_lang=target_lang
-                            )
-                            
-                            # Evaluar las fórmulas antes de procesar para evitar NaNs en totales
-                            from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook
-                            excel_nota_out = evaluate_formulas_in_workbook(excel_nota_out)
-                            
-                            # Intentar extraer usando rangos nombrados
-                            from src.core.excel_utils import extract_named_ranges_from_excel
-                            named_ranges = extract_named_ranges_from_excel(excel_nota_out, base_code)
-                            
-                            if named_ranges:
-                                elements = []
-                                for r_name, df_chunk in named_ranges:
-                                    elements.append(("table", df_chunk))
-                            else:
-                                excel_nota_out.seek(0)
-                                preview_nota_df = pd.read_excel(excel_nota_out, sheet_name=target_sheets[0], header=None)
-                                from src.ui_pages.informes_y_notas import split_sheet_into_elements
-                                elements = split_sheet_into_elements(preview_nota_df)
-                            
-                            # Si se solicitó un índice de tabla específico (ej: #N04.1)
-                            if table_idx is not None:
-                                tables = [el for el in elements if el[0] == "table"]
-                                if 0 <= table_idx < len(tables):
-                                    elements = [tables[table_idx]]
+                # --- CASO NOTAS ---
+                else:
+                    base_code = code
+                    table_idx = None
+                    if "." in code:
+                        parts_dot = code.split(".", 1)
+                        base_code = parts_dot[0].strip()
+                        try:
+                            table_idx = int(parts_dot[1].strip()) - 1
+                        except ValueError:
+                            pass
+
+                    from src.reporting.notes import NOTE_REGISTRY, get_full_note_registry
+                    full_registry = get_full_note_registry()
+                    if base_code in full_registry:
+                        info = full_registry[base_code]
+                        target_sheets = info['sheets']
+                        
+                        if target_sheets:
+                            if engine_notes is not None:
+                                category = info.get('category', 'resultados')
+                                is_balance_note = category in ["activos_corrientes", "activos_no_corrientes", "pasivos_corrientes", "pasivos_no_corrientes", "patrimonio"]
+                                note_comp = override_period if override_period else (periodo_comp_balance if is_balance_note else periodo_comp_resultados)
+                                
+                                note_cache_key = (base_code, note_comp)
+                                if note_cache_key in note_elements_cache:
+                                    elements = note_elements_cache[note_cache_key]
                                 else:
-                                    elements = [] # Fuera de rango o sin tablas
-                            
-                            # Inyectar elementos uno a uno antes del párrafo p
-                            table_counter = 0
-                            for item in elements:
-                                el_type = item[0]
-                                el_val = item[1]
-                                if el_type == "text":
-                                    new_p = doc.add_paragraph()
-                                    run = new_p.add_run(str(el_val))
-                                    run.font.bold = True
-                                    run.font.name = 'Arial'
-                                    run.font.size = Pt(9)
-                                    move_element_before(p, new_p._p)
+                                    from src.core.snapshot_vault_manager import SnapshotVaultManager
+                                    snap_note_els = None
+                                    if SnapshotVaultManager.has_active_snapshot(empresa_activa, periodo_actual):
+                                        snap_note_els = SnapshotVaultManager.get_note_elements(
+                                            empresa=empresa_activa,
+                                            periodo_actual=periodo_actual,
+                                            note_code=base_code,
+                                            scale_factor=scale_factor
+                                        )
+                                    if snap_note_els:
+                                        raw_els = snap_note_els
+                                        note_elements_cache[note_cache_key] = raw_els
+                                        elements = raw_els
+                                    else:
+                                        entity_contexts = get_entity_contexts(note_comp)
+                                        excel_nota_out = engine_notes.generate(
+                                            sheet_names=target_sheets,
+                                            entity_contexts=entity_contexts,
+                                            active_entity_name=empresa_activa,
+                                            is_consolidated=is_consolidated,
+                                            scale_factor=scale_factor,
+                                            periodo_actual_str=periodo_actual,
+                                            periodo_comp_str=note_comp,
+                                            map_balance_df=map_balance_df,
+                                            map_pl_df=map_pl_df,
+                                            target_lang=target_lang,
+                                            evaluate_formulas=False
+                                        )
+                                        
+                                        from src.core.external_notes_manager import ExternalNotesManager
+                                        excel_nota_out = ExternalNotesManager.inject_external_data(
+                                            excel_nota_out,
+                                            empresa=empresa_activa,
+                                            periodo_actual=periodo_actual,
+                                            periodo_comp=note_comp if note_comp != "Ninguno" else None,
+                                            target_lang=target_lang
+                                        )
+                                        
+                                        # Evaluar las fórmulas antes de procesar para evitar NaNs en totales
+                                        from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook
+                                        excel_nota_out = evaluate_formulas_in_workbook(excel_nota_out)
+                                        
+                                        # Intentar extraer usando rangos nombrados
+                                        from src.core.excel_utils import extract_named_ranges_from_excel
+                                        named_ranges = extract_named_ranges_from_excel(excel_nota_out, base_code)
+                                        
+                                        if named_ranges:
+                                            raw_els = []
+                                            for r_name, df_chunk in named_ranges:
+                                                raw_els.append(("table", df_chunk))
+                                        else:
+                                            excel_nota_out.seek(0)
+                                            preview_nota_df = pd.read_excel(excel_nota_out, sheet_name=target_sheets[0], header=None)
+                                            from src.ui_pages.informes_y_notas import split_sheet_into_elements
+                                            raw_els = split_sheet_into_elements(preview_nota_df)
+                                        note_elements_cache[note_cache_key] = raw_els
+                                        elements = raw_els
+                                
+                                # Si se solicitó un índice de tabla específico (ej: #N04.1)
+                                if table_idx is not None:
+                                    tables = [el for el in elements if el[0] == "table"]
+                                    if 0 <= table_idx < len(tables):
+                                        target_elements = [tables[table_idx]]
+                                    else:
+                                        target_elements = [] # Fuera de rango o sin tablas
                                 else:
-                                    chunk_df = el_val.dropna(how='all', axis=0).reset_index(drop=True)
-                                    if chunk_df.empty:
-                                        continue
-                                    
-                                    table_counter += 1
-                                    tbl = doc.add_table(rows=len(chunk_df), cols=len(chunk_df.columns))
-                                    populate_notes_docx_table(tbl, chunk_df)
-                                    
-                                    move_element_before(p, tbl._tbl)
-                                    
-                            paragraphs_to_delete.append(p)
+                                    target_elements = elements
+                                
+                                if item_type == 'paragraph':
+                                    # Inyectar elementos uno a uno antes del párrafo p
+                                    table_counter = 0
+                                    for item in target_elements:
+                                        el_type = item[0]
+                                        el_val = item[1]
+                                        if el_type == "text":
+                                            new_p = doc.add_paragraph()
+                                            run = new_p.add_run(str(el_val))
+                                            run.font.bold = True
+                                            run.font.name = 'Arial'
+                                            run.font.size = Pt(9)
+                                            move_element_before(p, new_p._p)
+                                        else:
+                                            chunk_df = clean_table_df(el_val)
+                                            if not is_valid_note_table(chunk_df):
+                                                continue
+                                            
+                                            table_counter += 1
+                                            note_tag = f"{base_code}.{table_counter}"
+                                            is_landscape = should_use_landscape(len(chunk_df.columns), tag_code=tag_content)
+                                            
+                                            tbl = doc.add_table(rows=len(chunk_df), cols=len(chunk_df.columns))
+                                            populate_notes_docx_table(tbl, chunk_df)
+                                            set_table_metadata(tbl, note_tag)
+                                            
+                                            if is_landscape:
+                                                sec_before = create_section_break_xml(is_landscape=False)
+                                                sec_after = create_section_break_xml(is_landscape=True)
+                                                move_element_before(p, sec_before)
+                                                move_element_before(p, tbl._tbl)
+                                                move_element_before(p, sec_after)
+                                            else:
+                                                move_element_before(p, tbl._tbl)
+                                            
+                                    paragraphs_to_delete.append(p)
+                                else:
+                                    # item_type == 'table': Actualización in-place respetando anchos y estilos nativos de Word
+                                    tbl_elements = [el for el in target_elements if el[0] == "table"]
+                                    t_df = tbl_elements[0][1] if tbl_elements else None
+                                        
+                                    if t_df is not None:
+                                        chunk_df = clean_table_df(t_df)
+                                        if is_valid_note_table(chunk_df):
+                                            update_table_cells_inplace(old_tbl, chunk_df, periodo_actual=periodo_actual, periodo_comp=note_comp)
+                                            set_table_metadata(old_tbl, tag_content)
+            except Exception as tag_err:
+                print(f"Error procesando {tag_content}: {tag_err}")
+                if item_type == 'paragraph' and p is not None:
+                    new_p = doc.add_paragraph()
+                    r_err = new_p.add_run(f"[{tag_content}: No se pudo inyectar automáticamente - {str(tag_err)}]")
+                    r_err.font.italic = True
+                    r_err.font.size = Pt(8.5)
+                    move_element_before(p, new_p._p)
+                    paragraphs_to_delete.append(p)
                             
         # Eliminar párrafos marcadores procesados
-        parent = doc.element.body
         for p in paragraphs_to_delete:
             try:
-                parent.remove(p._p)
-            except:
+                parent = p._p.getparent()
+                if parent is not None:
+                    parent.remove(p._p)
+            except Exception:
                 pass
                 
         # Guardar en buffer

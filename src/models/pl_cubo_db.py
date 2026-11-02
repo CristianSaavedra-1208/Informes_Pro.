@@ -104,7 +104,23 @@ class PlCuboDB:
                     }
                     for r in hist_records:
                         row[r.linea_item] = r.monto
-                    return pd.DataFrame([row])
+                    df_hist = pd.DataFrame([row])
+                    if not str(empresa).startswith("[GRUPO]"):
+                        from src.models.audit_adjustment import AuditAdjustmentRecord
+                        from src.core.consolidacion_engine import is_pl_account
+                        adj_records = db.query(AuditAdjustmentRecord).filter(
+                            AuditAdjustmentRecord.empresa == empresa,
+                            AuditAdjustmentRecord.periodo == periodo
+                        ).all()
+                        for adj in adj_records:
+                            if adj.linea_item and is_pl_account(adj.linea_item):
+                                monto_pl = float(adj.debe - adj.haber)
+                                col_name = str(adj.linea_item).strip()
+                                if col_name in df_hist.columns:
+                                    df_hist[col_name] += monto_pl
+                                else:
+                                    df_hist[col_name] = monto_pl
+                    return df_hist
                 return None
 
             # Construir DataFrame crudo (Melted)
@@ -116,7 +132,35 @@ class PlCuboDB:
                     'monto': r.monto
                 } for r in records
             ]
+
+            # Inyectar ajustes de auditoría individual para rubros de P&L si es empresa individual
+            if not str(empresa).startswith("[GRUPO]"):
+                try:
+                    from src.models.audit_adjustment import AuditAdjustmentRecord
+                    from src.core.consolidacion_engine import is_pl_account
+                    adj_records = db.query(AuditAdjustmentRecord).filter(
+                        AuditAdjustmentRecord.empresa == empresa,
+                        AuditAdjustmentRecord.periodo == periodo
+                    ).all()
+                    for adj in adj_records:
+                        if adj.linea_item and is_pl_account(adj.linea_item):
+                            # En el Cubo P&L dimensional (PlRecordDim), la convención contable estándar es:
+                            # Débitos (Debe / Gastos / Costos) = Positivos (+)
+                            # Créditos (Haber / Ingresos / Ganancias) = Negativos (-)
+                            # Por tanto, monto_pl = debe - haber para todas las cuentas sin excepción.
+                            monto_pl = float(adj.debe - adj.haber)
+                            
+                            raw_data.append({
+                                'N° de cuenta': str(adj.cuenta_codigo).strip(),
+                                'Nombre de la cuenta': str(adj.nombre_cuenta or f"Ajuste {adj.asiento_codigo}").strip(),
+                                'rubro': str(adj.linea_item).strip(),
+                                'monto': monto_pl
+                            })
+                except Exception as ex:
+                    print(f"Advertencia al inyectar ajustes de auditoría en Cubo P&L: {ex}")
+
             df_raw = pd.DataFrame(raw_data)
+
             
             # Pivotear DataFrame
             df_pivot = df_raw.pivot_table(
@@ -127,39 +171,42 @@ class PlCuboDB:
                 fill_value=0.0
             ).reset_index()
             
-            # Verificar si existen registros consolidados/congelados en la memoria histórica para escalar
-            from src.models.historical_data import HistoricalDataRecord
-            hist_records = db.query(HistoricalDataRecord).filter(
-                HistoricalDataRecord.empresa == empresa,
-                HistoricalDataRecord.periodo == periodo,
-                HistoricalDataRecord.reporte == 'P&L'
-            ).all()
-            
-            if hist_records:
-                hist_dict = {r.linea_item: r.monto for r in hist_records}
+            # Verificar si existen registros consolidados/congelados en la memoria histórica para escalar.
+            # NOTA CRÍTICA: Aplica ÚNICAMENTE para grupos consolidados [GRUPO].
+            # Para empresas individuales, el Cubo dimensional + Ajustes de Auditoría es la fuente viva autoritativa.
+            if str(empresa).startswith("[GRUPO]"):
+                from src.models.historical_data import HistoricalDataRecord
+                hist_records = db.query(HistoricalDataRecord).filter(
+                    HistoricalDataRecord.empresa == empresa,
+                    HistoricalDataRecord.periodo == periodo,
+                    HistoricalDataRecord.reporte == 'P&L'
+                ).all()
                 
-                # Escalar proporcionalmente cada columna del P&L Cubo pivoteado
-                for col in df_pivot.columns:
-                    if col in ['N° de cuenta', 'Nombre de la cuenta']:
-                        continue
+                if hist_records:
+                    hist_dict = {r.linea_item: r.monto for r in hist_records}
                     
-                    hist_monto = hist_dict.get(col)
-                    if hist_monto is not None:
-                        raw_sum = df_pivot[col].sum()
-                        if abs(raw_sum) > 0.001:
-                            scale = hist_monto / raw_sum
-                            df_pivot[col] = df_pivot[col] * scale
-                        else:
-                            # Si era 0 pero en el histórico no lo es, inyectamos en la primera cuenta
-                            df_pivot.loc[df_pivot.index[0], col] = hist_monto
-                    else:
-                        df_pivot[col] = 0.0
+                    # Escalar proporcionalmente cada columna del P&L Cubo pivoteado
+                    for col in df_pivot.columns:
+                        if col in ['N° de cuenta', 'Nombre de la cuenta']:
+                            continue
                         
-                # Agregar columnas históricas que no existían en el cubo crudo
-                for h_col, h_monto in hist_dict.items():
-                    if h_col not in df_pivot.columns:
-                        df_pivot[h_col] = 0.0
-                        df_pivot.loc[df_pivot.index[0], h_col] = h_monto
+                        hist_monto = hist_dict.get(col)
+                        if hist_monto is not None:
+                            raw_sum = df_pivot[col].sum()
+                            if abs(raw_sum) > 0.001:
+                                scale = hist_monto / raw_sum
+                                df_pivot[col] = df_pivot[col] * scale
+                            else:
+                                # Si era 0 pero en el histórico no lo es, inyectamos en la primera cuenta
+                                df_pivot.loc[df_pivot.index[0], col] = hist_monto
+                        else:
+                            df_pivot[col] = 0.0
+                            
+                    # Agregar columnas históricas que no existían en el cubo crudo
+                    for h_col, h_monto in hist_dict.items():
+                        if h_col not in df_pivot.columns:
+                            df_pivot[h_col] = 0.0
+                            df_pivot.loc[df_pivot.index[0], h_col] = h_monto
             
             return df_pivot
         finally:
@@ -173,21 +220,47 @@ class PlCuboDB:
         """
         db = SessionLocal()
         try:
-            # Primero, verificar registros históricos
-            from src.models.historical_data import HistoricalDataRecord
-            hist_records = db.query(HistoricalDataRecord).filter(
-                HistoricalDataRecord.empresa == empresa,
-                HistoricalDataRecord.periodo == periodo,
-                HistoricalDataRecord.reporte == 'P&L'
-            ).all()
-            if hist_records:
-                return sum(r.monto for r in hist_records)
+            # Para grupos consolidados, verificar registros históricos consolidados
+            if str(empresa).startswith("[GRUPO]"):
+                from src.models.historical_data import HistoricalDataRecord
+                hist_records = db.query(HistoricalDataRecord).filter(
+                    HistoricalDataRecord.empresa == empresa,
+                    HistoricalDataRecord.periodo == periodo,
+                    HistoricalDataRecord.reporte == 'P&L'
+                ).all()
+                if hist_records:
+                    return sum(r.monto for r in hist_records)
 
             total = db.query(func.sum(PlRecordDim.monto)).filter(
                 PlRecordDim.empresa == empresa,
                 PlRecordDim.periodo == periodo
             ).scalar()
-            return float(total) if total is not None else 0.0
+            base_total = float(total) if total is not None else 0.0
+
+            # Si no hay registros de cubo pero hay históricos (ej. legacy individual)
+            if total is None:
+                from src.models.historical_data import HistoricalDataRecord
+                hist_records = db.query(HistoricalDataRecord).filter(
+                    HistoricalDataRecord.empresa == empresa,
+                    HistoricalDataRecord.periodo == periodo,
+                    HistoricalDataRecord.reporte == 'P&L'
+                ).all()
+                if hist_records:
+                    base_total = float(sum(r.monto for r in hist_records))
+
+            # Inyectar ajustes de auditoría individual para P&L si es empresa individual
+            if not str(empresa).startswith("[GRUPO]"):
+                from src.models.audit_adjustment import AuditAdjustmentRecord
+                from src.core.consolidacion_engine import is_pl_account
+                adj_records = db.query(AuditAdjustmentRecord).filter(
+                    AuditAdjustmentRecord.empresa == empresa,
+                    AuditAdjustmentRecord.periodo == periodo
+                ).all()
+                for adj in adj_records:
+                    if adj.linea_item and is_pl_account(adj.linea_item):
+                        base_total += float(adj.debe - adj.haber)
+
+            return base_total
         except Exception:
             return 0.0
         finally:

@@ -1,8 +1,10 @@
 import os
 import shutil
 import openpyxl
+from openpyxl.cell.cell import MergedCell
 from io import BytesIO
 import datetime
+import re
 
 ROOT_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -98,12 +100,39 @@ class ExternalNotesManager:
         return empresa
 
     @classmethod
+    def normalize_period_str(cls, periodo: str) -> str:
+        if not periodo:
+            return periodo
+        s = str(periodo).strip()
+        month_map = {
+            "ene": "01", "jan": "01", "feb": "02", "mar": "03", "abr": "04", "apr": "04",
+            "may": "05", "jun": "06", "jul": "07", "ago": "08", "aug": "08",
+            "sep": "09", "set": "09", "oct": "10", "nov": "11", "dic": "12", "dec": "12"
+        }
+        m = re.match(r'^(20\d{2})[-_\s/]([a-zA-Z]{3,})$', s)
+        if m:
+            yr = m.group(1)
+            mon_txt = m.group(2).lower()[:3]
+            if mon_txt in month_map:
+                return f"{yr}-{month_map[mon_txt]}"
+        return s
+
+    @classmethod
     def get_company_anexos_dir(cls, empresa: str, periodo: str) -> str:
         canonical = cls.resolve_canonical_company_name(empresa)
         safe_empresa = "".join([c if c.isalnum() or c in (" ", "_", "-", "[", "]") else "_" for c in canonical]).strip()
-        dir_path = os.path.join("data", "empresas", safe_empresa, "anexos", periodo)
-        os.makedirs(dir_path, exist_ok=True)
-        return dir_path
+        norm_per = cls.normalize_period_str(periodo)
+        base_anexos = os.path.join("data", "empresas", safe_empresa, "anexos")
+        p_norm = os.path.join(base_anexos, norm_per)
+        p_raw = os.path.join(base_anexos, periodo)
+        
+        if os.path.exists(p_norm):
+            return p_norm
+        elif os.path.exists(p_raw):
+            return p_raw
+        else:
+            os.makedirs(p_norm, exist_ok=True)
+            return p_norm
 
     @classmethod
     def get_anexo_path(cls, empresa: str, periodo: str) -> str:
@@ -243,6 +272,8 @@ class ExternalNotesManager:
             if sh in agg_wb.sheetnames:
                 target_ws = agg_wb[sh]
                 target_cell = target_ws.cell(r, c)
+                if isinstance(target_cell, MergedCell) or target_cell.__class__.__name__ == 'MergedCell':
+                    continue
                 dest_val = target_cell.value
                 if isinstance(dest_val, str) and dest_val.startswith('='):
                     continue
@@ -320,17 +351,15 @@ class ExternalNotesManager:
     @classmethod
     def is_activo_fijo_injected(cls, ext_ws) -> bool:
         """
-        Verifica si la hoja 'Activo Fijo' (#N09.1) en la plantilla externa tiene datos ingresados.
-        Si las celdas C y D (bruto/depreciación) o E tienen valores > 0 o no vacíos, se considera inyectada.
+        Verifica si la hoja 'Activo Fijo' (#N09.1 o #N09.2) en la plantilla externa tiene datos ingresados.
+        Si las celdas numéricas tienen valores > 0 o no vacíos, se considera inyectada.
         """
         if ext_ws is None:
             return False
-        for r in range(6, 25):
-            val_c = ext_ws.cell(r, 3).value
-            val_d = ext_ws.cell(r, 4).value
-            val_e = ext_ws.cell(r, 5).value
-            for v in [val_c, val_d, val_e]:
-                if v is not None and isinstance(v, (int, float)) and abs(v) > 0.001:
+        for r in range(6, 45):
+            for c in range(3, min(ext_ws.max_column + 1, 18)):
+                val = ext_ws.cell(r, c).value
+                if val is not None and isinstance(val, (int, float)) and abs(val) > 0.001:
                     return True
         return False
 
@@ -536,14 +565,17 @@ class ExternalNotesManager:
         for code in matched_codes:
             ext_info = ext_codes[code]
             target_info = target_codes[code]
+            if "[COMPARATIVO]" in str(target_info.get("val", "")).upper() or "[COMPARATIVO]" in str(ext_info.get("val", "")).upper():
+                continue
             ext_r0 = ext_info["row"]
             target_r0 = target_info["row"]
 
             cfg = cls.EXTERNAL_TABLE_REGISTRY.get(code)
 
-            # Determinar altura de la tabla en ext_ws
+            # Determinar altura de la tabla en ext_ws (permitiendo 1 o 2 filas vacías previas a Totales)
             table_height = 0
-            for off in range(1, 40):
+            consecutive_empty = 0
+            for off in range(1, 45):
                 r_curr = ext_r0 + off
                 if r_curr > ext_ws.max_row:
                     break
@@ -553,8 +585,10 @@ class ExternalNotesManager:
                 has_content = any(ext_ws.cell(r_curr, c).value is not None for c in range(1, min(ext_ws.max_column + 1, 15)))
                 if has_content:
                     table_height = off
+                    consecutive_empty = 0
                 else:
-                    if off > 15:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 3:
                         break
 
             if table_height == 0:
@@ -579,6 +613,8 @@ class ExternalNotesManager:
                         v_ext = ext_ws.cell(r_ext, c_desc).value
                         if v_ext is not None and not (isinstance(v_ext, str) and v_ext.startswith("=")):
                             target_cell = target_ws.cell(r_target, c_desc)
+                            if isinstance(target_cell, MergedCell) or target_cell.__class__.__name__ == 'MergedCell':
+                                continue
                             curr_t_val = target_cell.value
                             # Rellenar si está vacío, es 0, o es placeholder genérico repetitivo ("fondos mutuos" en c_desc > 1)
                             if (curr_t_val is None or str(curr_t_val).strip() == "" or curr_t_val == 0 or
@@ -595,6 +631,8 @@ class ExternalNotesManager:
                         if c_ext <= ext_ws.max_column and c_target <= target_ws.max_column:
                             val_ext = ext_ws.cell(r_ext, c_ext).value
                             target_cell = target_ws.cell(r_target, c_target)
+                            if isinstance(target_cell, MergedCell) or target_cell.__class__.__name__ == 'MergedCell':
+                                continue
                             dest_val = target_cell.value
 
                             # Preservar fórmulas de totales en destino (=SUM...)
@@ -611,11 +649,15 @@ class ExternalNotesManager:
                                 if any(h in val_lower for h in ["m$", "31-", "30-", "01-", "202"]):
                                     continue
 
-                            if val_ext is not None:
+                            if val_ext is not None and str(val_ext).strip() != "":
                                 try:
                                     target_cell.value = float(val_ext) if isinstance(val_ext, (int, float)) else val_ext
                                 except Exception:
                                     target_cell.value = val_ext
+                            else:
+                                # Si el anexo externo viene vacío o None para esta celda, limpiar en destino
+                                # para evitar que persistan residuos contables (ej: Deterioro PPE no ingresado)
+                                target_cell.value = None
 
     @classmethod
     def inject_external_data(cls, excel_bytes_in: BytesIO, empresa: str, periodo_actual: str, periodo_comp: str = None, target_lang: str = "es", **kwargs) -> BytesIO:
@@ -657,7 +699,7 @@ class ExternalNotesManager:
 
             # 3. Procesar duplicación de cuadros comparativos para tablas con [COMPARATIVO]
             from src.reporting.note_generator import process_comparative_tables_in_ws
-            process_comparative_tables_in_ws(target_ws, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp, ext_cmp_ws=cmp_ws)
+            process_comparative_tables_in_ws(target_ws, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp, ext_cmp_ws=cmp_ws, ext_act_ws=act_ws)
 
         if ext_act_wb:
             ext_act_wb.close()
@@ -684,6 +726,8 @@ class ExternalNotesManager:
                     target_c = c + target_col_offset
                     if target_c <= target_ws.max_column:
                         dest_cell = target_ws.cell(r, target_c)
+                        if isinstance(dest_cell, MergedCell) or dest_cell.__class__.__name__ == 'MergedCell':
+                            continue
                         dest_val = dest_cell.value
                         if not (isinstance(dest_val, str) and dest_val.startswith("=")):
                             if isinstance(val, str) and "[COMPARATIVO]" in val.upper():

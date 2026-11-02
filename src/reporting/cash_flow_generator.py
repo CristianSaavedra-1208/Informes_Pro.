@@ -327,41 +327,44 @@ class CashFlowGenerator:
                 
                 # Inyección del periodo actual (val25_col_idx)
                 if nm in agrupacion_flujo_final:
-                    ws.cell(row=row, column=val25_col_idx).value = agrupacion_flujo_final[nm] / scale_factor
+                    ws.cell(row=row, column=val25_col_idx).value = round(agrupacion_flujo_final[nm] / scale_factor)
                 elif nm_norm in norm_utilidad_labels and method == "Indirecto":
                     if not has_f25:
-                        ws.cell(row=row, column=val25_col_idx).value = net_income / scale_factor
+                        ws.cell(row=row, column=val25_col_idx).value = round(net_income / scale_factor)
                 elif "saldo inicial" in nm_norm:
-                    ws.cell(row=row, column=val25_col_idx).value = cash_prior / scale_factor
+                    ws.cell(row=row, column=val25_col_idx).value = round(cash_prior / scale_factor)
                 elif "saldo final" in nm_norm:
-                    ws.cell(row=row, column=val25_col_idx).value = cash_actual / scale_factor
+                    ws.cell(row=row, column=val25_col_idx).value = round(cash_actual / scale_factor)
                 elif "incremento" in nm_norm and "neto" in nm_norm:
-                    ws.cell(row=row, column=val25_col_idx).value = (cash_actual - cash_prior) / scale_factor
+                    ws.cell(row=row, column=val25_col_idx).value = round((cash_actual - cash_prior) / scale_factor)
 
-                # Inyección del periodo comparativo (val24_col_idx)
-                if nm in agrupacion_flujo_comp_final:
-                    ws.cell(row=row, column=val24_col_idx).value = agrupacion_flujo_comp_final[nm] / scale_factor
-                elif nm_norm in norm_utilidad_labels and method == "Indirecto":
-                    if not has_f24:
-                        ws.cell(row=row, column=val24_col_idx).value = net_income_comp / scale_factor
-                elif "saldo inicial" in nm_norm:
-                    ws.cell(row=row, column=val24_col_idx).value = cash_prior_comp / scale_factor
-                elif "saldo final" in nm_norm:
-                    ws.cell(row=row, column=val24_col_idx).value = cash_actual_comp / scale_factor
-                elif "incremento" in nm_norm and "neto" in nm_norm:
-                    ws.cell(row=row, column=val24_col_idx).value = (cash_actual_comp - cash_prior_comp) / scale_factor
+                # Inyección del periodo comparativo (val24_col_idx) SOLO si has_comp es True
+                has_comp = bool(periodo_comp_str and str(periodo_comp_str).strip().lower() not in ["ninguno", "none", "", "comp"])
+                if has_comp:
+                    if nm in agrupacion_flujo_comp_final:
+                        ws.cell(row=row, column=val24_col_idx).value = round(agrupacion_flujo_comp_final[nm] / scale_factor)
+                    elif nm_norm in norm_utilidad_labels and method == "Indirecto":
+                        if not has_f24:
+                            ws.cell(row=row, column=val24_col_idx).value = round(net_income_comp / scale_factor)
+                    elif "saldo inicial" in nm_norm:
+                        ws.cell(row=row, column=val24_col_idx).value = round(cash_prior_comp / scale_factor)
+                    elif "saldo final" in nm_norm:
+                        ws.cell(row=row, column=val24_col_idx).value = round(cash_actual_comp / scale_factor)
+                    elif "incremento" in nm_norm and "neto" in nm_norm:
+                        ws.cell(row=row, column=val24_col_idx).value = round((cash_actual_comp - cash_prior_comp) / scale_factor)
 
                 if str(target_lang).lower() == 'en':
                     ws.cell(row=row, column=name_col_idx).value = translate_ifrs_term(cell_name.strip(), target_lang='en')
 
         # Reemplazar cabeceras de fechas en el excel si están especificadas
-        if periodo_actual_str and periodo_comp_str:
+        has_comp = bool(periodo_comp_str and str(periodo_comp_str).strip().lower() not in ["ninguno", "none", "", "comp"])
+        if periodo_actual_str:
             for r in range(1, 10):
                 c25 = ws.cell(row=r, column=val25_col_idx)
                 c24 = ws.cell(row=r, column=val24_col_idx)
                 if c25.value and isinstance(c25.value, str) and ("20" in c25.value or "Actual" in c25.value or "31-12" in c25.value):
                     c25.value = self._format_period_to_spanish_date(periodo_actual_str, target_lang=target_lang)
-                if c24.value and isinstance(c24.value, str) and ("20" in c24.value or "Anterior" in c24.value or "31-12" in c24.value):
+                if has_comp and c24.value and isinstance(c24.value, str) and ("20" in c24.value or "Anterior" in c24.value or "31-12" in c24.value):
                     c24.value = self._format_period_to_spanish_date(periodo_comp_str, target_lang=target_lang)
 
         output = BytesIO()

@@ -853,6 +853,17 @@ def render(empresa_seleccionada, empresa_path):
             tab_view1, tab_view2 = st.tabs(["📊 Vista de Reporte Formal (Plantilla)", "📋 Hoja de Trabajo de Consolidación (Detalle Multi-Empresa)"])
             
             with tab_view1:
+                code_map = {
+                    "Balance Clasificado": "#BALANCE",
+                    "Estado de Resultados": "#ER",
+                    "Estado de Flujos de Efectivo": "#EFE",
+                    "Estado de Cambios en el Patrimonio": "#PATRIMONIO",
+                    "Estado de Resultados Integrales": "#ORI",
+                }
+                tag_code = code_map.get(report_type, "#BALANCE")
+                label_estado = "Financial Statement" if str(target_lang).lower() == "en" else "Estado"
+                tag_fmt = f"{{{{{tag_code}}}}}"
+                st.markdown(f"**📍 {label_estado} `{tag_fmt}`**")
                 try:
                     from src.reporting.formatting import apply_corporate_style
                     st.markdown(apply_corporate_style(preview_df, excel_bytes=st.session_state.get('consolidated_report_excel_binary'), unit=unidad, target_lang=target_lang).to_html(index=False), unsafe_allow_html=True)

@@ -139,14 +139,14 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
         {
             'selector': 'th',
             'props': [
-                ('background-color', '#FFFFFF'),
-                ('color', '#000000'),
+                ('background-color', '#E8EEF6'),
+                ('color', '#1F3864'),
                 ('font-weight', 'bold'),
                 ('font-family', 'Inter, sans-serif'),
                 ('border', 'none'),
                 ('padding', '8px'),
-                ('border-top', '2px solid #000000'),
-                ('border-bottom', '2px solid #000000'),
+                ('border-top', 'none'),
+                ('border-bottom', '2px solid #1F3864'),
                 ('text-align', 'left')
             ]
         },
@@ -158,14 +158,14 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 ('border-left', 'none'),
                 ('border-right', 'none'),
                 ('border-top', 'none'),
-                ('border-bottom', '1px solid #f0f0f0'),
+                ('border-bottom', '1px solid #E1E1E1'),
                 ('padding', '6px 10px'),
                 ('background-clip', 'padding-box')
             ]
         },
         {
             'selector': 'tr:nth-child(even) td',
-            'props': [('background-color', '#e3f0fe')]
+            'props': [('background-color', '#FFFFFF')]
         },
         {
             'selector': 'tr:nth-child(odd) td',
@@ -522,9 +522,9 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             if is_bottom_line:
                 for i, col_name in enumerate(row.index):
                     if col_name in numeric_cols:
-                        styles[i] = 'border-top: 1px solid #000000 !important; border-bottom: 3px double #000000 !important; font-weight: bold; color: #000000;'
+                        styles[i] = 'border-top: 1px solid #404040 !important; border-bottom: 3px double #404040 !important; font-weight: bold; color: #000000; background-color: #FFFFFF;'
                     elif i == 0:
-                        styles[i] = 'font-weight: bold; color: #000000; border-top: 1px solid #000000 !important; border-bottom: 3px double #000000 !important;'
+                        styles[i] = 'font-weight: bold; color: #000000; border-bottom: 1px solid #D9D9D9 !important; background-color: #FFFFFF;'
                 return styles
                 
             is_total = (
@@ -541,9 +541,9 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             if is_total:
                 for i, col_name in enumerate(row.index):
                     if col_name in numeric_cols:
-                        styles[i] = 'border-top: 1px solid #000000 !important; border-bottom: 1px solid #000000 !important; font-weight: bold; color: #000000; background-color: #f8f9fa;'
+                        styles[i] = 'border-top: 1px solid #404040 !important; border-bottom: 1px solid #D9D9D9 !important; font-weight: bold; color: #000000; background-color: #FFFFFF;'
                     elif i == 0:
-                        styles[i] = 'font-weight: bold; color: #000000; border-top: 1px solid #000000 !important; border-bottom: 1px solid #000000 !important; background-color: #f8f9fa;'
+                        styles[i] = 'font-weight: bold; color: #000000; border-bottom: 1px solid #D9D9D9 !important; background-color: #FFFFFF;'
             return styles
 
         styler = styler.apply(highlight_totals, axis=1)

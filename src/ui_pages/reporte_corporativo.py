@@ -159,6 +159,13 @@ def render(empresa_seleccionada, empresa_path):
         else:
             scale_factor = 1.0
 
+    from src.core.snapshot_vault_manager import SnapshotVaultManager
+    is_closed_snap = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+    if is_closed_snap:
+        st.caption("🔒 **Modo Bóveda Oficial**: Este período se encuentra cerrado y congelado. La inyección en Word se realizará instantáneamente (< 1s) garantizando inmutabilidad y auditoría.")
+    else:
+        st.caption("🔓 **Modo Dinámico Vivo**: Este período está abierto en elaboración. Los estados financieros y notas se calcularán en vivo.")
+
     st.write("")
     
     # Opciones de configuración
@@ -184,7 +191,7 @@ def render(empresa_seleccionada, empresa_path):
     st.subheader("📂 Plantilla Word")
     
     def reset_corp_report_state():
-        for k in ['corp_word_output_bytes', 'corp_word_filename', 'rep_corp_file']:
+        for k in ['corp_word_output_bytes', 'corp_word_filename', 'rep_corp_file', 'corp_word_time_str', 'corp_word_tags_count']:
             if k in st.session_state:
                 del st.session_state[k]
 
@@ -199,34 +206,71 @@ def render(empresa_seleccionada, empresa_path):
         
         # Botón para procesar
         if st.button("Generar Reporte Corporativo", type="primary", use_container_width=True):
-            with st.spinner("Procesando plantilla e inyectando datos financieros..."):
-                try:
-                    from src.core.word_template_engine import WordTemplateEngine
-                    
-                    # Crear una copia de los bytes subidos
-                    uploaded_file.seek(0)
-                    template_bytes = BytesIO(uploaded_file.read())
-                    
-                    # Instanciar el motor y ejecutar
-                    engine = WordTemplateEngine(template_bytes)
-                    output_buffer = engine.process(
-                        empresa_activa=empresa_seleccionada,
-                        periodo_actual=periodo_actual,
-                        periodo_comp=periodo_comp,
-                        scale_factor=scale_factor,
-                        use_ifrs_auto=use_ifrs_auto,
-                        include_headers=incluir_encabezados
-                    )
-                    
-                    out_bytes = output_buffer.getvalue() if hasattr(output_buffer, 'getvalue') else output_buffer
-                    st.session_state['corp_word_output_bytes'] = out_bytes
-                    st.session_state['corp_word_filename'] = f"Reporte_Corporativo_{empresa_seleccionada.replace('[GRUPO] ', '').replace(' ', '_')}_{periodo_actual}.docx"
-                    st.success("¡Reporte generado con éxito! Presione descargar reporte para emitir Word actualizado.")
-                except Exception as e:
-                    st.warning(f"⚠️ **Información del Sistema:** {str(e)}")
+            import time
+            start_time = time.time()
+
+            progress_bar = st.progress(0.0)
+            status_box = st.empty()
+            status_box.info("⏳ Inicializando motor y analizando etiquetas en la plantilla...")
+
+            def on_progress(current, total, current_tag):
+                pct = min(1.0, current / max(1, total))
+                progress_bar.progress(pct)
+                elapsed_now = time.time() - start_time
+                status_box.info(f"⏳ Inyectando: **`{current_tag}`** ({current}/{total}) • Tiempo transcurrido: **{elapsed_now:.1f}s**...")
+
+            try:
+                from src.core.word_template_engine import WordTemplateEngine
+                
+                # Crear una copia de los bytes subidos
+                uploaded_file.seek(0)
+                template_bytes = BytesIO(uploaded_file.read())
+                
+                # Instanciar el motor y ejecutar
+                engine = WordTemplateEngine(template_bytes)
+                output_buffer = engine.process(
+                    empresa_activa=empresa_seleccionada,
+                    periodo_actual=periodo_actual,
+                    periodo_comp=periodo_comp,
+                    scale_factor=scale_factor,
+                    use_ifrs_auto=use_ifrs_auto,
+                    include_headers=incluir_encabezados,
+                    progress_callback=on_progress
+                )
+                
+                total_elapsed = time.time() - start_time
+                progress_bar.progress(1.0)
+                status_box.empty()
+                
+                out_bytes = output_buffer.getvalue() if hasattr(output_buffer, 'getvalue') else output_buffer
+                st.session_state['corp_word_output_bytes'] = out_bytes
+                st.session_state['corp_word_filename'] = f"Reporte_Corporativo_{empresa_seleccionada.replace('[GRUPO] ', '').replace(' ', '_')}_{periodo_actual}.docx"
+                
+                # Formatear tiempo de ejecución
+                mins = int(total_elapsed // 60)
+                secs = total_elapsed % 60
+                time_str = f"{mins} min {secs:.1f} s" if mins > 0 else f"{total_elapsed:.1f} segundos"
+                st.session_state['corp_word_time_str'] = time_str
+                st.session_state['corp_word_tags_count'] = getattr(engine, 'total_tags_found', None)
+                
+                tags_msg = f" ({st.session_state['corp_word_tags_count']} etiquetas inyectadas)" if st.session_state['corp_word_tags_count'] else ""
+                st.success(f"✅ ¡Reporte generado con éxito en **{time_str}**{tags_msg}! Presione descargar reporte para emitir Word actualizado.")
+            except Exception as e:
+                progress_bar.empty()
+                status_box.empty()
+                st.warning(f"⚠️ **Información del Sistema:** {str(e)}")
                     
         if 'corp_word_output_bytes' in st.session_state:
             st.write("---")
+            if 'corp_word_time_str' in st.session_state:
+                col_info1, col_info2 = st.columns(2)
+                with col_info1:
+                    st.info(f"⏱️ **Tiempo de procesamiento:** {st.session_state['corp_word_time_str']}")
+                with col_info2:
+                    size_kb = len(st.session_state['corp_word_output_bytes']) / 1024
+                    tags_txt = f" • {st.session_state.get('corp_word_tags_count')} etiquetas" if st.session_state.get('corp_word_tags_count') else ""
+                    st.info(f"📄 **Documento generado:** {size_kb:.1f} KB{tags_txt}")
+                    
             col_dl1, col_dl2 = st.columns([3, 1])
             with col_dl1:
                 st.download_button(

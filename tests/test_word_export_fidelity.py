@@ -111,5 +111,61 @@ class TestWordExportFidelity(unittest.TestCase):
         # Verify 41 rows (1 header + 40 data)
         self.assertEqual(len(doc.tables[0].rows), 41)
 
+    def test_big4_audited_table_styling(self):
+        """
+        Verifica que las tablas generadas sigan el estándar exacto de Formato base de programa_v1.docx:
+        1. Cabecera con fondo #E8EEF6, sin borde superior, borde inferior #1F3864 (sz="8"), y texto #1F3864.
+        2. Filas de datos con fondo blanco limpio #FFFFFF y línea tenue #E1E1E1 (sz="2") de separación.
+        3. Totales mayores con línea superior #404040 y doble inferior #404040 solo en columnas numéricas/notas, mientras que col 0 no tiene línea superior.
+        """
+        df_test = pd.DataFrame({
+            "Concepto": ["Efectivo y equivalentes", "Subtotal Activo Corriente", "Total Activos"],
+            "Nota": ["1", "", ""],
+            "2026": [150000, 150000, 150000],
+            "2025": [120000, 120000, 120000]
+        })
+        docx_bytes = generate_word_report(df_test, title="Prueba Estilo Big 4", subtitle="M$")
+        doc = Document(BytesIO(docx_bytes))
+        table = doc.tables[0]
+
+        # 1. Cabecera: Celda 0
+        hdr_c0 = table.rows[0].cells[0]
+        # Shading #E8EEF6
+        shd = hdr_c0._tc.xpath('.//w:tcPr/w:shd/@w:fill')
+        self.assertEqual(shd, ["E8EEF6"])
+        # Bordes de cabecera: top none, bottom 1F3864
+        top_val = hdr_c0._tc.xpath('.//w:tcPr/w:tcBorders/w:top/@w:val')
+        self.assertEqual(top_val, ['none'])
+        bottom_border_color = hdr_c0._tc.xpath('.//w:tcPr/w:tcBorders/w:bottom/@w:color')
+        self.assertEqual(bottom_border_color, ["1F3864"])
+        # Color de texto #1F3864
+        hdr_run = hdr_c0.paragraphs[0].runs[0]
+        self.assertEqual(str(hdr_run.font.color.rgb), "1F3864")
+
+        # 2. Filas de datos sin cebrado (todas con fondo blanco #FFFFFF)
+        for r_idx in range(1, len(table.rows)):
+            for cell in table.rows[r_idx].cells:
+                r_shd = cell._tc.xpath('.//w:tcPr/w:shd/@w:fill')
+                self.assertEqual(r_shd, ["FFFFFF"])
+
+        # 3. Fila de datos normal (fila 1): debe tener separador tenue E1E1E1
+        r1_c0_bottom_color = table.rows[1].cells[0]._tc.xpath('.//w:tcPr/w:tcBorders/w:bottom/@w:color')
+        self.assertEqual(r1_c0_bottom_color, ['E1E1E1'])
+
+        # 4. Totales: Column 0 no debe tener línea superior
+        total_row = table.rows[3] # Total Activos
+        col0_top = total_row.cells[0]._tc.xpath('.//w:tcPr/w:tcBorders/w:top/@w:val')
+        self.assertEqual(col0_top, ['none'])
+        # Columna 2 (numérica) tiene línea superior 404040 y subrayado doble 404040
+        col2_top_val = total_row.cells[2]._tc.xpath('.//w:tcPr/w:tcBorders/w:top/@w:val')
+        col2_top_color = total_row.cells[2]._tc.xpath('.//w:tcPr/w:tcBorders/w:top/@w:color')
+        col2_bot_val = total_row.cells[2]._tc.xpath('.//w:tcPr/w:tcBorders/w:bottom/@w:val')
+        col2_bot_color = total_row.cells[2]._tc.xpath('.//w:tcPr/w:tcBorders/w:bottom/@w:color')
+        self.assertEqual(col2_top_val, ['single'])
+        self.assertEqual(col2_top_color, ['404040'])
+        self.assertEqual(col2_bot_val, ['double'])
+        self.assertEqual(col2_bot_color, ['404040'])
+
 if __name__ == '__main__':
     unittest.main()
+

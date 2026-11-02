@@ -26,19 +26,43 @@ class OriGenerator:
             col_act_use = col_actual if col_actual in cols else (cols[1] if len(cols) > 1 else None)
             col_comp_use = col_comp if col_comp in cols else (cols[2] if len(cols) > 2 else None)
             
+            # Prioridad 1: Coincidencia precisa con la ganancia/pérdida final del ejercicio
+            target_exact_keywords = [
+                'ganancia (pérdida) del ejercicio', 'ganancias (pérdida) del ejercicio',
+                'ganancia (perdida) del ejercicio', 'ganancias (perdidas) del ejercicio',
+                'resultado del ejercicio', 'utilidad del ejercicio', 'pérdida del ejercicio',
+                'ganancia neta', 'utilidad neta', 'pérdida neta',
+                'ganancia (pérdida) procedente de operaciones continuadas',
+                'resultado de operaciones continuadas'
+            ]
+            exclude_keywords = [
+                'unidad de reajuste', 'reajuste', 'financiero', 'financieros',
+                'antes de impuesto', 'antes de impuestos', 'bruta', 'bruto', 'operacional'
+            ]
+            
+            matched_row = None
             for idx, row in pl_preview_df.iterrows():
                 clasif = str(row.iloc[0]).lower().strip()
-                if ('continuadas' in clasif or 
-                    ('ganancia' in clasif and 'bruta' not in clasif and 'antes' not in clasif and 'otras' not in clasif and 'impuesto' not in clasif) or
-                    ('resultado' in clasif and 'antes' not in clasif and 'bruto' not in clasif and 'impuesto' not in clasif)):
-                    
-                    if col_act_use:
-                        v25 = row[col_act_use]
-                        pl_25 = float(v25) if pd.notna(v25) and str(v25).strip() != '' else 0.0
-                    if col_comp_use:
-                        v24 = row[col_comp_use]
-                        pl_24 = float(v24) if pd.notna(v24) and str(v24).strip() != '' else 0.0
+                if any(k in clasif for k in target_exact_keywords) and not any(ex in clasif for ex in exclude_keywords):
+                    matched_row = row
                     break
+            
+            # Fallback si no hubo coincidencia exacta
+            if matched_row is None:
+                for idx, row in pl_preview_df.iterrows():
+                    clasif = str(row.iloc[0]).lower().strip()
+                    if not any(ex in clasif for ex in exclude_keywords):
+                        if 'continuadas' in clasif or ('ganancia' in clasif and 'impuesto' not in clasif):
+                            matched_row = row
+                            break
+
+            if matched_row is not None:
+                if col_act_use:
+                    v25 = matched_row[col_act_use]
+                    pl_25 = float(v25) if pd.notna(v25) and str(v25).strip() != '' else 0.0
+                if col_comp_use and periodo_comp_str and str(periodo_comp_str).strip().lower() != "ninguno":
+                    v24 = matched_row[col_comp_use]
+                    pl_24 = float(v24) if pd.notna(v24) and str(v24).strip() != '' else 0.0
         
         # ------------------ RESOLVER SALDOS DE OTRAS RESERVAS ------------------
         res_ext_actual = 0.0
@@ -169,20 +193,22 @@ class OriGenerator:
             res_ext_prev = res_ext_comp
 
         # Calcular variaciones netas de reservas (Net ORI)
-        net_ori_25 = res_ext_actual - res_ext_comp
-        net_ori_24 = res_ext_comp - res_ext_prev
+        net_ori_25_raw = res_ext_actual - res_ext_comp
+        net_ori_24_raw = res_ext_comp - res_ext_prev
 
         # Calcular efectos brutos e impuestos (Tasa del 27%)
         # Neto = Bruto * 0.73  =>  Bruto = Neto / 0.73
         # Impuesto = -0.27 * Bruto
-        gross_ori_25 = net_ori_25 / 0.73
-        tax_ori_25 = -0.27 * gross_ori_25
+        gross_ori_25 = round(net_ori_25_raw / 0.73)
+        tax_ori_25 = round(-0.27 * gross_ori_25)
+        net_ori_25 = gross_ori_25 + tax_ori_25
 
-        gross_ori_24 = net_ori_24 / 0.73
-        tax_ori_24 = -0.27 * gross_ori_24
+        gross_ori_24 = round(net_ori_24_raw / 0.73)
+        tax_ori_24 = round(-0.27 * gross_ori_24)
+        net_ori_24 = gross_ori_24 + tax_ori_24
 
-        total_integral_25 = pl_25 + net_ori_25
-        total_integral_24 = pl_24 + net_ori_24
+        total_integral_25 = round(pl_25) + net_ori_25
+        total_integral_24 = round(pl_24) + net_ori_24
         
         # Inyectando a Excel Abierto
         wb = openpyxl.load_workbook(self.template_path)
@@ -230,7 +256,7 @@ class OriGenerator:
             val = ws.cell(row=r, column=name_col_idx).value
             if val and isinstance(val, str):
                 val_clean = val.lower().strip()
-                if "ganancia (perdida) del ejercicio" in val_clean or "utilidad (perdida) del ejercicio" in val_clean or "ganancia del ejercicio" in val_clean or "resultado del ejercicio" in val_clean:
+                if any(k in val_clean for k in ["operaciones continuadas", "ganancia (perdida) del ejercicio", "utilidad (perdida) del ejercicio", "ganancia del ejercicio"]) and "componentes" not in val_clean and "total" not in val_clean:
                     row_ganancia_base = r
                 elif "coberturas de flujo de efectivo" in val_clean or "coberturas" in val_clean:
                     row_coberturas = r
@@ -245,7 +271,8 @@ class OriGenerator:
         
         def inyectar(r, v25, v24):
             ws.cell(row=r, column=val25_col_idx, value=v25)
-            ws.cell(row=r, column=val24_col_idx, value=v24)
+            if periodo_comp_str and str(periodo_comp_str).strip().lower() != "ninguno":
+                ws.cell(row=r, column=val24_col_idx, value=v24)
             
         inyectar(row_ganancia_base, pl_25, pl_24)
         inyectar(row_coberturas, gross_ori_25, gross_ori_24)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, String, Float, Boolean, UniqueConstraint, DateTime
 from src.models.database import Base
 from datetime import datetime
 
@@ -41,4 +41,28 @@ class HistoricalDetailRecord(Base):
     clasificacion_pl = Column(String(255), nullable=True)
     id_nota_asociada = Column(String(255), nullable=True)
     fecha_congelamiento = Column(DateTime, default=datetime.utcnow)
+
+
+class ClosingSnapshotRecord(Base):
+    """
+    Control relacional de Bóveda / Snapshots de Cierre Histórico.
+    Registra el estado, integridad y ubicación de los estados financieros
+    y notas congeladas.
+    """
+    __tablename__ = 'closing_snapshots'
+
+    id = Column(Integer, primary_key=True, index=True)
+    empresa = Column(String(200), index=True, nullable=False)
+    periodo = Column(String(7), index=True, nullable=False) # Formato: YYYY-MM
+    es_consolidado = Column(Boolean, default=False)
+    fecha_cierre = Column(DateTime, default=datetime.utcnow)
+    cerrado_por = Column(String(100), default="Administrador")
+    is_active = Column(Boolean, default=True, index=True)
+    checksum = Column(String(64), nullable=True) # SHA-256
+    storage_path = Column(String(500), nullable=False)
+    statements_count = Column(Integer, default=0)
+    notes_count = Column(Integer, default=0)
+    fecha_reapertura = Column(DateTime, nullable=True)
+    reabierto_por = Column(String(100), nullable=True)
+
 

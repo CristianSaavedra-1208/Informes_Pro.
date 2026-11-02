@@ -88,6 +88,8 @@ class TrialBalanceDB:
                 TrialBalanceRecord.cuenta_id
             ).all()
 
+            is_active_tb = bool(records)
+
             if not records:
                 from src.models.historical_data import HistoricalDetailRecord
                 records = db.query(
@@ -109,15 +111,36 @@ class TrialBalanceDB:
 
             data = [
                 {
-                    'cuenta_id': r.cuenta_id,
-                    'descripcion': r.descripcion,
-                    'saldo_inicial': r.saldo_inicial,
-                    'debitos': r.debitos,
-                    'creditos': r.creditos,
-                    'saldo_final': r.saldo_final
+                    'cuenta_id': str(r.cuenta_id).strip(),
+                    'descripcion': str(r.descripcion or '').strip(),
+                    'saldo_inicial': float(r.saldo_inicial or 0.0),
+                    'debitos': float(r.debitos or 0.0),
+                    'creditos': float(r.creditos or 0.0),
+                    'saldo_final': float(r.saldo_final or 0.0)
                 } for r in records
             ]
-            return pd.DataFrame(data)
+            df_tb = pd.DataFrame(data)
+
+            # Inyectar ajustes de auditoría individual si es empresa individual (activo o histórico cerrado)
+            if not str(empresa).startswith("[GRUPO]"):
+                try:
+                    from src.core.audit_adjustments_engine import obtener_ajustes_tb_df
+                    df_adj = obtener_ajustes_tb_df(empresa, periodo, db)
+                    if df_adj is not None and not df_adj.empty:
+                        # Si provenía de HistoricalDetailRecord, remover cuentas 9999xxx previas para evitar duplicación
+                        df_tb = df_tb[~df_tb['cuenta_id'].astype(str).str.strip().str.startswith('9999')].copy()
+                        df_tb = pd.concat([df_tb, df_adj], ignore_index=True)
+                        df_tb = df_tb.groupby('cuenta_id', as_index=False).agg({
+                            'descripcion': 'first',
+                            'saldo_inicial': 'sum',
+                            'debitos': 'sum',
+                            'creditos': 'sum',
+                            'saldo_final': 'sum'
+                        })
+                except Exception as ex:
+                    print(f"Advertencia al inyectar ajustes de auditoría en TB: {ex}")
+
+            return df_tb
         finally:
             db.close()
 

@@ -15,6 +15,24 @@ def render(empresa_seleccionada, empresa_path):
     st.title("Históricos")
     
     # -------------------------------------------------------------
+    # BÓVEDA DE SNAPSHOTS: SINCRONIZACIÓN AUTOMÁTICA
+    # -------------------------------------------------------------
+    with st.expander("⚡ Bóveda de Snapshots: Sincronización Automática", expanded=False):
+        st.write("Genera y actualiza los Snapshots inmutables de Estados Financieros y Notas explicativas (#N01 a #N30) para todos los períodos históricos cerrados en la base de datos.")
+        if st.button("⚡ Sincronizar Bóveda para Todos los Períodos Cerrados", key="btn_sync_all_snaps", type="secondary"):
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            prog_bar = st.progress(0.0)
+            status = st.empty()
+            def on_s_prog(cur, tot, msg):
+                prog_bar.progress(cur / max(1, tot))
+                status.info(f"⏳ {msg} ({cur}/{tot})...")
+            succ, errs, logs = SnapshotVaultManager.sync_all_existing_historical_periods(progress_callback=on_s_prog)
+            prog_bar.progress(1.0)
+            status.empty()
+            st.success(f"✅ ¡Sincronización de Bóveda finalizada! {succ} períodos listos en Bóveda ({errs} errores).")
+            st.rerun()
+
+    # -------------------------------------------------------------
     # DETECTAR SI LA EMPRESA ACTIVA ES UN GRUPO CONSOLIDADO
     # -------------------------------------------------------------
     is_group = False
@@ -224,6 +242,12 @@ def render(empresa_seleccionada, empresa_path):
         else:
             periodo_consulta = st.selectbox("Selecciona un periodo histórico:", hist_periods, key="sel_hist_per", format_func=format_periodo)
             if periodo_consulta:
+                from src.core.snapshot_vault_manager import SnapshotVaultManager
+                has_s = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_consulta)
+                if has_s:
+                    st.success("🔒 **Snapshot Oficial en Bóveda**: Los Estados Financieros y Notas explicativas están congelados e inmutables para reportes instantáneos.")
+                else:
+                    st.info("ℹ️ **Memoria Histórica Básica**: Los saldos están guardados. Puedes sincronizar la Bóveda completa en el panel superior.")
                 try:
                     db = SessionLocal()
                     records = db.query(HistoricalDetailRecord).filter_by(empresa=empresa_seleccionada, periodo=periodo_consulta).all()

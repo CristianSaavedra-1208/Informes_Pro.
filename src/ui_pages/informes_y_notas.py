@@ -64,10 +64,11 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
                                     val = evaluate_openpyxl_formula(val, ws, c, r, visited)
                                 try:
                                     if val is not None:
-                                        subtotal += float(val)
+                                        f_val = float(val)
+                                        subtotal += round(f_val) if abs(f_val - round(f_val)) < 0.0001 or f_val.is_integer() else f_val
                                 except (ValueError, TypeError):
                                     pass
-                return subtotal
+                return round(subtotal) if abs(subtotal - round(subtotal)) < 0.0001 else subtotal
         else:
             m = re.match(r'^([A-Z]+)(\d+)$', term)
             if m:
@@ -79,11 +80,13 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
                         val = evaluate_openpyxl_formula(val, ws, c_idx, r_num, visited)
                     try:
                         if val is not None:
-                            return float(val)
+                            f_val = float(val)
+                            return round(f_val) if abs(f_val - round(f_val)) < 0.0001 or f_val.is_integer() else f_val
                     except (ValueError, TypeError):
                         pass
         try:
-            return float(term)
+            f_term = float(term)
+            return round(f_term) if abs(f_term - round(f_term)) < 0.0001 else f_term
         except (ValueError, TypeError):
             return 0.0
 
@@ -96,7 +99,7 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
         total = sum(resolve_cell_or_range(arg) for arg in args)
         if row_idx is not None:
             visited.discard((row_idx, col_idx))
-        return total
+        return round(total) if abs(total - round(total)) < 0.0001 else total
 
     # 2. Arithmetic expressions: e.g. =+C26+C18+C12, =C32+C30+C28, =+D34, =C10-C20
     # Remover el signo '=' inicial
@@ -120,7 +123,8 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
                     val = evaluate_openpyxl_formula(val, ws, c_idx, r_num, visited)
                 if val is not None:
                     try:
-                        val_float = float(val)
+                        f_val = float(val)
+                        val_float = round(f_val) if abs(f_val - round(f_val)) < 0.0001 or f_val.is_integer() else f_val
                     except (ValueError, TypeError):
                         val_float = 0.0
             # Reemplazar usando regex de límite de palabra/carácter
@@ -133,7 +137,8 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
                 ret_val = eval(expr)
                 if row_idx is not None:
                     visited.discard((row_idx, col_idx))
-                return float(ret_val)
+                f_ret = float(ret_val)
+                return round(f_ret) if abs(f_ret - round(f_ret)) < 0.0001 else f_ret
             except Exception:
                 pass
 
@@ -530,7 +535,8 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         periodo_comp_str=periodo_comp,
                         map_balance_df=map_balance_df,
                         map_pl_df=map_pl_df,
-                        target_lang=target_lang
+                        target_lang=target_lang,
+                        evaluate_formulas=False
                     )
                     
                     # Inyectar datos de anexos externos (si existen para la empresa/período)
@@ -738,6 +744,8 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
         if cache_key in st.session_state:
             cached = st.session_state[cache_key]
             st.success(f"✅ Nota generada exitosamente en {cached['unidad_nota']}.")
+            nota_word_tag = f"{{{{{cached['selected_id']}}}}}"
+            st.markdown(f"💡 **Etiqueta Word para Nota Completa:** `{nota_word_tag}` *(Inyecta textos y todos los cuadros asociados)*")
                 
             from src.reporting.formatting import apply_corporate_style
             from io import BytesIO
@@ -773,7 +781,8 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         table_counter += 1
                         sub_code = f"{cached['selected_id']}.{table_counter}"
                     label_cuadro = "Schedule" if str(target_lang).lower() == "en" else "Cuadro"
-                    st.markdown(f"**📍 {label_cuadro} `{sub_code}`**")
+                    tag_cuadro = f"{{{{{sub_code}}}}}"
+                    st.markdown(f"**📍 {label_cuadro} `{tag_cuadro}`**")
                     
                     new_cols = [" " * (idx + 1) for idx in range(len(chunk_df.columns))]
                     chunk_df.columns = new_cols

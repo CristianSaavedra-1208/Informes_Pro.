@@ -452,10 +452,13 @@ class PatrimonioGenerator:
         
         # Función para inyectar una fila sumando su total automáticamente en la última col
         def inyectar(r, cap, gan, res):
-            ws.cell(row=r, column=cap_col_idx, value=cap)
-            ws.cell(row=r, column=gan_col_idx, value=gan)
-            ws.cell(row=r, column=res_col_idx, value=res)
-            ws.cell(row=r, column=tot_col_idx, value=(cap + gan + res))
+            c_r = round(cap)
+            g_r = round(gan)
+            r_r = round(res)
+            ws.cell(row=r, column=cap_col_idx, value=c_r)
+            ws.cell(row=r, column=gan_col_idx, value=g_r)
+            ws.cell(row=r, column=res_col_idx, value=r_r)
+            ws.cell(row=r, column=tot_col_idx, value=(c_r + g_r + r_r))
             
         # ------------------ CÁLCULO E INYECCIÓN DE DATOS ------------------
 
@@ -598,13 +601,14 @@ class PatrimonioGenerator:
         variation_reservas_comp = res_ext_24 - res_ini_comp
         gan_ejercicio_comp = pl_val_comp if pl_val_comp is not None else variation_ganancias_comp
 
-        inyectar(row_ini_24, cap_ini_comp, gan_ini_comp, res_ini_comp)
-        inyectar(row_gan_24, 0, gan_ejercicio_comp, 0)
-        inyectar(row_var_24, 0, 0, variation_reservas_comp)
-        if row_cap_24:
-            inyectar(row_cap_24, variation_capital_comp, 0, 0)
-        inyectar(row_tot_24, variation_capital_comp, gan_ejercicio_comp, variation_reservas_comp)
-        inyectar(row_fin_24, cap_24, gan_acu_24_full, res_ext_24)
+        if periodo_comp_str and str(periodo_comp_str).strip().lower() != "ninguno":
+            inyectar(row_ini_24, cap_ini_comp, gan_ini_comp, res_ini_comp)
+            inyectar(row_gan_24, 0, gan_ejercicio_comp, 0)
+            inyectar(row_var_24, 0, 0, variation_reservas_comp)
+            if row_cap_24:
+                inyectar(row_cap_24, variation_capital_comp, 0, 0)
+            inyectar(row_tot_24, variation_capital_comp, gan_ejercicio_comp, variation_reservas_comp)
+            inyectar(row_fin_24, cap_24, gan_acu_24_full, res_ext_24)
 
         # ------------------ FORMATEO INTELIGENTE DE FECHAS Y TEXTOS ------------------
         is_en = str(target_lang).lower() == 'en'

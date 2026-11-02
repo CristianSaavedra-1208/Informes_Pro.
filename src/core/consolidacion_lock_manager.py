@@ -59,7 +59,18 @@ class ConsolidationLockManager:
                 )
                 db.add(new_lock)
             db.commit()
-            return True, f"Período {periodo_clean} cerrado y bloqueado exitosamente."
+
+            # Generar Snapshot inmutable en Bóveda para el grupo consolidado
+            try:
+                grupo_obj = db.query(ConsolidationGroup).filter_by(id=grupo_id).first()
+                if grupo_obj:
+                    group_entity = f"[GRUPO] {grupo_obj.nombre_grupo}"
+                    from src.core.snapshot_vault_manager import SnapshotVaultManager
+                    SnapshotVaultManager.create_snapshot(group_entity, periodo_clean, user=user)
+            except Exception as e_snap:
+                print(f"Aviso al crear Snapshot consolidado en Bóveda: {e_snap}")
+
+            return True, f"Período {periodo_clean} cerrado y bloqueado exitosamente (Snapshot congelado en Bóveda)."
         except Exception as e:
             db.rollback()
             return False, f"Error al cerrar período: {e}"
@@ -85,6 +96,17 @@ class ConsolidationLockManager:
                 lock.unlocked_at = datetime.now()
                 lock.unlocked_by = user
                 db.commit()
+
+                # Archivar Snapshot consolidado
+                try:
+                    grupo_obj = db.query(ConsolidationGroup).filter_by(id=grupo_id).first()
+                    if grupo_obj:
+                        group_entity = f"[GRUPO] {grupo_obj.nombre_grupo}"
+                        from src.core.snapshot_vault_manager import SnapshotVaultManager
+                        SnapshotVaultManager.archive_snapshot(group_entity, periodo_clean, user=user)
+                except Exception as e_arch:
+                    print(f"Aviso al archivar Snapshot consolidado: {e_arch}")
+
                 return True, f"Período {periodo_clean} reabierto exitosamente para ajustes."
             return False, f"El período {periodo_clean} no estaba cerrado."
         except Exception as e:

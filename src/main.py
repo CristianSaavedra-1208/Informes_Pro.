@@ -441,13 +441,37 @@ def main():
     def run_inicio(): pg_inicio.render(empresa_seleccionada, empresa_path)
     def run_cargas(): pg_cargas.render(empresa_seleccionada, empresa_path)
     def run_map(): pg_map.render(empresa_seleccionada, empresa_path)
-    def run_ajustes(): pg_ajustes.render(empresa_seleccionada, empresa_path)
+    def run_ajustes():
+        import importlib
+        import src.ui_pages.ajustes_manuales as pg_ajustes
+        importlib.reload(pg_ajustes)
+        pg_ajustes.render(empresa_seleccionada, empresa_path)
     def run_cons(): pg_cons.render(empresa_seleccionada, empresa_path)
-    def run_estados(): pg_estados.render(empresa_seleccionada, empresa_path)
+    def run_estados():
+        import importlib
+        import src.reporting.balance_generator as bg_mod
+        importlib.reload(bg_mod)
+        import src.reporting.er_generator as erg_mod
+        importlib.reload(erg_mod)
+        import src.reporting.cash_flow_generator as cfg_mod
+        importlib.reload(cfg_mod)
+        import src.reporting.patrimonio_generator as pat_mod
+        importlib.reload(pat_mod)
+        import src.reporting.ori_generator as ori_mod
+        importlib.reload(ori_mod)
+        import src.models.pl_cubo_db as pl_cubo_mod
+        importlib.reload(pl_cubo_mod)
+        import src.models.trial_balance_db as tb_db_mod
+        importlib.reload(tb_db_mod)
+        import src.core.audit_adjustments_engine as aju_mod
+        importlib.reload(aju_mod)
+        import src.ui_pages.estados_financieros as pg_estados
+        importlib.reload(pg_estados)
+        pg_estados.render(empresa_seleccionada, empresa_path)
     def run_informes():
         import importlib
-        import src.reporting.notes as notes_module
-        importlib.reload(notes_module)
+        import src.reporting.note_generator as ng_mod
+        importlib.reload(ng_mod)
         import src.core.external_notes_manager as ext_mgr
         importlib.reload(ext_mgr)
         import src.ui_pages.informes_y_notas as pg_informes

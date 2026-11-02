@@ -28,7 +28,7 @@ def init_db():
     # Importar los modelos para que SQLAlchemy los detecte al hacer create_all
     from src.models.trial_balance import TrialBalanceRecord
     from src.models.audit_adjustment import AuditAdjustmentRecord
-    from src.models.historical_data import HistoricalDataRecord, HistoricalDetailRecord
+    from src.models.historical_data import HistoricalDataRecord, HistoricalDetailRecord, ClosingSnapshotRecord
     from src.models.taxonomy_master import TaxonomyMasterRecord
     from src.models.company import CompanyEntity
     from src.models.pl_record import PlRecordDim
@@ -76,6 +76,24 @@ def init_db():
             for col in ["saldo_inicial", "debitos", "creditos"]:
                 if col not in columns_hd:
                     conn.execute(text(f"ALTER TABLE historical_detail_records ADD COLUMN {col} FLOAT DEFAULT 0.0"))
+
+            # 4. Check audit_adjustments
+            result_adj = conn.execute(text("PRAGMA table_info(audit_adjustments)"))
+            columns_adj = [row[1] for row in result_adj.fetchall()]
+            adj_cols = {
+                "asiento_codigo": "VARCHAR(50)",
+                "num_linea": "INTEGER DEFAULT 1",
+                "cuenta_codigo": "VARCHAR(100)",
+                "nombre_cuenta": "VARCHAR(255)",
+                "linea_item": "VARCHAR(255)",
+                "linea_nota": "VARCHAR(100)",
+                "debe": "FLOAT DEFAULT 0.0",
+                "haber": "FLOAT DEFAULT 0.0",
+                "glosa": "VARCHAR(500)"
+            }
+            for col_name, col_type in adj_cols.items():
+                if col_name not in columns_adj:
+                    conn.execute(text(f"ALTER TABLE audit_adjustments ADD COLUMN {col_name} {col_type}"))
     except Exception as e:
         print(f"Error running lightweight migration: {e}")
 
