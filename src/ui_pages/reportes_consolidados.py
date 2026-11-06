@@ -184,12 +184,86 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 import time
                 start_time = time.time()
-                with st.spinner("Procesando hojas de trabajo y cruzando con plantillas..."):
-                    from src.core.consolidacion_engine import generar_hoja_trabajo
-                    df_hoja_act, msg_act = generar_hoja_trabajo(sel_g3, periodo_act_g)
-                    df_hoja_comp = None
-                    if periodo_comp_g != "Ninguno":
-                        df_hoja_comp, msg_comp = generar_hoja_trabajo(sel_g3, periodo_comp_g)
+                from src.core.snapshot_vault_manager import SnapshotVaultManager
+                from src.core.consolidacion_engine import generar_hoja_trabajo
+                from io import BytesIO
+                ent_grp_name = f"[GRUPO] {grupo_name}"
+                stmt_code_map = {
+                    "Balance Clasificado": "BALANCE",
+                    "Estado de Resultados": "ER",
+                    "Estado de Flujos de Efectivo": "EFE",
+                    "Estado de Cambios en el Patrimonio": "PATRIMONIO",
+                    "Estado de Resultados Integrales": "ORI",
+                }
+                stmt_code = stmt_code_map.get(report_type, "BALANCE")
+                can_use_snap_act = SnapshotVaultManager.has_active_snapshot(ent_grp_name, periodo_act_g) and (report_type != "Estado de Flujos de Efectivo" or metodo_flujo == "Directo")
+                snap_res_cons = SnapshotVaultManager.get_statement(ent_grp_name, periodo_act_g, stmt_code, comp_period=periodo_comp_g, scale_factor=scale_factor) if can_use_snap_act else None
+                snap_df_cons = snap_res_cons[0] if snap_res_cons else None
+
+                if snap_df_cons is not None:
+                    with st.spinner("Cargando reporte consolidado desde Snapshot inmutable..."):
+                        df_hoja_act, _ = generar_hoja_trabajo(sel_g3, periodo_act_g)
+                        df_hoja_comp = None
+                        if periodo_comp_g != "Ninguno":
+                            df_hoja_comp, _ = generar_hoja_trabajo(sel_g3, periodo_comp_g)
+                        preview_df = snap_df_cons.copy()
+                        if report_type == "Balance Clasificado" and "Clasificación" in preview_df.columns:
+                            preview_df = preview_df.rename(columns={"Clasificación": "Balance clasificado"})
+                        snap_ex_bytes = SnapshotVaultManager.get_statement_excel(ent_grp_name, periodo_act_g, stmt_code)
+                        if not snap_ex_bytes or abs(scale_factor - 1000.0) >= 0.01:
+                            from src.reporting.excel_export import generate_excel_report
+                            snap_ex_bytes = generate_excel_report(preview_df, title=f"{report_type} Consolidado", subtitle=f"Expresado en {unidad}")
+                        result_bytes = BytesIO(snap_ex_bytes)
+                        date_cols_snap = [c for c in preview_df.columns if c not in ["Clasificación", "Balance clasificado", "Detalle", "Descripción", "Nota", "Notas"]]
+                        col_actual = date_cols_snap[0] if len(date_cols_snap) >= 1 else str(periodo_act_g)
+                        col_comp = date_cols_snap[1] if len(date_cols_snap) >= 2 else (str(periodo_comp_g) if periodo_comp_g != "Ninguno" else "Comp")
+                        filename = f"{stmt_code}_Consolidado_{grupo_name}_{periodo_act_g}.xlsx"
+                        try:
+                            cons_excel_bytes = result_bytes.getvalue()
+                            if report_type == "Balance Clasificado":
+                                from src.reporting.word_export import WordExportEngine
+                                word_output = WordExportEngine.generate_classified_balance_word(
+                                    df=preview_df,
+                                    title="Estado de Situación Financiera Consolidado",
+                                    unit=unidad,
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
+                                )
+                                word_bytes_out = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
+                                word_filename = f"Balance_Consolidado_{grupo_name}_{periodo_act_g}.docx"
+                            else:
+                                from src.reporting.word_export import generate_word_report
+                                word_bytes_out = generate_word_report(
+                                    df=preview_df,
+                                    title=f"{report_type} Consolidado",
+                                    subtitle=f"Periodo: {periodo_act_g} vs {periodo_comp_g} ({unidad})",
+                                    excel_bytes=cons_excel_bytes,
+                                    target_lang=target_lang
+                                )
+                                word_filename = f"{stmt_code}_Consolidado_{grupo_name}_{periodo_act_g}.docx"
+                        except Exception:
+                            word_bytes_out = None
+                            word_filename = f"Reporte_Consolidado_{grupo_name}_{periodo_act_g}.docx"
+
+                        st.session_state['consolidated_report_excel_binary'] = result_bytes.getvalue()
+                        st.session_state['consolidated_report_word_binary'] = word_bytes_out
+                        st.session_state['consolidated_report_config_key'] = f"{sel_g3}_{periodo_act_g}_{periodo_comp_g}_{report_type}_{scale_factor}"
+                        st.session_state['consolidated_report_preview_df'] = preview_df
+                        st.session_state['consolidated_report_filename'] = filename
+                        st.session_state['consolidated_report_word_filename'] = word_filename
+                        st.session_state['consolidated_report_type'] = report_type
+                        st.session_state['consolidated_report_col_actual'] = col_actual
+                        st.session_state['consolidated_report_col_comp'] = col_comp
+                        st.session_state['consolidated_report_df_hoja_act'] = df_hoja_act
+                        st.session_state['consolidated_report_df_hoja_comp'] = df_hoja_comp
+                        elapsed_time = time.time() - start_time
+                        st.success(f"🔒 Reporte Consolidado cargado desde Snapshot inmutable ({periodo_act_g}) (Tiempo: {elapsed_time:.2f} s)")
+                else:
+                    with st.spinner("Procesando hojas de trabajo y cruzando con plantillas..."):
+                        df_hoja_act, msg_act = generar_hoja_trabajo(sel_g3, periodo_act_g)
+                        df_hoja_comp = None
+                        if periodo_comp_g != "Ninguno":
+                            df_hoja_comp, msg_comp = generar_hoja_trabajo(sel_g3, periodo_comp_g)
                         
                     if df_hoja_act is not None:
                         def clean_str(s):
@@ -744,21 +818,25 @@ def render(empresa_seleccionada, empresa_path):
                         else: # Estado de Cambios en el Patrimonio o Estado de Resultados Integrales
                             result_bytes.seek(0)
                             if report_type == "Estado de Cambios en el Patrimonio":
-                                from src.core.excel_utils import detect_patrimonio_skiprows
+                                from src.core.excel_utils import detect_patrimonio_skiprows, clean_patrimonio_preview_df
                                 pat_skip = detect_patrimonio_skiprows(result_bytes)
                                 result_bytes.seek(0)
                                 preview_df = pd.read_excel(result_bytes, skiprows=pat_skip)
+                                preview_df = clean_patrimonio_preview_df(preview_df)
                             else:
-                                from src.core.excel_utils import detect_general_skiprows
+                                from src.core.excel_utils import detect_general_skiprows, clean_preview_dataframe
                                 ori_skip = detect_general_skiprows(result_bytes)
                                 result_bytes.seek(0)
                                 preview_df = pd.read_excel(result_bytes, skiprows=ori_skip)
-                                
-                            from src.core.excel_utils import clean_preview_dataframe
-                            preview_df = clean_preview_dataframe(preview_df)
-                            first_col = preview_df.columns[0]
-                            preview_df = preview_df.dropna(how='all', subset=[first_col]).reset_index(drop=True)
+                                preview_df = clean_preview_dataframe(preview_df)
+                                first_col = preview_df.columns[0]
+                                preview_df = preview_df.dropna(how='all', subset=[first_col]).reset_index(drop=True)
                             
+                        if periodo_comp_g != "Ninguno" and SnapshotVaultManager.has_active_snapshot(ent_grp_name, periodo_comp_g) and report_type in ["Balance Clasificado", "Estado de Resultados", "Estado de Resultados Integrales"]:
+                            preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                preview_df, ent_grp_name, stmt_code, periodo_act_g, periodo_comp_g, scale_factor=scale_factor
+                            )
+
                         # Generar versión Word
                         try:
                             cons_excel_bytes = result_bytes.getvalue()

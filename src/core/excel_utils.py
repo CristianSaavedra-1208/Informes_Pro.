@@ -526,6 +526,85 @@ def clean_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def clean_patrimonio_preview_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Limpia el DataFrame de previsualización del Estado de Cambios en el Patrimonio
+    preservando los bloques de encabezados intermedios (ej. Capital emitido / M$ para el segundo año).
+    """
+    if df is None or df.empty:
+        return df
+
+    df = clean_preview_dataframe(df)
+    if df.empty:
+        return df
+
+    # Filtrar filas completamente vacías o con solo marcadores técnicos ('||')
+    def _row_has_content(row):
+        for v in row:
+            if pd.notna(v):
+                s = str(v).strip()
+                if s not in ["", "nan", "None", "||"]:
+                    return True
+        return False
+
+    df = df[df.apply(_row_has_content, axis=1)].reset_index(drop=True)
+    if df.empty:
+        return df
+
+    # Si la fila 0 es únicamente la fila de unidad ('M$') del primer encabezado (que ya se agrega a df.columns), omitirla
+    first_c0 = str(df.iloc[0, 0]).strip() if pd.notna(df.iloc[0, 0]) else ""
+    first_rest = [str(v).strip().lower() for v in df.iloc[0, 1:] if pd.notna(v) and str(v).strip() not in ["", "nan", "None"]]
+    if first_c0 in ["", "nan", "None"] and first_rest and all(v in ["m$", "ch$", "th$", "us$", "$"] for v in first_rest):
+        df = df.iloc[1:].reset_index(drop=True)
+
+    # Verificar si existe un segundo bloque anual (segunda fila de Saldo inicial / 1 de enero)
+    # y asegurar que tenga su bloque de encabezado si la plantilla de alguna entidad aún no lo incluía
+    opening_indices = []
+    for idx, row in df.iterrows():
+        c0 = str(row.iloc[0]).strip().lower() if pd.notna(row.iloc[0]) else ""
+        if "saldo" in c0 and any(k in c0 for k in ["1 de enero", "inicial", "apertura", "january 1"]):
+            opening_indices.append(idx)
+
+    if len(opening_indices) >= 2:
+        sec_open_idx = opening_indices[1]
+        has_second_header = False
+        for check_i in range(max(1, sec_open_idx - 3), sec_open_idx):
+            r_vals = [str(v).strip().lower() for v in df.iloc[check_i, 1:] if pd.notna(v)]
+            if any("capital" in v for v in r_vals):
+                has_second_header = True
+                break
+        if not has_second_header and len(df.columns) > 1:
+            hdr_titles = [""] + [str(c).replace("\nM$", "").strip() for c in df.columns[1:]]
+            hdr_units = [""] + ["M$" for _ in df.columns[1:]]
+            top_part = df.iloc[:sec_open_idx]
+            bot_part = df.iloc[sec_open_idx:]
+            hdr_df = pd.DataFrame([hdr_titles, hdr_units], columns=df.columns)
+            df = pd.concat([top_part, hdr_df, bot_part], ignore_index=True)
+
+    df.iloc[:, 0] = df.iloc[:, 0].fillna("").astype(str).replace({"nan": "", "None": ""})
+
+    def _try_num(val):
+        if pd.isna(val) or val is None:
+            return val
+        if isinstance(val, (int, float)):
+            return val
+        s = str(val).strip()
+        if s in ["", "nan", "None"]:
+            return None
+        try:
+            return float(s.replace(",", ""))
+        except Exception:
+            return s
+
+    for col in df.columns[1:]:
+        df[col] = df[col].apply(_try_num)
+
+    from src.reporting.formatting import ensure_subtable_separator_rows
+    df = ensure_subtable_separator_rows(df)
+
+    return df
+
+
 
 
 

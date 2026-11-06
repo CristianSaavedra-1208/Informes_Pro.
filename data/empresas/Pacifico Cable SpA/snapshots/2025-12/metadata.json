@@ -3,11 +3,12 @@
   "periodo": "2025-12",
   "comp_period_bal": "2024-12",
   "comp_period_pl": "2024-12",
+  "base_scale": 1000.0,
   "is_consolidated": false,
-  "fecha_cierre": "2026-10-28T15:56:32.468079",
-  "cerrado_por": "Actualizacion Ajustes Auditoria",
+  "fecha_cierre": "2026-11-05T12:34:50.711983",
+  "cerrado_por": "Administrador",
   "statements_count": 6,
-  "notes_count": 23,
+  "notes_count": 22,
   "statements": [
     "#BALANCE",
     "#ESF",
@@ -32,7 +33,6 @@
     "#N16",
     "#N17",
     "#N18",
-    "#N19",
     "#N20",
     "#N21",
     "#N22",
@@ -41,6 +41,6 @@
     "#N25",
     "#N27"
   ],
-  "checksum": "76ae9c2f4d93f4154bd3d56253f07c89359937fc07757168679f659f7dd9eb78",
+  "checksum": "1abc6044b00d591d8ef2a91eff44c5b0a835cb482ab6bea9c64f6408e0bf07a0",
   "is_active": true
 }

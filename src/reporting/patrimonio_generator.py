@@ -422,6 +422,9 @@ class PatrimonioGenerator:
         row_tot_24 = row_ini_24 + 4
         row_cap_24 = None
         
+        rows_var_25 = []
+        rows_var_24 = []
+
         # Buscar en bloque 1
         for r in range(row_ini_25 + 1, row_fin_25):
             val = ws.cell(row=r, column=name_col_idx).value
@@ -431,6 +434,7 @@ class PatrimonioGenerator:
                     row_gan_25 = r
                 elif any(x in val_clean for x in ["variacion", "reserva", "coberturas", "otros cambios", "incremento", "otros resultados"]):
                     row_var_25 = r
+                    rows_var_25.append(r)
                 elif any(x in val_clean for x in ["aumento", "emision", "emisión", "suscripcion", "suscripción", "capital"]):
                     row_cap_25 = r
                 elif "total" in val_clean:
@@ -445,6 +449,7 @@ class PatrimonioGenerator:
                     row_gan_24 = r
                 elif any(x in val_clean for x in ["variacion", "reserva", "coberturas", "otros cambios", "incremento", "otros resultados"]):
                     row_var_24 = r
+                    rows_var_24.append(r)
                 elif any(x in val_clean for x in ["aumento", "emision", "emisión", "suscripcion", "suscripción", "capital"]):
                     row_cap_24 = r
                 elif "total" in val_clean:
@@ -571,6 +576,8 @@ class PatrimonioGenerator:
 
         inyectar(row_ini_25, cap_ini_actual, gan_ini_actual, res_ini_actual)
         inyectar(row_gan_25, 0, gan_ejercicio_actual, 0)
+        for rv in rows_var_25:
+            inyectar(rv, 0, 0, 0)
         inyectar(row_var_25, 0, 0, variation_reservas_actual)
         if row_cap_25:
             inyectar(row_cap_25, variation_capital_actual, 0, 0)
@@ -604,6 +611,8 @@ class PatrimonioGenerator:
         if periodo_comp_str and str(periodo_comp_str).strip().lower() != "ninguno":
             inyectar(row_ini_24, cap_ini_comp, gan_ini_comp, res_ini_comp)
             inyectar(row_gan_24, 0, gan_ejercicio_comp, 0)
+            for rv in rows_var_24:
+                inyectar(rv, 0, 0, 0)
             inyectar(row_var_24, 0, 0, variation_reservas_comp)
             if row_cap_24:
                 inyectar(row_cap_24, variation_capital_comp, 0, 0)
@@ -627,7 +636,7 @@ class PatrimonioGenerator:
 
         # Traducir cabeceras de columnas si target_lang == 'en'
         if is_en:
-            for r in range(1, 10):
+            for r in range(1, ws.max_row + 1):
                 for col_idx, key in [(cap_col_idx, "Issued capital"), (gan_col_idx, "Retained earnings"), (res_col_idx, "Other reserves"), (tot_col_idx, "Equity total")]:
                     cell = ws.cell(row=r, column=col_idx)
                     if cell.value and isinstance(cell.value, str):

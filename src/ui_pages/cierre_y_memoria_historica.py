@@ -19,6 +19,11 @@ def render(empresa_seleccionada, empresa_path):
     # -------------------------------------------------------------
     with st.expander("⚡ Bóveda de Snapshots: Sincronización Automática", expanded=False):
         st.write("Genera y actualiza los Snapshots inmutables de Estados Financieros y Notas explicativas (#N01 a #N30) para todos los períodos históricos cerrados en la base de datos.")
+        force_rebuild = st.checkbox(
+            "🔄 Forzar actualización de Snapshots ya existentes (regenerar con últimas mejoras del motor)",
+            value=False,
+            key="chk_force_rebuild_snaps"
+        )
         if st.button("⚡ Sincronizar Bóveda para Todos los Períodos Cerrados", key="btn_sync_all_snaps", type="secondary"):
             from src.core.snapshot_vault_manager import SnapshotVaultManager
             prog_bar = st.progress(0.0)
@@ -26,7 +31,10 @@ def render(empresa_seleccionada, empresa_path):
             def on_s_prog(cur, tot, msg):
                 prog_bar.progress(cur / max(1, tot))
                 status.info(f"⏳ {msg} ({cur}/{tot})...")
-            succ, errs, logs = SnapshotVaultManager.sync_all_existing_historical_periods(progress_callback=on_s_prog)
+            succ, errs, logs = SnapshotVaultManager.sync_all_existing_historical_periods(
+                progress_callback=on_s_prog,
+                force_rebuild=force_rebuild
+            )
             prog_bar.progress(1.0)
             status.empty()
             st.success(f"✅ ¡Sincronización de Bóveda finalizada! {succ} períodos listos en Bóveda ({errs} errores).")

@@ -36,18 +36,28 @@ from src.reporting.word_table_formatter import (
 
 def set_cell_bg(cell, fill_color):
     """Inyecta XML shading para cambiar el color de fondo de una celda de Word."""
-    shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_color))
-    cell._tc.get_or_add_tcPr().append(shading_elm)
+    tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('shd'):
+            tcPr.remove(c)
+    shading_elm = parse_xml(r'<w:shd {} w:val="clear" w:color="auto" w:fill="{}"/>'.format(nsdecls('w'), fill_color))
+    tcPr.append(shading_elm)
 
 def set_cell_margins(cell, top=50, bottom=50, left=100, right=100):
     """Ajusta los márgenes internos (padding) de la celda de Word en dxa (1 pt = 20 dxa)."""
     tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('tcMar'):
+            tcPr.remove(c)
     tcMar = parse_xml(f'<w:tcMar {nsdecls("w")}><w:top w:w="{top}" w:type="dxa"/><w:bottom w:w="{bottom}" w:type="dxa"/><w:left w:w="{left}" w:type="dxa"/><w:right w:w="{right}" w:type="dxa"/></w:tcMar>')
     tcPr.append(tcMar)
 
 def set_cell_borders(cell, top=None, bottom=None):
     """Inyecta bordes OXML a una celda de Word (útil para filas de totales/subtotales contables)."""
     tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('tcBorders'):
+            tcPr.remove(c)
     borders_xml = f'<w:tcBorders {nsdecls("w")}>'
     if top:
         borders_xml += f'<w:top w:val="{top.get("val", "single")}" w:sz="{top.get("sz", "6")}" w:space="0" w:color="{top.get("color", "000000")}"/>'
@@ -200,17 +210,9 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
             not any(k in first_cell_clean for k in ["total", "subtotal"]) and not has_data_values
         ) or first_cell_str in ["Activos", "Activos corrientes", "Activos no corrientes", "Patrimonio y pasivos", "Pasivos corrientes", "Pasivos no corrientes", "Patrimonio"]
         
-        is_grand_total = not is_category_header and any(k in first_cell_clean for k in [
-            "total activos", "total patrimonio y pasivos", "total pasivos y patrimonio", "patrimonio total", "total patrimonio",
-            "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "saldo final de efectivo",
-            "saldo final", "saldo final ejercicio"
-        ])
-        
-        is_subtotal = not is_category_header and not is_grand_total and any(k in first_cell_clean for k in [
-            "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
-            "procedentes de actividades de operación", "utilizados en actividades de inversión", 
-            "procedentes de actividades de financiación", "total resultados integrales", "total resultados"
-        ])
+        from src.reporting.word_export import _is_total_or_subtotal_label
+        is_grand_total = not is_category_header and _is_total_or_subtotal_label(first_cell_clean)
+        is_subtotal = False
 
         # Estilo auditado Big 4: fondo blanco sin cebrado
         bg_color = "FFFFFF"
@@ -239,21 +241,9 @@ def populate_docx_table(table, df, numeric_cols, unit="M$", is_balance=False):
             set_cell_bg(cell, bg_color)
             set_cell_margins(cell, top=pad_top, bottom=pad_bottom, left=pad_lr, right=pad_lr)
             
-            # En estilo modelo base: líneas definidas y no continuas
-            if is_grand_total:
-                if col_idx == 0:
-                    top_b = None
-                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                else:
-                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
-                    bottom_b = {'val': 'double', 'sz': '6', 'color': '404040'}
-            elif is_subtotal:
-                if col_idx == 0:
-                    top_b = None
-                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                else:
-                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
-                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
+            if is_grand_total or is_subtotal:
+                top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                bottom_b = {'val': 'single', 'sz': '6', 'color': '404040'}
             else:
                 top_b = None
                 bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
@@ -294,37 +284,32 @@ def populate_notes_docx_table(table, chunk_df):
     
     base_font_size, hdr_font_size, p_spacing, pad_top, pad_lr = get_dynamic_font_and_spacing(num_cols, is_compact=False, is_landscape=is_landscape)
     pad_bottom = pad_top
-    hdr_pad_v = pad_top
-    hdr_line_spacing = Pt(p_spacing.pt - 0.5) if hasattr(p_spacing, 'pt') else Pt(8.5)
     
-    in_header = True
+    from src.reporting.word_export import _is_total_or_subtotal_label
+    from src.reporting.formatting import detect_internal_header_rows, is_separator_row_series, ensure_subtable_separator_rows
+    chunk_df = ensure_subtable_separator_rows(chunk_df)
+    internal_hdr_rows, bottom_hdr_rows = detect_internal_header_rows(chunk_df)
+
     for row_i, (_, row) in enumerate(chunk_df.iterrows()):
-        row_cells = table.rows[row_i].cells
-        
-        has_data_numbers = False
-        for col_idx, val in enumerate(row):
-            if pd.notna(val) and isinstance(val, (int, float)):
-                if not (val > 2000 and val < 2100):
-                    has_data_numbers = True
-                    break
-        if has_data_numbers:
-            in_header = False
-            
-        first_cell_val = str(row.iloc[0]).lower().strip()
-        is_grand_total = any(x in first_cell_val for x in ["total general", "total final", "saldo final", "total patrimonio", "total activos", "total pasivos y patrimonio", "patrimonio total"])
-        is_subtotal = not is_grand_total and any(x in first_cell_val for x in ["total", "sub total", "subtotal", "ganancia bruta", "total resultados integrales"])
-        
-        bg_color = "EBF1F7" if in_header else "FFFFFF"
+        row_cells = table.rows[row_i].cells if row_i < len(table.rows) else table.add_row().cells
+        first_cell_raw = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) and str(row.iloc[0]).strip() not in ["None", "nan"] else ""
+        first_cell_val = first_cell_raw.lower()
+        is_internal_hdr = (row_i in internal_hdr_rows)
+        is_bottom_internal_hdr = (row_i in bottom_hdr_rows)
+        is_sep_row = (not is_internal_hdr) and is_separator_row_series(row)
+        is_grand_total = (not is_internal_hdr) and (not is_sep_row) and _is_total_or_subtotal_label(first_cell_val)
+        is_subtotal = False
+        bg_color = "E8EEF6" if is_internal_hdr else "FFFFFF"
             
         for col_idx, col_name in enumerate(chunk_df.columns):
             val = row[col_name]
-            if pd.isna(val) or val == "None" or str(val) == "nan" or str(val).strip() == "":
+            if is_sep_row or pd.isna(val) or val == "None" or str(val) == "nan" or str(val).strip() == "":
                 text_val = ""
             else:
                 if isinstance(val, (int, float)):
                     try:
                         if val == 0:
-                            text_val = "-"
+                            text_val = "0" if is_internal_hdr else "-"
                         elif val < 0:
                             text_val = f"({abs(val):,.0f})".replace(",", ".")
                         else:
@@ -332,35 +317,36 @@ def populate_notes_docx_table(table, chunk_df):
                     except:
                         text_val = str(val)
                 else:
-                    text_val = str(val)
+                    text_val = str(val).strip()
                     
             cell = row_cells[col_idx]
             cell.text = text_val
             set_cell_bg(cell, bg_color)
-            set_cell_margins(cell, top=hdr_pad_v if in_header else pad_top, bottom=hdr_pad_v if in_header else pad_bottom, left=pad_lr, right=pad_lr)
+            set_cell_margins(cell, top=pad_top, bottom=pad_bottom, left=pad_lr, right=pad_lr)
             
-            # En estilo modelo base: cabecera 1F3864 y líneas no continuas
-            if in_header:
-                set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '8', 'color': '1F3864'})
-            elif is_grand_total:
-                if col_idx == 0:
-                    set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
-                else:
-                    set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '404040'}, bottom={'val': 'double', 'sz': '6', 'color': '404040'})
-            elif is_subtotal:
-                if col_idx == 0:
-                    set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
-                else:
-                    set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '404040'}, bottom={'val': 'single', 'sz': '2', 'color': 'D9D9D9'})
+            if is_internal_hdr:
+                top_b = None
+                bottom_b = {'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bottom_internal_hdr else None
+                set_cell_borders(cell, top=top_b, bottom=bottom_b)
+            elif is_sep_row:
+                prev_is_tot = (row_i > 0) and _is_total_or_subtotal_label(str(chunk_df.iloc[row_i - 1, 0]).strip().lower())
+                top_b = {'val': 'single', 'sz': '6', 'color': '404040'} if prev_is_tot else None
+                set_cell_borders(cell, top=top_b, bottom=None)
+            elif is_grand_total or is_subtotal:
+                set_cell_borders(cell, top={'val': 'single', 'sz': '6', 'color': '404040'}, bottom={'val': 'single', 'sz': '6', 'color': '404040'})
             else:
                 set_cell_borders(cell, top=None, bottom={'val': 'single', 'sz': '2', 'color': 'E1E1E1'})
                 
             for p in cell.paragraphs:
                 p.paragraph_format.space_before = Pt(0.5)
                 p.paragraph_format.space_after = Pt(0.5)
-                p.paragraph_format.line_spacing = hdr_line_spacing if in_header else p_spacing
+                p.paragraph_format.line_spacing = p_spacing
                 
-                if col_idx < len(col_classes) and col_classes[col_idx] == 'numeric':
+                is_num_hdr = (col_idx >= 1) and (
+                    text_val.lower() in ["m$", "$", "%", "activos", "pasivos", "corriente", "no corriente", "us$", "uf", "th$"] or
+                    any(k in text_val for k in ["31.12", "30.06", "31.03", "30.09", "202", "31-", "30-"])
+                )
+                if (col_idx < len(col_classes) and col_classes[col_idx] == 'numeric') or is_num_hdr:
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                     set_cell_nowrap(cell)
                 elif col_idx < len(col_classes) and col_classes[col_idx] == 'note':
@@ -371,10 +357,10 @@ def populate_notes_docx_table(table, chunk_df):
                     
                 for run in p.runs:
                     run.font.name = 'Arial'
-                    run.font.size = Pt(hdr_font_size if in_header else base_font_size)
-                    if in_header or is_grand_total or is_subtotal:
+                    run.font.size = Pt(hdr_font_size if is_internal_hdr else base_font_size)
+                    if is_internal_hdr or is_grand_total or is_subtotal:
                         run.font.bold = True
-                    run.font.color.rgb = RGBColor(31, 56, 100) if in_header else RGBColor(0, 0, 0)
+                    run.font.color.rgb = RGBColor(31, 56, 100) if is_internal_hdr else RGBColor(0, 0, 0)
                         
     apply_table_formatting_and_widths(table, chunk_df, classifications=col_classes, total_width_inches=total_width_inches, is_compact=False, is_landscape=is_landscape)
 
@@ -471,51 +457,62 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
         for j in range(min(num_cols_tbl, len(df_cols))):
             col_mapping[j] = j
     elif is_no_comp:
-        # Modo estricto sin comparativo: SOLO mapear columna de concepto y columna del período actual
+        # Modo estricto sin comparativo: SOLO mapear columna de concepto y columnas del período actual
         col_mapping[0] = 0
         
-        # Buscar columna en Word del año actual que no esté protegida
-        act_tbl_col = None
-        if act_year:
-            for c_idx, yr in tbl_col_years.items():
-                if yr == act_year:
-                    act_tbl_col = c_idx
-                    break
-        if act_tbl_col is None:
+        if num_cols_tbl == len(df_cols) and len(tbl_col_years) >= 2:
+            # Si la estructura de columnas coincide (ej. tabla con múltiples pares Actual/Comparativo como #N14.1),
+            # mapear todas las columnas no protegidas posicionalmente
             for c_idx in range(1, num_cols_tbl):
                 if c_idx not in protected_tbl_cols:
-                    act_tbl_col = c_idx
-                    break
-
-        # Buscar en df la columna del período actual
-        df_act_idx = 1
-        for j, col_name in enumerate(df_cols):
-            if j == 0:
-                continue
-            if str(col_name).strip().lower() in ['nota', 'notas']:
-                for tj in range(1, num_cols_tbl):
-                    if tj not in protected_tbl_cols and "nota" in table.rows[0].cells[tj].text.lower():
-                        col_mapping[j] = tj
+                    col_mapping[c_idx] = c_idx
+            act_tbl_cols = [c_idx for c_idx, yr in tbl_col_years.items() if yr == act_year and c_idx not in protected_tbl_cols]
+        else:
+            # Buscar columna en Word del año actual que no esté protegida
+            act_tbl_col = None
+            if act_year:
+                for c_idx, yr in tbl_col_years.items():
+                    if yr == act_year:
+                        act_tbl_col = c_idx
                         break
-                continue
-            if act_year and act_year in str(col_name):
-                df_act_idx = j
-                break
-        
-        if act_tbl_col is not None and act_tbl_col not in protected_tbl_cols:
-            col_mapping[df_act_idx] = act_tbl_col
+            if act_tbl_col is None:
+                for c_idx in range(1, num_cols_tbl):
+                    if c_idx not in protected_tbl_cols:
+                        act_tbl_col = c_idx
+                        break
+
+            # Buscar en df la columna del período actual
+            df_act_idx = 1
+            for j, col_name in enumerate(df_cols):
+                if j == 0:
+                    continue
+                if str(col_name).strip().lower() in ['nota', 'notas']:
+                    for tj in range(1, num_cols_tbl):
+                        if tj not in protected_tbl_cols and "nota" in table.rows[0].cells[tj].text.lower():
+                            col_mapping[j] = tj
+                            break
+                    continue
+                if act_year and act_year in str(col_name):
+                    df_act_idx = j
+                    break
             
-            # Opcional: actualizar fecha en cabecera de la columna actual en Word si corresponde
-            if periodo_actual:
-                for hr_idx in range(min(2, num_rows_tbl)):
-                    hdr_cell = table.rows[hr_idx].cells[act_tbl_col]
+            act_tbl_cols = []
+            if act_tbl_col is not None and act_tbl_col not in protected_tbl_cols:
+                col_mapping[df_act_idx] = act_tbl_col
+                act_tbl_cols = [act_tbl_col]
+
+        # Actualizar fecha en cabecera de las columnas actuales en Word si corresponde
+        if periodo_actual and act_tbl_cols:
+            from src.reporting.note_generator import format_date_dots
+            dot_date = format_date_dots(periodo_actual)
+            for act_c in act_tbl_cols:
+                for hr_idx in range(min(4, num_rows_tbl)):
+                    hdr_cell = table.rows[hr_idx].cells[act_c]
                     hdr_txt = hdr_cell.text
                     if act_year and act_year in hdr_txt:
                         m_date = re.search(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2})?', hdr_txt)
                         if m_date:
                             matched_str = m_date.group(0)
-                            from src.reporting.note_generator import format_date_dots
-                            dot_date = format_date_dots(periodo_actual)
                             if "-" in matched_str and len(matched_str) >= 8:
                                 new_date_str = dot_date.replace(".", "-")
                             elif "." in matched_str and len(matched_str) >= 8:
@@ -552,14 +549,124 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                     if df_idx < num_cols_tbl:
                         col_mapping[df_idx] = df_idx
 
-    # 3. Mapeo de filas
-    # Caso 1: Coincidencia posicional exacta de filas (SOLO si no es tabla multi-bloque)
+    from src.reporting.word_export import _is_total_or_subtotal_label
+    from src.reporting.formatting import detect_internal_header_rows, is_separator_row_series
+    def _normalize_total_row_borders():
+        # Asegurar estilo corporativo celeste (#E8EEF6) en filas de cabecera internas si la tabla no tiene fila de cabecera extra
+        if num_rows_tbl == len(clean_df):
+            int_hdr_rows, bot_hdr_rows = detect_internal_header_rows(clean_df)
+        else:
+            int_hdr_rows, bot_hdr_rows = set(), set()
+
+        for r_i, t_row in enumerate(table.rows):
+            if not t_row.cells:
+                continue
+            if r_i in int_hdr_rows:
+                is_bot_h = (r_i in bot_hdr_rows)
+                for cell_c in t_row.cells:
+                    set_cell_bg(cell_c, "E8EEF6")
+                    set_cell_borders(
+                        cell_c,
+                        top=None,
+                        bottom={'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bot_h else None
+                    )
+                    for p_c in cell_c.paragraphs:
+                        for r_c in p_c.runs:
+                            r_c.font.bold = True
+                            r_c.font.color.rgb = RGBColor(31, 56, 100)
+                if is_bot_h and (r_i + 1) < len(table.rows):
+                    for cell_nxt in table.rows[r_i + 1].cells:
+                        set_cell_borders(
+                            cell_nxt,
+                            top={'val': 'single', 'sz': '8', 'color': '1F3864'},
+                            bottom={'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                        )
+                continue
+            if r_i > 0 and all(not (c.text or "").strip() for c in t_row.cells):
+                prev_is_tot = _is_total_or_subtotal_label((table.rows[r_i - 1].cells[0].text or "").strip().lower()) if len(table.rows[r_i - 1].cells) > 0 else False
+                for cell_c in t_row.cells:
+                    set_cell_bg(cell_c, "FFFFFF")
+                    set_cell_borders(
+                        cell_c,
+                        top={'val': 'single', 'sz': '6', 'color': '404040'} if prev_is_tot else None,
+                        bottom=None
+                    )
+                continue
+            if r_i == 0:
+                continue
+            if not any(c._tc.xpath('.//w:tcBorders') for c in t_row.cells):
+                continue
+            c0_txt = t_row.cells[0].text.strip()
+            if _is_total_or_subtotal_label(c0_txt):
+                for cell_c in t_row.cells:
+                    set_cell_borders(
+                        cell_c,
+                        top={'val': 'single', 'sz': '6', 'color': '404040'},
+                        bottom={'val': 'single', 'sz': '6', 'color': '404040'}
+                    )
+
+        # Caso 1: Coincidencia posicional exacta de filas (SOLO si no es tabla multi-bloque, o si es multi-bloque en modo comparativo)
     is_multi_block = any("2025" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0) and any("2026" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0)
-    
-    if num_rows_tbl == len(clean_df) and not is_multi_block:
-        for r_idx in range(num_rows_tbl):
+    has_header_row = (num_rows_tbl == len(clean_df) + 1)
+
+    # Actualizar encabezados de fecha en la fila 0 cuando la tabla tiene fila de cabecera de columnas (ej. #BALANCE, #ER, #ORI, #EFE)
+    if has_header_row and num_rows_tbl > 0:
+        hdr_row_cells = table.rows[0].cells
+        for df_c_idx, tbl_c_idx in col_mapping.items():
+            if df_c_idx == 0 or tbl_c_idx >= len(hdr_row_cells) or tbl_c_idx in protected_tbl_cols:
+                continue
+            col_label = str(df_cols[df_c_idx]).strip()
+            if col_label.lower() in ["comp", "nota", "notas", "clasificación", "clasificacion", "descripción", "descripcion", "detalle", ""]:
+                continue
+            old_hdr_txt = hdr_row_cells[tbl_c_idx].text
+            unit_suffix = ""
+            for u_tok in ["\nM$", "\nCh$", "\nTh$", " M$", " Ch$", " Th$"]:
+                if u_tok in old_hdr_txt and u_tok.strip() not in col_label:
+                    unit_suffix = u_tok
+                    break
+            new_hdr_txt = f"{col_label}{unit_suffix}"
+            set_cell_value(hdr_row_cells[tbl_c_idx], new_hdr_txt, align_right=True)
+
+    # En modo comparativo (not is_no_comp), actualizar también fechas en filas de encabezado internas (filas 0..3) de tablas de Notas
+    if not is_no_comp and periodo_actual:
+        from src.reporting.note_generator import format_date_dots
+        dot_act = format_date_dots(periodo_actual)
+        dot_comp = format_date_dots(periodo_comp) if periodo_comp and str(periodo_comp).strip().lower() not in ["ninguno", "none", ""] else None
+        date_tbl_cols = [c_idx for c_idx in range(1, num_cols_tbl) if c_idx not in protected_tbl_cols and any(re.search(r'20\d{2}', table.rows[hr].cells[c_idx].text) for hr in range(min(4, num_rows_tbl)) if c_idx < len(table.rows[hr].cells))]
+        for pair_pos, t_col in enumerate(date_tbl_cols):
+            target_dot = dot_act if (pair_pos % 2 == 0 or not dot_comp) else dot_comp
+            target_iso = str(periodo_actual) if (pair_pos % 2 == 0 or not dot_comp) else str(periodo_comp)
+            for hr_idx in range(min(4, num_rows_tbl)):
+                if has_header_row and hr_idx == 0:
+                    continue
+                if t_col >= len(table.rows[hr_idx].cells):
+                    continue
+                hdr_cell = table.rows[hr_idx].cells[t_col]
+                hdr_txt = hdr_cell.text
+                m_date = re.search(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2}([\.\-\/]\d{2})?)?', hdr_txt)
+                if m_date and len(m_date.group(0)) >= 7:
+                    matched_str = m_date.group(0)
+                    if "-" in matched_str:
+                        new_date_str = target_dot.replace(".", "-") if not re.match(r'^20\d{2}-\d{2}$', matched_str) else target_iso
+                    elif "." in matched_str:
+                        new_date_str = target_dot
+                    elif "/" in matched_str:
+                        new_date_str = target_dot.replace(".", "/")
+                    else:
+                        new_date_str = target_iso
+                    set_cell_value(hdr_cell, hdr_txt.replace(matched_str, new_date_str), align_right=True)
+
+    if (num_rows_tbl == len(clean_df) or has_header_row) and (not is_multi_block or not is_no_comp):
+        row_offset = 1 if has_header_row else 0
+        for r_idx in range(len(clean_df)):
             df_row = clean_df.iloc[r_idx]
-            tbl_row = table.rows[r_idx]
+            tbl_row = table.rows[r_idx + row_offset]
+            # Si es modo comparativo o fila de saldo en Patrimonio, actualizar también etiquetas dinámicas de fecha en columna 0
+            if not is_no_comp and len(tbl_row.cells) > 0:
+                c0_df = str(df_row.iloc[0]).strip() if pd.notna(df_row.iloc[0]) else ""
+                c0_tbl = tbl_row.cells[0].text.strip()
+                if c0_df and (re.search(r'20\d{2}', c0_df) or re.search(r'20\d{2}', c0_tbl)):
+                    set_cell_value(tbl_row.cells[0], c0_df, align_right=False)
             for df_c_idx, tbl_c_idx in col_mapping.items():
                 if df_c_idx == 0:
                     continue
@@ -571,15 +678,25 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                 # NUNCA vaciar celda si df tiene vacío/NaN
                 if fmt_val != "":
                     set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
+        _normalize_total_row_borders()
         return
 
-    # Caso 2: Coincidencia semántica por concepto en Columna 0
+    # Caso 2: Coincidencia semántica por concepto en Columna 0 (con soporte multi-bloque por año)
     df_concepts = {}
+    df_concepts_by_year = {}
+    df_sec_year = act_year
     for df_r_idx, (_, df_row) in enumerate(clean_df.iterrows()):
+        row_joined = " ".join(str(v) for v in df_row if pd.notna(v))
+        yrs_found = re.findall(r'20\d{2}', row_joined)
+        if yrs_found:
+            df_sec_year = yrs_found[0]
         concept_raw = str(df_row.iloc[0])
         c_norm = normalize_text(concept_raw)
-        if c_norm and c_norm not in ['nan', 'none', 'm', 'detalle', 'concepto'] and c_norm not in df_concepts:
-            df_concepts[c_norm] = df_row
+        if c_norm and c_norm not in ['nan', 'none', 'm', 'detalle', 'concepto']:
+            if c_norm not in df_concepts:
+                df_concepts[c_norm] = df_row
+            if df_sec_year and (df_sec_year, c_norm) not in df_concepts_by_year:
+                df_concepts_by_year[(df_sec_year, c_norm)] = df_row
 
     # Rastrear sección de año en tablas verticales apiladas (ej. Patrimonio)
     current_section_year = act_year
@@ -626,19 +743,28 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                     if df_r_cand.iloc[0] and str(df_r_cand.iloc[0]).strip():
                         c_cell.text = str(df_r_cand.iloc[0]).strip()
                     break
+        elif current_section_year and (current_section_year, c_norm) in df_concepts_by_year:
+            matched_df_row = df_concepts_by_year[(current_section_year, c_norm)]
         elif c_norm in df_concepts:
             matched_df_row = df_concepts[c_norm]
         else:
-            for df_c_norm, df_r_candidate in df_concepts.items():
+            for (cand_sec_yr, df_c_norm), df_r_candidate in df_concepts_by_year.items():
+                if current_section_year and cand_sec_yr and cand_sec_yr != current_section_year:
+                    continue
                 if len(c_norm) >= 7 and (c_norm in df_c_norm or df_c_norm in c_norm):
-                    # Evitar emparejamientos cruzados entre años
-                    cand_str = str(df_r_candidate.iloc[0])
-                    cand_yrs = re.findall(r'20\d{2}', cand_str)
-                    row_yrs = re.findall(r'20\d{2}', c_text)
-                    if cand_yrs and row_yrs and cand_yrs[0] != row_yrs[0]:
-                        continue
                     matched_df_row = df_r_candidate
                     break
+            if matched_df_row is None:
+                for df_c_norm, df_r_candidate in df_concepts.items():
+                    if len(c_norm) >= 7 and (c_norm in df_c_norm or df_c_norm in c_norm):
+                        # Evitar emparejamientos cruzados entre años
+                        cand_str = str(df_r_candidate.iloc[0])
+                        cand_yrs = re.findall(r'20\d{2}', cand_str)
+                        row_yrs = re.findall(r'20\d{2}', c_text)
+                        if cand_yrs and row_yrs and cand_yrs[0] != row_yrs[0]:
+                            continue
+                        matched_df_row = df_r_candidate
+                        break
                     
         if matched_df_row is not None:
             for df_c_idx, tbl_c_idx in col_mapping.items():
@@ -653,6 +779,8 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                     # NUNCA vaciar celda si el valor de origen es vacío/NaN
                     if fmt_val != "":
                         set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
+
+    _normalize_total_row_borders()
 
 def load_mappings_for_entity(empresa):
     """Carga los mapeos de balance y PL para una entidad."""
@@ -795,24 +923,30 @@ class WordTemplateEngine:
     def _extract_balance_preview(self, result_bytes, col_actual, col_comp):
         result_bytes.seek(0)
         import openpyxl
-        import datetime
-        import re
         wb_check = openpyxl.load_workbook(result_bytes, data_only=True)
         ws_check = wb_check.active
         
-        # Buscar dinámicamente las columnas en el excel generado
-        from src.core.excel_utils import detect_balance_columns
-        name_col_idx, nota_col_idx, val25_col_idx, val24_col_idx = detect_balance_columns(ws_check)
-            
+        from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
+        cfg = read_template_config(wb_check)
+        if cfg is None:
+            name_col_idx, nota_col_idx, val25_col_idx, val24_col_idx = detect_balance_columns(ws_check, wb_check)
+            cfg = {
+                "name_col": name_col_idx,
+                "nota_col": nota_col_idx if nota_col_idx else 0,
+                "val_actual_col": val25_col_idx,
+                "val_comp_col": val24_col_idx,
+                "data_start_row": 5,
+            }
+
+        col_act_use = str(col_actual)
+        col_cmp_use = str(col_comp)
+        if col_act_use == col_cmp_use:
+            col_cmp_use = f"{col_cmp_use} (Comp)"
+
         result_bytes.seek(0)
-        df_raw = pd.read_excel(result_bytes)
-        
-        if nota_col_idx is not None:
-            cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-            preview_df = df_raw.iloc[:, cols_to_keep].copy()
-            preview_df.columns = ["Clasificación", "Nota", col_actual, col_comp]
-            
-            # Clean the 'Nota' column
+        preview_df = read_excel_preview(result_bytes, cfg, col_act_use, col_cmp_use)
+
+        if "Nota" in preview_df.columns:
             def clean_nota(val):
                 if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan" or val == 0:
                     return ""
@@ -821,16 +955,15 @@ class WordTemplateEngine:
                     if float_val.is_integer():
                         return str(int(float_val))
                     return str(float_val)
-                except:
+                except Exception:
                     return str(val).strip()
-            
             preview_df["Nota"] = preview_df["Nota"].apply(clean_nota)
-        else:
-            cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-            preview_df = df_raw.iloc[:, cols_to_keep].copy()
-            preview_df.columns = ["Clasificación", col_actual, col_comp]
-            
-        preview_df = preview_df.dropna(subset=["Clasificación"]).reset_index(drop=True)
+
+        if col_act_use in preview_df.columns:
+            preview_df[col_act_use] = pd.to_numeric(preview_df[col_act_use], errors='coerce')
+        if col_cmp_use in preview_df.columns:
+            preview_df[col_cmp_use] = pd.to_numeric(preview_df[col_cmp_use], errors='coerce')
+
         return preview_df
 
     def _extract_er_preview(self, result_bytes, col_actual, col_comp):
@@ -887,6 +1020,14 @@ class WordTemplateEngine:
                 break
 
         rows_data = []
+        has_any_nota = False
+        if nota_col_idx is not None:
+            for r in range(start_row, ws_check.max_row + 1):
+                nv = ws_check.cell(row=r, column=nota_col_idx).value
+                if nv is not None and str(nv).strip() not in ["", "nan", "None", "0"]:
+                    has_any_nota = True
+                    break
+
         for r in range(start_row, ws_check.max_row + 1):
             name_val = ws_check.cell(row=r, column=name_col_idx).value
             v25 = ws_check.cell(row=r, column=val25_col_idx).value
@@ -901,11 +1042,11 @@ class WordTemplateEngine:
                 
             row_dict = {
                 "Clasificación": str(name_val).strip() if name_val is not None else "",
-                col_actual: v25,
-                col_comp: v24
             }
-            if nota_col_idx is not None:
+            if has_any_nota:
                 row_dict["Nota"] = ws_check.cell(row=r, column=nota_col_idx).value or ""
+            row_dict[col_actual] = v25
+            row_dict[col_comp] = v24
                 
             rows_data.append(row_dict)
             
@@ -1139,6 +1280,7 @@ class WordTemplateEngine:
         txt_periodo_comp = format_periodo(periodo_comp) if periodo_comp != "Ninguno" else ""
         
         # Obtener utilidad neta
+        from src.core.snapshot_vault_manager import SnapshotVaultManager
         val_utilidad_pesos = 0.0
         if is_consolidated:
             grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
@@ -1261,14 +1403,31 @@ class WordTemplateEngine:
                 seen_tags.add(tag.split(':', 1)[0].strip().upper())
 
         # 2. Tablas existentes con metadatos w:tblCaption / w:tblDescription
+        note_subtable_counts = {}
+        duplicate_tables_to_remove = []
         for tbl in doc.tables:
             meta = get_table_metadata(tbl)
             if meta:
                 meta_clean = meta.strip()
-                base_meta = meta_clean.split(':', 1)[0].strip().upper()
+                parts_m = meta_clean.split(':', 1)
+                base_meta = parts_m[0].strip().upper()
+                suffix_m = f":{parts_m[1]}" if len(parts_m) > 1 else ""
+                m_note_dot1 = re.match(r'^(#N\d+)\.1$', base_meta)
+                if m_note_dot1:
+                    n_prefix = m_note_dot1.group(1)
+                    note_subtable_counts[n_prefix] = note_subtable_counts.get(n_prefix, 0) + 1
+                    if base_meta in seen_tags and note_subtable_counts[n_prefix] > 1:
+                        healed_base = f"{n_prefix}.{note_subtable_counts[n_prefix]}"
+                        while healed_base in seen_tags:
+                            note_subtable_counts[n_prefix] += 1
+                            healed_base = f"{n_prefix}.{note_subtable_counts[n_prefix]}"
+                        base_meta = healed_base
+                        meta_clean = f"{healed_base}{suffix_m}"
                 if base_meta not in seen_tags:
                     matched_items.append(('table', tbl, meta_clean))
                     seen_tags.add(base_meta)
+                else:
+                    duplicate_tables_to_remove.append((tbl, base_meta))
 
         # 3. Detección inteligente por títulos y contexto para tablas NO marcadas aún
         # (SOLO si no se detectaron etiquetas explícitas ni metadatos previos)
@@ -1396,8 +1555,10 @@ class WordTemplateEngine:
                 comp_period = override_period if override_period else (periodo_comp_balance if base_code_clean in ["#BALANCE", "#ESF", "#EFE", "#PATRIMONIO"] else periodo_comp_resultados)
                 
                 stmt_cache_key = (base_code_clean, comp_period)
+                was_loaded_from_snapshot = False
                 if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"] and stmt_cache_key in statements_cache:
                     preview_df, report_name = statements_cache[stmt_cache_key]
+                    was_loaded_from_snapshot = True
                 elif base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"] and SnapshotVaultManager.has_active_snapshot(empresa_activa, periodo_actual):
                     snap_stmt = SnapshotVaultManager.get_statement(
                         empresa=empresa_activa,
@@ -1409,6 +1570,7 @@ class WordTemplateEngine:
                     if snap_stmt and snap_stmt[0] is not None:
                         preview_df, report_name = snap_stmt
                         statements_cache[stmt_cache_key] = (preview_df, report_name)
+                        was_loaded_from_snapshot = True
                 
                 if preview_df is None and base_code_clean in ["#BALANCE", "#ESF"]:
                     report_name = "ESTADO DE SITUACIÓN FINANCIERA CONSOLIDADO" if is_consolidated else "ESTADO DE SITUACIÓN FINANCIERA CLASIFICADO"
@@ -1587,7 +1749,7 @@ class WordTemplateEngine:
                             df_hoja_comp_sec = df_hoja_comp.loc[idx_er_comp[0]+1:] if not idx_er_comp.empty else df_hoja_comp
                             df_hoja_comp_clean = df_hoja_comp_sec[df_hoja_comp_sec['Balance clasificado'].notna() & (df_hoja_comp_sec['Balance clasificado'].str.strip() != "")]
                             pl_dict_comp = {row['Balance clasificado']: [row['CONSOLIDADO']] for _, row in df_hoja_comp_clean.iterrows()}
-                            pl_df_wide = pd.DataFrame(pl_dict_comp)
+                            pl_df_comp_wide = pd.DataFrame(pl_dict_comp)
                             
                         template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
                         if not os.path.exists(template_er_path):
@@ -1675,6 +1837,16 @@ class WordTemplateEngine:
                             from src.reporting.er_generator import ERGenerator
                             gen_er = ERGenerator(template_er_p)
                             _, pl_df_pat = gen_er.generate(pl_df_wide_p, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide_p, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+
+                        if comp_period != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
+                            if bal_df_pat is not None:
+                                bal_df_pat = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                    bal_df_pat, empresa_activa, "#BALANCE", periodo_actual, comp_period, scale_factor=scale_factor
+                                )
+                            if pl_df_pat is not None:
+                                pl_df_pat = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                    pl_df_pat, empresa_activa, "#ER", periodo_actual, comp_period, scale_factor=scale_factor
+                                )
                                 
                         result_bytes = pat_engine.generate(
                             bal_preview_df=bal_df_pat,
@@ -1684,13 +1856,11 @@ class WordTemplateEngine:
                             empresa=empresa_activa
                         )
                         result_bytes.seek(0)
-                        from src.core.excel_utils import detect_patrimonio_skiprows, clean_preview_dataframe
+                        from src.core.excel_utils import detect_patrimonio_skiprows, clean_patrimonio_preview_df
                         pat_skip = detect_patrimonio_skiprows(result_bytes)
                         result_bytes.seek(0)
                         preview_df = pd.read_excel(result_bytes, skiprows=pat_skip)
-                        preview_df = clean_preview_dataframe(preview_df)
-                        first_col = preview_df.columns[0]
-                        preview_df = preview_df.dropna(how='all', subset=[first_col]).reset_index(drop=True)
+                        preview_df = clean_patrimonio_preview_df(preview_df)
                         result_bytes.seek(0)
                     else:
                         preview_df = None
@@ -1750,6 +1920,10 @@ class WordTemplateEngine:
                     preview_df = self._extract_cf_preview(result_bytes, col_actual, col_comp)
                     
                 if preview_df is not None:
+                    if not was_loaded_from_snapshot and comp_period != "Ninguno" and base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI"] and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
+                        preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                            preview_df, empresa_activa, base_code_clean, periodo_actual, comp_period, scale_factor=scale_factor
+                        )
                     if base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#PATRIMONIO", "#EFE"]:
                         statements_cache[stmt_cache_key] = (preview_df, report_name)
                     is_bal = (base_code_clean == "#BALANCE" or "balance" in str(report_name).lower() or len(preview_df) >= 30)
@@ -1836,7 +2010,59 @@ class WordTemplateEngine:
                                 pass
                     else:
                         # item_type == 'table': Actualización in-place respetando anchos y estilos nativos de Word
-                        update_table_cells_inplace(old_tbl, preview_df, periodo_actual=periodo_actual, periodo_comp=comp_period)
+                        # Si es #PATRIMONIO y la tabla Word previa no tenía el segundo bloque de encabezado, reconstruir estructura
+                        pat_needs_rebuild = False
+                        if base_code_clean == "#PATRIMONIO" and len(old_tbl.rows) >= 12:
+                            old_hdr_count = sum(
+                                1 for r in old_tbl.rows
+                                if not (r.cells[0].text or "").strip() and any("capital" in (c.text or "").lower() or "issued" in (c.text or "").lower() for c in r.cells[1:])
+                            )
+                            new_hdr_count = 1 + sum(
+                                1 for _, r_df in preview_df.iterrows()
+                                if not str(r_df.iloc[0] if pd.notna(r_df.iloc[0]) else "").strip() and any("capital" in str(v).lower() or "issued" in str(v).lower() for v in r_df.iloc[1:] if pd.notna(v))
+                            )
+                            has_old_sep_row = any(
+                                all(not (c.text or "").strip() for c in r.cells)
+                                for r in old_tbl.rows[1:]
+                            )
+                            if old_hdr_count < new_hdr_count or not has_old_sep_row:
+                                pat_needs_rebuild = True
+                        if pat_needs_rebuild:
+                            # Si se solicitó con comp_period == 'Ninguno', preservar los valores del bloque comparativo
+                            # que ya existían en la tabla Word anterior antes de reconstruirla con el segundo encabezado
+                            if str(comp_period).strip().lower() in ["ninguno", "none", ""]:
+                                act_yr_p = str(periodo_actual)[:4] if periodo_actual and len(str(periodo_actual)) >= 4 else "2026"
+                                old_comp_rows = []
+                                in_comp_sec = False
+                                for r_old in old_tbl.rows:
+                                    r_txt = " ".join(c.text for c in r_old.cells)
+                                    yrs_r = re.findall(r'20\d{2}', r_txt)
+                                    if yrs_r:
+                                        in_comp_sec = (yrs_r[0] != act_yr_p)
+                                    if in_comp_sec:
+                                        old_comp_rows.append([c.text.strip() for c in r_old.cells])
+                                if old_comp_rows:
+                                    comp_start_df = None
+                                    for idx_p, r_p in preview_df.iterrows():
+                                        c0_p = str(r_p.iloc[0]).lower()
+                                        if ("saldo" in c0_p or "balance" in c0_p) and act_yr_p not in c0_p and any(y in c0_p for y in ["2023", "2024", "2025", "1 de enero", "january 1"]):
+                                            comp_start_df = idx_p
+                                            break
+                                    if comp_start_df is not None:
+                                        for offset_c, old_vals in enumerate(old_comp_rows):
+                                            target_df_idx = comp_start_df + offset_c
+                                            if target_df_idx < len(preview_df):
+                                                for col_c in range(min(len(old_vals), len(preview_df.columns))):
+                                                    if old_vals[col_c] != "":
+                                                        preview_df.iloc[target_df_idx, col_c] = old_vals[col_c]
+                            unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
+                            while len(old_tbl.rows) > 1:
+                                old_tbl._tbl.remove(old_tbl.rows[-1]._tr)
+                            from src.reporting.word_export import populate_word_table_styled
+                            ex_b = result_bytes.getvalue() if (result_bytes is not None and hasattr(result_bytes, 'getvalue')) else (result_bytes if isinstance(result_bytes, bytes) else None)
+                            populate_word_table_styled(old_tbl, preview_df, excel_bytes=ex_b, unit=unit_str, compact=is_bal)
+                        else:
+                            update_table_cells_inplace(old_tbl, preview_df, periodo_actual=periodo_actual, periodo_comp=comp_period)
                         set_table_metadata(old_tbl, base_code_clean)
                         
                         # Actualizar texto del subtítulo de período en el párrafo previo si existe
@@ -1900,7 +2126,8 @@ class WordTemplateEngine:
                                             empresa=empresa_activa,
                                             periodo_actual=periodo_actual,
                                             note_code=base_code,
-                                            scale_factor=scale_factor
+                                            scale_factor=scale_factor,
+                                            comp_period=note_comp
                                         )
                                     if snap_note_els:
                                         raw_els = snap_note_els
@@ -1944,20 +2171,31 @@ class WordTemplateEngine:
                                             for r_name, df_chunk in named_ranges:
                                                 raw_els.append(("table", df_chunk))
                                         else:
-                                            excel_nota_out.seek(0)
-                                            preview_nota_df = pd.read_excel(excel_nota_out, sheet_name=target_sheets[0], header=None)
+                                            raw_els = []
                                             from src.ui_pages.informes_y_notas import split_sheet_into_elements
-                                            raw_els = split_sheet_into_elements(preview_nota_df)
+                                            excel_nota_out.seek(0)
+                                            xl_nota_f = pd.ExcelFile(excel_nota_out)
+                                            for s_name in target_sheets:
+                                                if s_name in xl_nota_f.sheet_names:
+                                                    preview_nota_df = xl_nota_f.parse(sheet_name=s_name, header=None)
+                                                    raw_els.extend(split_sheet_into_elements(preview_nota_df, sheet_name=s_name))
                                         note_elements_cache[note_cache_key] = raw_els
                                         elements = raw_els
                                 
-                                # Si se solicitó un índice de tabla específico (ej: #N04.1)
+                                # Si se solicitó un código o índice de tabla específico (ej: #N04.1, #N14.1)
                                 if table_idx is not None:
-                                    tables = [el for el in elements if el[0] == "table"]
-                                    if 0 <= table_idx < len(tables):
-                                        target_elements = [tables[table_idx]]
+                                    matched_explicit = [
+                                        el for el in elements
+                                        if el[0] == "table" and len(el) > 3 and el[3] and str(el[3]).strip().upper() == code.strip().upper()
+                                    ]
+                                    if matched_explicit:
+                                        target_elements = [matched_explicit[0]]
                                     else:
-                                        target_elements = [] # Fuera de rango o sin tablas
+                                        tables = [el for el in elements if el[0] == "table" and is_valid_note_table(clean_table_df(el[1]))]
+                                        if 0 <= table_idx < len(tables):
+                                            target_elements = [tables[table_idx]]
+                                        else:
+                                            target_elements = [] # Fuera de rango o sin tablas
                                 else:
                                     target_elements = elements
                                 
@@ -1980,7 +2218,7 @@ class WordTemplateEngine:
                                                 continue
                                             
                                             table_counter += 1
-                                            note_tag = f"{base_code}.{table_counter}"
+                                            note_tag = item[3] if (len(item) > 3 and item[3]) else (code if table_idx is not None else f"{base_code}.{table_counter}")
                                             is_landscape = should_use_landscape(len(chunk_df.columns), tag_code=tag_content)
                                             
                                             tbl = doc.add_table(rows=len(chunk_df), cols=len(chunk_df.columns))
@@ -1998,15 +2236,100 @@ class WordTemplateEngine:
                                             
                                     paragraphs_to_delete.append(p)
                                 else:
-                                    # item_type == 'table': Actualización in-place respetando anchos y estilos nativos de Word
+                                    # item_type == 'table': Actualización in-place o reconstrucción estructural si cambió el formato de la tabla
                                     tbl_elements = [el for el in target_elements if el[0] == "table"]
                                     t_df = tbl_elements[0][1] if tbl_elements else None
                                         
                                     if t_df is not None:
                                         chunk_df = clean_table_df(t_df)
                                         if is_valid_note_table(chunk_df):
-                                            update_table_cells_inplace(old_tbl, chunk_df, periodo_actual=periodo_actual, periodo_comp=note_comp)
-                                            set_table_metadata(old_tbl, tag_content)
+                                            r0_cells_txt = [c.text.strip().replace("\n", " ") for c in old_tbl.rows[0].cells] if old_tbl.rows else []
+                                            has_bogus_index_hdr = bool(r0_cells_txt) and all(
+                                                re.match(r"^\d+(\s*(M\$|Th\$|Ch\$))?$", t, re.IGNORECASE) or t == ""
+                                                for t in r0_cells_txt
+                                            ) and any(
+                                                re.match(r"^\d+(\s*(M\$|Th\$|Ch\$))?$", t, re.IGNORECASE)
+                                                for t in r0_cells_txt
+                                            )
+                                            has_corrupted_rows = has_bogus_index_hdr or any(
+                                                "transacciones significativas" in r.cells[0].text.lower()
+                                                for r in old_tbl.rows if len(r.cells) > 0
+                                            )
+                                            from src.reporting.formatting import is_separator_row_series
+                                            df_has_sep_row = any(is_separator_row_series(r_s) for _, r_s in chunk_df.iterrows())
+                                            tbl_has_sep_row = any(all(not (c.text or "").strip() for c in r.cells) for r in old_tbl.rows[1:])
+                                            needs_rebuild = (len(old_tbl.columns) != len(chunk_df.columns)) or has_corrupted_rows or (df_has_sep_row and not tbl_has_sep_row)
+                                            if needs_rebuild:
+                                                # Si se emitió con 'Ninguno' para preservar el comparativo pero la tabla cambió de formato/columnas,
+                                                # cargar el comparativo IFRS por defecto para que las nuevas columnas comparativas no queden vacías
+                                                if note_comp == "Ninguno":
+                                                    try:
+                                                        parts_p = str(periodo_actual).split('-')
+                                                        if len(parts_p) >= 2:
+                                                            prev_yr_str = str(int(parts_p[0]) - 1)
+                                                            fallback_comp = f"{prev_yr_str}-12" if is_balance_note else f"{prev_yr_str}-{parts_p[1]}"
+                                                            fb_cache_key = (base_code, fallback_comp)
+                                                            if fb_cache_key not in note_elements_cache:
+                                                                fb_contexts = get_entity_contexts(fallback_comp)
+                                                                fb_excel = engine_notes.generate(
+                                                                    sheet_names=target_sheets,
+                                                                    entity_contexts=fb_contexts,
+                                                                    active_entity_name=empresa_activa,
+                                                                    is_consolidated=is_consolidated,
+                                                                    scale_factor=scale_factor,
+                                                                    periodo_actual_str=periodo_actual,
+                                                                    periodo_comp_str=fallback_comp,
+                                                                    map_balance_df=map_balance_df,
+                                                                    map_pl_df=map_pl_df,
+                                                                    target_lang=target_lang,
+                                                                    evaluate_formulas=False
+                                                                )
+                                                                from src.core.external_notes_manager import ExternalNotesManager
+                                                                fb_excel = ExternalNotesManager.inject_external_data(
+                                                                    fb_excel,
+                                                                    empresa=empresa_activa,
+                                                                    periodo_actual=periodo_actual,
+                                                                    periodo_comp=fallback_comp,
+                                                                    target_lang=target_lang
+                                                                )
+                                                                from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook, split_sheet_into_elements
+                                                                fb_excel = evaluate_formulas_in_workbook(fb_excel)
+                                                                fb_els = []
+                                                                for s_name in target_sheets:
+                                                                    fb_excel.seek(0)
+                                                                    fb_df_s = pd.read_excel(fb_excel, sheet_name=s_name, header=None)
+                                                                    fb_els.extend(split_sheet_into_elements(fb_df_s, sheet_name=s_name))
+                                                                note_elements_cache[fb_cache_key] = fb_els
+                                                            fb_elements = note_elements_cache[fb_cache_key]
+                                                            fb_matched = [
+                                                                el for el in fb_elements
+                                                                if el[0] == "table" and len(el) > 3 and el[3] and str(el[3]).strip().upper() == code.strip().upper()
+                                                            ]
+                                                            if not fb_matched and table_idx is not None:
+                                                                fb_tbls = [el for el in fb_elements if el[0] == "table" and is_valid_note_table(clean_table_df(el[1]))]
+                                                                if 0 <= table_idx < len(fb_tbls):
+                                                                    fb_matched = [fb_tbls[table_idx]]
+                                                            if fb_matched:
+                                                                fb_chunk_df = clean_table_df(fb_matched[0][1])
+                                                                if is_valid_note_table(fb_chunk_df):
+                                                                    chunk_df = fb_chunk_df
+                                                    except Exception:
+                                                        pass
+
+                                                new_tbl = doc.add_table(rows=len(chunk_df), cols=len(chunk_df.columns))
+                                                populate_notes_docx_table(new_tbl, chunk_df)
+                                                set_table_metadata(new_tbl, tag_content)
+                                                old_tbl._tbl.addprevious(new_tbl._tbl)
+                                                parent_elm = old_tbl._tbl.getparent()
+                                                if parent_elm is not None:
+                                                    parent_elm.remove(old_tbl._tbl)
+                                            else:
+                                                update_table_cells_inplace(old_tbl, chunk_df, periodo_actual=periodo_actual, periodo_comp=note_comp)
+                                                set_table_metadata(old_tbl, tag_content)
+                                    elif old_tbl is not None and old_tbl.rows:
+                                        r0_first = (old_tbl.rows[0].cells[0].text or "").strip().lower() if old_tbl.rows[0].cells else ""
+                                        if any(k in r0_first for k in ("cambios en pasivo", "vencimiento de pasivos")):
+                                            duplicate_tables_to_remove.append((old_tbl, code))
             except Exception as tag_err:
                 print(f"Error procesando {tag_content}: {tag_err}")
                 if item_type == 'paragraph' and p is not None:
@@ -2017,6 +2340,37 @@ class WordTemplateEngine:
                     move_element_before(p, new_p._p)
                     paragraphs_to_delete.append(p)
                             
+        # Eliminar tablas duplicadas/huérfanas (ej. segundo cuadro #N16.3 cuando #N16.3 ya incluye actual y comparativo)
+        for dup_tbl, dup_code in duplicate_tables_to_remove:
+            try:
+                tbl_el = dup_tbl._tbl
+                parent = tbl_el.getparent()
+                if parent is not None:
+                    prev_el = tbl_el.getprevious()
+                    steps_checked = 0
+                    while prev_el is not None and steps_checked < 6:
+                        steps_checked += 1
+                        prev_prev = prev_el.getprevious()
+                        if prev_el.tag.endswith('p'):
+                            p_txt = (prev_el.text or "").strip()
+                            p_low = p_txt.lower()
+                            if not p_txt or (
+                                "cambios en pasivos por derechos de uso al" in p_low and
+                                not p_low.startswith("b)") and
+                                not p_low.startswith("a)")
+                            ):
+                                parent.remove(prev_el)
+                                if p_txt:
+                                    break
+                            else:
+                                break
+                        else:
+                            break
+                        prev_el = prev_prev
+                    parent.remove(tbl_el)
+            except Exception:
+                pass
+
         # Eliminar párrafos marcadores procesados
         for p in paragraphs_to_delete:
             try:

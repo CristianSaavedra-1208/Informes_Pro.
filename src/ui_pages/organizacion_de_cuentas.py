@@ -1047,60 +1047,89 @@ def render(empresa_seleccionada, empresa_path):
             if not available_periods:
                 st.warning("⚠️ No se encontraron periodos guardados en el sistema.")
             else:
+                from src.core.snapshot_vault_manager import SnapshotVaultManager
                 col_sab1, col_sab2 = st.columns(2)
                 with col_sab1:
                     sab_periodo = st.selectbox("Selecciona el periodo", available_periods, format_func=format_periodo, key="sab_periodo_sel")
                 with col_sab2:
                     sab_tipo = st.selectbox("Tipo de Matriz", ["Balance General (Matriz)", "Estado de Resultados / P&L (Matriz)"], key="sab_tipo_sel")
+
+                has_snap_sab = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, sab_periodo)
+                if has_snap_sab:
+                    st.caption(f"🔒 **Estado del Período ({format_periodo(sab_periodo)})**: CERRADO EN BÓVEDA — La Sábana de Auditoría corresponde al respaldo oficial congelado que cuadra 1 a 1 con el Balance y Notas cerradas.")
+                else:
+                    st.caption(f"🔓 **Estado del Período ({format_periodo(sab_periodo)})**: ABIERTO — La Sábana de Auditoría se calcula en vivo con los mapeos actuales.")
                 
                 if st.button("Construir Matriz", type="primary", key="btn_build_sab"):
                     with st.spinner("Procesando datos y cruzando mapeos..."):
                         try:
-                            # Cargar mapeos maestros (local o global)
-                            map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
-                            if not os.path.exists(map_bal_path): map_bal_path = "map_balance.xlsx"
-                            map_bal_df = pd.read_excel(map_bal_path, dtype=str) if os.path.exists(map_bal_path) else None
-                            
-                            map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
-                            if not os.path.exists(map_pl_path): map_pl_path = "map_pl.xlsx"
-                            map_pl_df = pd.read_excel(map_pl_path, dtype=str) if os.path.exists(map_pl_path) else None
-                            
-                            global_tpl = "Plantilla de notas_v1.xlsx"
-                            if os.path.exists(global_tpl):
-                                if map_bal_df is None or map_bal_df.empty:
-                                    try: map_bal_df = pd.read_excel(global_tpl, sheet_name="Mapeo Balance", dtype=str)
-                                    except: pass
-                                if map_pl_df is None or map_pl_df.empty:
-                                    try: map_pl_df = pd.read_excel(global_tpl, sheet_name="Mapeo Ctas P&L Cubo", dtype=str)
-                                    except: pass
+                            sab_type_code = "BALANCE" if "balance" in sab_tipo.lower() else "PL"
+                            sab_df = None
+                            sab_excel_bytes = None
+                            from_vault = False
 
-                            if is_consolidated:
-                                if "balance" in sab_tipo.lower():
-                                    sab_df = build_consolidated_balance_sabana(empresa_seleccionada, sab_periodo, map_bal_df)
-                                else:
-                                    sab_df = build_consolidated_pl_sabana(empresa_seleccionada, sab_periodo, map_pl_df)
-                            else:
-                                if "balance" in sab_tipo.lower():
-                                    tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, sab_periodo)
+                            if has_snap_sab:
+                                sab_df = SnapshotVaultManager.get_frozen_sabana(empresa_seleccionada, sab_periodo, sabana_type=sab_type_code)
+                                sab_excel_bytes = SnapshotVaultManager.get_frozen_sabana_excel(empresa_seleccionada, sab_periodo, sabana_type=sab_type_code)
+                                if sab_df is not None and not sab_df.empty:
+                                    from_vault = True
+
+                            if sab_df is None or sab_df.empty:
+                                # Cargar mapeos maestros (congelados si existen, o local/global en vivo)
+                                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(empresa_seleccionada, sab_periodo)
+                                map_bal_df = f_mb
+                                map_pl_df = f_mp
+
+                                if map_bal_df is None:
+                                    map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+                                    if not os.path.exists(map_bal_path): map_bal_path = "map_balance.xlsx"
+                                    map_bal_df = pd.read_excel(map_bal_path, dtype=str) if os.path.exists(map_bal_path) else None
+                                
+                                if map_pl_df is None:
+                                    map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
+                                    if not os.path.exists(map_pl_path): map_pl_path = "map_pl.xlsx"
+                                    map_pl_df = pd.read_excel(map_pl_path, dtype=str) if os.path.exists(map_pl_path) else None
+                                
+                                global_tpl = "Plantilla de notas_v1.xlsx"
+                                if os.path.exists(global_tpl):
                                     if map_bal_df is None or map_bal_df.empty:
-                                        st.error("❌ No se encontró el archivo de Mapeo de Balance.")
-                                        sab_df = None
-                                    else:
-                                        sab_df = build_balance_sabana(tb_df, map_bal_df)
-                                else:
-                                    pl_df = PlCuboDB.get_pl_cubo(empresa_seleccionada, sab_periodo)
-                                    tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, sab_periodo)
+                                        try: map_bal_df = pd.read_excel(global_tpl, sheet_name="Mapeo Balance", dtype=str)
+                                        except: pass
                                     if map_pl_df is None or map_pl_df.empty:
-                                        st.error("❌ No se encontró el archivo de Mapeo de P&L.")
-                                        sab_df = None
+                                        try: map_pl_df = pd.read_excel(global_tpl, sheet_name="Mapeo Ctas P&L Cubo", dtype=str)
+                                        except: pass
+
+                                if is_consolidated:
+                                    if sab_type_code == "BALANCE":
+                                        sab_df = build_consolidated_balance_sabana(empresa_seleccionada, sab_periodo, map_bal_df)
                                     else:
-                                        sab_df = build_pl_sabana(pl_df, map_pl_df, tb_df)
+                                        sab_df = build_consolidated_pl_sabana(empresa_seleccionada, sab_periodo, map_pl_df)
+                                else:
+                                    if sab_type_code == "BALANCE":
+                                        tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, sab_periodo)
+                                        if map_bal_df is None or map_bal_df.empty:
+                                            st.error("❌ No se encontró el archivo de Mapeo de Balance.")
+                                            sab_df = None
+                                        else:
+                                            sab_df = build_balance_sabana(tb_df, map_bal_df)
+                                    else:
+                                        pl_df = PlCuboDB.get_pl_cubo(empresa_seleccionada, sab_periodo)
+                                        tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, sab_periodo)
+                                        if map_pl_df is None or map_pl_df.empty:
+                                            st.error("❌ No se encontró el archivo de Mapeo de P&L.")
+                                            sab_df = None
+                                        else:
+                                            sab_df = build_pl_sabana(pl_df, map_pl_df, tb_df)
                                 
                             if sab_df is not None and not sab_df.empty:
                                 clean_name = empresa_seleccionada.replace("[GRUPO] ", "").replace(" ", "_")
                                 st.session_state['generated_sab_df'] = sab_df
-                                st.session_state['generated_sab_name'] = f"matriz_{'balance' if 'balance' in sab_tipo.lower() else 'pl'}_{clean_name}_{sab_periodo}.xlsx"
-                                st.success("✅ ¡Matriz construida con éxito!")
+                                st.session_state['generated_sab_excel'] = sab_excel_bytes
+                                st.session_state['generated_sab_name'] = f"matriz_{'balance' if sab_type_code == 'BALANCE' else 'pl'}_{clean_name}_{sab_periodo}.xlsx"
+                                if from_vault:
+                                    st.success(f"🔒 ¡Matriz de Auditoría Oficial recuperada desde el Snapshot de Bóveda ({format_periodo(sab_periodo)})!")
+                                else:
+                                    st.success("✅ ¡Matriz construida con éxito!")
                             else:
                                 st.warning("⚠️ No se generaron registros para la matriz en este período.")
                         except Exception as e:
@@ -1111,7 +1140,7 @@ def render(empresa_seleccionada, empresa_path):
                     sab_filename = st.session_state['generated_sab_name']
                 
                     # Excel Download
-                    excel_bytes = df_to_excel_bytes(sab_df, sheet_name="Matriz_Auditoria")
+                    excel_bytes = st.session_state.get('generated_sab_excel') or df_to_excel_bytes(sab_df, sheet_name="Matriz_Auditoria")
                     st.download_button(
                         label="📥 Descargar Matriz en Excel",
                         data=excel_bytes,

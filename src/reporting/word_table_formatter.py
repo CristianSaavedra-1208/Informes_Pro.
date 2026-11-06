@@ -45,8 +45,10 @@ def clean_table_df(df):
         cleaned = cleaned.map(format_date_str)
     else:
         cleaned = cleaned.applymap(format_date_str)
-            
-    return cleaned.reset_index(drop=True)
+
+    cleaned = cleaned.reset_index(drop=True)
+    from src.reporting.formatting import ensure_subtable_separator_rows
+    return ensure_subtable_separator_rows(cleaned)
 
 def is_valid_note_table(chunk_df):
     """

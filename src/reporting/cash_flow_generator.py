@@ -78,76 +78,91 @@ class CashFlowGenerator:
             adj_dict_comp[li]['egreso'] += float(a.egreso_caja or 0.0)
 
         # 2. Cargar mapeos de cuentas contables a líneas de flujo
-        acc_info = {}
-        map_cf_dict = {}
-
-        # Mapeos desde map_balance_df
-        if map_balance_df is not None:
-            acc_col = next((c for c in map_balance_df.columns if 'cuenta' in c.lower() or 'cta' in c.lower()), None)
-            cf_col = next((c for c in map_balance_df.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), None)
-            id_rep_col = next((c for c in map_balance_df.columns if 'id_reporte' in c.lower() or 'd_reporte' in c.lower()), None)
-            desc_col = next((c for c in map_balance_df.columns if 'nombre' in c.lower() or 'descripcion' in c.lower()), None)
-            rub_col = next((c for c in map_balance_df.columns if 'clasificaci' in c.lower() and 'balance' in c.lower()), None)
-            
-            if acc_col and cf_col:
-                for _, row in map_balance_df.iterrows():
-                    acc_val = str(row[acc_col]).strip()
-                    cf_val = str(row[cf_col]).strip()
-                    id_rep = str(row[id_rep_col]).strip() if id_rep_col and pd.notna(row[id_rep_col]) else ""
-                    desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else ""
-                    rub = str(row[rub_col]).strip() if rub_col and pd.notna(row[rub_col]) else ""
-                    
-                    if acc_val and acc_val != 'nan':
-                        section = 'A'
-                        if acc_val.startswith('2'):
-                            section = 'P'
-                        elif acc_val.startswith('1'):
-                            section = 'A'
-                        elif id_rep.upper().startswith('PAS_') or id_rep.upper().startswith('PAT_'):
-                            section = 'P'
-                        elif id_rep.upper().startswith('ACT_'):
-                            section = 'A'
-                        else:
-                            norm_rub = rub.lower()
-                            if any(x in norm_rub for x in ["pasivo", "patrimonio", "capital", "reserva", "obligacion", "provision"]):
-                                section = 'P'
+        def _build_cf_acc_info(mb_df, mp_df):
+            a_info = {}
+            m_cf_dict = {}
+            if mb_df is not None:
+                acc_col = next((c for c in mb_df.columns if 'cuenta' in c.lower() or 'cta' in c.lower()), None)
+                cf_col = next((c for c in mb_df.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), None)
+                id_rep_col = next((c for c in mb_df.columns if 'id_reporte' in c.lower() or 'd_reporte' in c.lower()), None)
+                desc_col = next((c for c in mb_df.columns if 'nombre' in c.lower() or 'descripcion' in c.lower()), None)
+                rub_col = next((c for c in mb_df.columns if 'clasificaci' in c.lower() and 'balance' in c.lower()), None)
+                
+                if acc_col and cf_col:
+                    for _, row in mb_df.iterrows():
+                        acc_val = str(row[acc_col]).strip()
+                        cf_val = str(row[cf_col]).strip()
+                        id_rep = str(row[id_rep_col]).strip() if id_rep_col and pd.notna(row[id_rep_col]) else ""
+                        desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else ""
+                        rub = str(row[rub_col]).strip() if rub_col and pd.notna(row[rub_col]) else ""
                         
-                        acc_info[acc_val] = {
-                            'cf_line': cf_val if cf_val != 'nan' else '',
-                            'section': section,
-                            'description': desc,
-                            'rubric': rub
-                        }
-                        # Map rubric name to cf_line (useful for consolidated rubrics)
-                        if rub and cf_val and cf_val != 'nan':
-                            map_cf_dict[rub] = cf_val
+                        if acc_val and acc_val != 'nan':
+                            section = 'A'
+                            if acc_val.startswith('2'):
+                                section = 'P'
+                            elif acc_val.startswith('1'):
+                                section = 'A'
+                            elif id_rep.upper().startswith('PAS_') or id_rep.upper().startswith('PAT_'):
+                                section = 'P'
+                            elif id_rep.upper().startswith('ACT_'):
+                                section = 'A'
+                            else:
+                                norm_rub = rub.lower()
+                                if any(x in norm_rub for x in ["pasivo", "patrimonio", "capital", "reserva", "obligacion", "provision"]):
+                                    section = 'P'
+                            
+                            a_info[acc_val] = {
+                                'cf_line': cf_val if cf_val != 'nan' else '',
+                                'section': section,
+                                'description': desc,
+                                'rubric': rub
+                            }
+                            if rub and cf_val and cf_val != 'nan':
+                                m_cf_dict[rub] = cf_val
 
-        # Mapeos desde map_pl_df
-        if map_pl_df is not None:
-            acc_col = next((c for c in map_pl_df.columns if 'cuenta' in c.lower() or 'cta' in c.lower()), None)
-            cf_col = next((c for c in map_pl_df.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), None)
-            desc_col = next((c for c in map_pl_df.columns if 'detalle' in c.lower() or 'descripcion' in c.lower() or 'nombre' in c.lower()), None)
-            
-            if acc_col:
-                for _, row in map_pl_df.iterrows():
-                    acc_val = str(row[acc_col]).strip()
-                    cf_val = str(row[cf_col]).strip() if cf_col and pd.notna(row[cf_col]) else ""
-                    desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else ""
-                    
-                    if acc_val and acc_val != 'nan':
-                        rub = ""
-                        for col in map_pl_df.columns:
-                            if col not in [acc_col, cf_col, desc_col, 'Unnamed: 14'] and pd.notna(row[col]) and str(row[col]).strip() != '':
-                                rub = col
-                                break
-                        acc_info[acc_val] = {
-                            'cf_line': cf_val if cf_val != 'nan' else '',
-                            'section': 'PL',
-                            'description': desc,
-                            'rubric': rub
-                        }
-                        if rub and cf_val and cf_val != 'nan' and cf_val != '':
-                            map_cf_dict[rub] = cf_val
+            if mp_df is not None:
+                acc_col = next((c for c in mp_df.columns if 'cuenta' in c.lower() or 'cta' in c.lower()), None)
+                cf_col = next((c for c in mp_df.columns if 'flujo' in c.lower() and 'efectivo' in c.lower()), None)
+                desc_col = next((c for c in mp_df.columns if 'detalle' in c.lower() or 'descripcion' in c.lower() or 'nombre' in c.lower()), None)
+                
+                if acc_col:
+                    for _, row in mp_df.iterrows():
+                        acc_val = str(row[acc_col]).strip()
+                        cf_val = str(row[cf_col]).strip() if cf_col and pd.notna(row[cf_col]) else ""
+                        desc = str(row[desc_col]).strip() if desc_col and pd.notna(row[desc_col]) else ""
+                        
+                        if acc_val and acc_val != 'nan':
+                            rub = ""
+                            for col in mp_df.columns:
+                                if col not in [acc_col, cf_col, desc_col, 'Unnamed: 14'] and pd.notna(row[col]) and str(row[col]).strip() != '':
+                                    rub = col
+                                    break
+                            a_info[acc_val] = {
+                                'cf_line': cf_val if cf_val != 'nan' else '',
+                                'section': 'PL',
+                                'description': desc,
+                                'rubric': rub
+                            }
+                            if rub and cf_val and cf_val != 'nan' and cf_val != '':
+                                m_cf_dict[rub] = cf_val
+            return a_info, m_cf_dict
+
+        acc_info, map_cf_dict = _build_cf_acc_info(map_balance_df, map_pl_df)
+        acc_info_comp = acc_info
+        map_balance_comp_df = map_balance_df
+        try:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            if not is_consolidado and empresa and periodo_comp_str and SnapshotVaultManager.has_active_snapshot(empresa, periodo_comp_str):
+                f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(empresa, periodo_comp_str)
+                if f_mb_c is not None or f_mp_c is not None:
+                    acc_info_comp, _ = _build_cf_acc_info(
+                        f_mb_c if f_mb_c is not None else map_balance_df,
+                        f_mp_c if f_mp_c is not None else map_pl_df
+                    )
+                    if f_mb_c is not None:
+                        map_balance_comp_df = f_mb_c
+        except Exception:
+            pass
 
         # 3. Determinar los DataFrames a utilizar para el cálculo
         if is_consolidado:
@@ -214,6 +229,9 @@ class CashFlowGenerator:
             periodo_comp_prev = self._get_prior_period(periodo_comp_str, available_periods)
             df_prior_of_comp = TrialBalanceDB.get_trial_balance(empresa, periodo_comp_prev) if periodo_comp_prev else None
 
+        if is_consolidado:
+            acc_info_comp = acc_info
+
         # 4. Calcular variaciones para cada columna de datos
         # Actual Column (column 3)
         agrupacion_flujo, matriz_audit = self._compute_column_values(
@@ -222,12 +240,12 @@ class CashFlowGenerator:
         
         # Comparative Column (column 4)
         agrupacion_flujo_comp, matriz_audit_comp = self._compute_column_values(
-            df_comp, df_prior_of_comp, acc_info, method=method
+            df_comp, df_prior_of_comp, acc_info_comp, method=method
         )
 
         # 5. Obtener los saldos de Efectivo y Equivalentes para inyectar al final
         cash_prior, cash_actual = self._get_cash_balances(df_act, df_comp, map_balance_df, is_consolidado)
-        cash_prior_comp, cash_actual_comp = self._get_cash_balances(df_comp, df_prior_of_comp, map_balance_df, is_consolidado)
+        cash_prior_comp, cash_actual_comp = self._get_cash_balances(df_comp, df_prior_of_comp, map_balance_comp_df, is_consolidado)
 
         # 6. Combinar Variación Bruta con Ajustes de Depuración (Ingreso Caja / Egreso Caja)
         agrupacion_flujo_final = {}

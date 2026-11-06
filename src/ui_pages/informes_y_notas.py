@@ -139,6 +139,10 @@ def evaluate_openpyxl_formula(formula, ws, col_idx, row_idx=None, visited=None):
                     visited.discard((row_idx, col_idx))
                 f_ret = float(ret_val)
                 return round(f_ret) if abs(f_ret - round(f_ret)) < 0.0001 else f_ret
+            except ZeroDivisionError:
+                if row_idx is not None:
+                    visited.discard((row_idx, col_idx))
+                return 0.0
             except Exception:
                 pass
 
@@ -329,16 +333,47 @@ def split_sheet_into_elements(df, sheet_name=None):
                 if current_explicit_code is not None and found_code == current_explicit_code:
                     continue
                     
+                # Extraer títulos de sección al final del bloque previo que pertenecen al nuevo código
+                popped_titles = []
+                while current_chunk:
+                    last_r = current_chunk[-1]
+                    ne_last = [v for v in last_r if pd.notna(v) and str(v).strip() != ""]
+                    if not ne_last:
+                        current_chunk.pop()
+                        continue
+                    if len(ne_last) == 1 and not isinstance(ne_last[0], (int, float)):
+                        last_txt = str(ne_last[0]).strip()
+                        last_low = last_txt.lower()
+                        is_total_like = (
+                            last_low in ['total', 'totales', 'saldo final', 'subtotal', 'sub-total'] or
+                            any(last_low.startswith(k) for k in ['total', 'saldo final', 'sub total', 'sub-total', 'subtotal'])
+                        )
+                        if not is_total_like and re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]', last_txt):
+                            popped_titles.append(last_txt)
+                            current_chunk.pop()
+                            continue
+                    break
+
                 # Si es un nuevo código explícito, guardar la tabla previa
                 if current_chunk and has_data:
-                    chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
-                    if not chunk_df.empty:
+                    from src.reporting.formatting import ensure_subtable_separator_rows
+                    chunk_df = ensure_subtable_separator_rows(pd.DataFrame(current_chunk).dropna(how='all', axis=0))
+                    if not chunk_df.empty and current_explicit_code is not None:
                         elements.append(("table", chunk_df, sheet_name, current_explicit_code))
+                    current_chunk = []
+                    has_data = False
+                    in_table = False
+                else:
                     current_chunk = []
                     has_data = False
                     in_table = False
                     
                 current_explicit_code = found_code
+
+                for p_title in reversed(popped_titles):
+                    clean_p = re.sub(r'\[COMPARATIVO\]', '', p_title, flags=re.IGNORECASE).strip()
+                    if clean_p:
+                        elements.append(("text", clean_p, sheet_name, current_explicit_code))
                 
                 # Extraer título descriptivo limpio (sin códigos técnicos ni [COMPARATIVO])
                 clean_title = re.sub(r'\[?#' + re.escape(m.group(1)) + r'\]?', '', full_row_title)
@@ -346,15 +381,23 @@ def split_sheet_into_elements(df, sheet_name=None):
                 clean_title = re.sub(r'\b(202\d|201\d|199\d)\b', '', clean_title).strip()
                 clean_title = re.sub(r'^[\s\-:]+', '', clean_title).strip()
                 if clean_title:
-                    elements.append(("text", clean_title, sheet_name, current_explicit_code))
+                    prev_txts = [el[1].strip().lower() for el in elements[-2:] if el[0] == "text"]
+                    if clean_title.lower() not in prev_txts:
+                        elements.append(("text", clean_title, sheet_name, current_explicit_code))
                 continue
             else:
+                if current_explicit_code is None and len(non_empty) == 1 and not isinstance(non_empty[0], (int, float)):
+                    clean_intro = re.sub(r'\[COMPARATIVO\]', '', first_cell_txt, flags=re.IGNORECASE).strip()
+                    if clean_intro:
+                        elements.append(("text", clean_intro, sheet_name, None))
+                    continue
                 has_data = True
                 in_table = True
                 current_chunk.append(row_vals)
                 
-        if current_chunk and has_data:
-            chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+        if current_chunk and has_data and current_explicit_code is not None:
+            from src.reporting.formatting import ensure_subtable_separator_rows
+            chunk_df = ensure_subtable_separator_rows(pd.DataFrame(current_chunk).dropna(how='all', axis=0))
             if not chunk_df.empty:
                 elements.append(("table", chunk_df, sheet_name, current_explicit_code))
                 
@@ -415,7 +458,8 @@ def split_sheet_into_elements(df, sheet_name=None):
 
         if is_split:
             if current_chunk and has_data:
-                chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+                from src.reporting.formatting import ensure_subtable_separator_rows
+                chunk_df = ensure_subtable_separator_rows(pd.DataFrame(current_chunk).dropna(how='all', axis=0))
                 if not chunk_df.empty:
                     elements.append(("table", chunk_df))
                 current_chunk = []
@@ -437,7 +481,8 @@ def split_sheet_into_elements(df, sheet_name=None):
             current_chunk.append(row_vals)
 
     if current_chunk and has_data:
-        chunk_df = pd.DataFrame(current_chunk).dropna(how='all', axis=0)
+        from src.reporting.formatting import ensure_subtable_separator_rows
+        chunk_df = ensure_subtable_separator_rows(pd.DataFrame(current_chunk).dropna(how='all', axis=0))
         if not chunk_df.empty:
             elements.append(("table", chunk_df))
         
@@ -480,265 +525,319 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
 
         if run_note:
             from src.core.sabana_manager import SabanaManager
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
             SabanaManager.clear_sabana_cache()
 
             template_nota = "Plantilla de notas_v1.xlsx"
             if not os.path.exists(template_nota):
                 st.error("❌ No se encontró la plantilla maestra de notas 'Plantilla de notas_v1.xlsx' en la raíz.")
             else:
-                st.info(f"Procesando y mapeando saldos para {selected_label}...")
-                
-                # Cargar mapeos con caché (evita re-lectura si el archivo no cambió)
-                map_bal_local = os.path.join(empresa_path, "map_balance.xlsx")
-                map_pl_local  = os.path.join(empresa_path, "map_pl.xlsx")
-                map_balance_df = read_excel_cached(map_bal_local, dtype=str) if os.path.exists(map_bal_local) else None
-                map_pl_df      = read_excel_cached(map_pl_local,  dtype=str) if os.path.exists(map_pl_local)  else None
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
 
-                if map_balance_df is None:
-                    st.error("❌ No se pudo cargar el maestro de Mapeo Balance.")
-                    st.stop()
+                is_closed_act_note = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+                snap_note_elements = SnapshotVaultManager.get_note_elements(
+                    empresa_seleccionada, periodo_actual, selected_id, scale_factor=scale_factor_nota, comp_period=periodo_comp
+                ) if is_closed_act_note else None
 
-                import importlib
-                import src.reporting.note_generator as note_gen_module
-                importlib.reload(note_gen_module)
-                NoteGenerator = note_gen_module.NoteGenerator
-
-                try:
-                    # Invalidar caché previa de resultados para forzar recalculo fresco
-                    if cache_key in st.session_state:
-                        del st.session_state[cache_key]
-
-                    # Cargar contextos con caché en session_state.
-                    _ctx_cache_key = f"_entity_ctx__{empresa_seleccionada}__{periodo_actual}__{periodo_comp}"
-                    if _ctx_cache_key not in st.session_state:
-                        with st.spinner("Cargando saldos y compilando contextos de datos..."):
-                            st.session_state[_ctx_cache_key] = load_all_entity_contexts(
-                                active_entity=empresa_seleccionada,
-                                periodo_actual=periodo_actual,
-                                periodo_comp=periodo_comp,
-                                map_balance_df=map_balance_df,
-                                map_pl_df=map_pl_df
-                            )
-                    entity_contexts = st.session_state[_ctx_cache_key]
-
-                    is_consolidated = empresa_seleccionada.startswith("[GRUPO]")
-                    target_sheets = sheet_name_map[selected_id]
-                    
-                    engine = NoteGenerator(template_nota)
-                    excel_nota_out = engine.generate(
-                        sheet_names=target_sheets,
-                        entity_contexts=entity_contexts,
-                        active_entity_name=empresa_seleccionada,
-                        is_consolidated=is_consolidated,
-                        scale_factor=scale_factor_nota,
-                        periodo_actual_str=periodo_actual,
-                        periodo_comp_str=periodo_comp,
-                        map_balance_df=map_balance_df,
-                        map_pl_df=map_pl_df,
-                        target_lang=target_lang,
-                        evaluate_formulas=False
-                    )
-                    
-                    # Inyectar datos de anexos externos (si existen para la empresa/período)
-                    import importlib
-                    import src.core.external_notes_manager as ext_mgr_module
-                    importlib.reload(ext_mgr_module)
-                    ExternalNotesManager = ext_mgr_module.ExternalNotesManager
-                    excel_nota_out = ExternalNotesManager.inject_external_data(
-                        excel_nota_out,
-                        empresa=empresa_seleccionada,
-                        periodo_actual=periodo_actual,
-                        periodo_comp=periodo_comp if periodo_comp != "Ninguno" else None,
-                        target_lang=target_lang
-                    )
-                    excel_eval_out = evaluate_formulas_in_workbook(excel_nota_out)
-                    preview_nota_df = pd.read_excel(excel_eval_out, sheet_name=target_sheets[0], header=None)
-                    
-                    # --- SEMÁFORO FINANCIERO DE CUADRATURA (TIE-OUT) ---
-                    tie_out_type = None
-                    tie_out_text = None
+                if snap_note_elements is not None:
                     try:
-                        from src.models.database import SessionLocal
-                        from src.models.historical_data import HistoricalDataRecord
-                        
-                        NOTE_TO_RUBRO_MAP = {
-                             "#N04": [("Balance", "Efectivo y efectivo equivalente")],
-                             "#N05": [("Balance", "Otros activos no financieros, corrientes")],
-                             "#N06": [("Balance", "Deudores comerciales y otras cuentas por cobrar, corrientes")],
-                             "#N07": [("Balance", "Inventarios")],
-                             "#N08": [("Balance", "Activos intangibles distinto a la plusvalía"), ("Balance", "Activos intangibles distinto a la plusvalia")],
-                             "#N09": [("Balance", "Propiedades, plantas y equipos")],
-                             "#N10": [("Balance", "Activo por derechos de uso")],
-                             "#N11": [("Balance", "Plusvalia"), ("Balance", "Plusvalía")],
-                             "#N12": [("Balance", "Activo por impuestos, corrientes"), ("Balance", "Pasivo por impuestos, corrientes")],
-                             "#N13": [("Balance", "Activo por impuestos diferidos, no corrientes")],
-                             "#N14": [("Balance", "Cuentas por cobrar a entidades relacionadas, no corrientes"),
-                                      ("Balance", "Cuentas por pagar entidades relacionadas, corrientes"), 
-                                      ("Balance", "Cuentas por pagar entidades relacionadas, no corrientes"),
-                                      ("Balance", "Inversion en empresas relacionadas")],
-                             "#N15": [("Balance", "Otros pasivos financieros corrientes"), ("Balance", "Otros pasivos financieros, no corriente")],
-                             "#N16": [("Balance", "Pasivos por derechos de uso, corrientes"), ("Balance", "Pasivos por derechos de uso, no corrientes")],
-                             "#N17": [("Balance", "Cuentas comerciales y otras cuentas por pagar, corrientes"),
-                                      ("Balance", "Cuentas comerciales y otras cuentas por pagar, no corrientes")],
-                             "#N18": [("Balance", "Provisiones por beneficios a los empleados")],
-                             "#N19": [("Balance", "Otras provisiones, no corrientes")],
-                             "#N20": [("Balance", "Capital emitido"), ("Balance", "Otras reservas"), ("Balance", "Resultados acumulados")],
-                             "#N21": [("P&L", "Ingresos de actividades ordinarias")],
-                             "#N22": [("P&L", "Gastos de administracin"), ("P&L", "Gastos de administración")],
-                             "#N23": [("P&L", "Diferencias de cambio"), ("P&L", "Diferencia de cambio")],
-                             "#N24": [("P&L", "Costos financieros")],
-                             "#N25": [("P&L", "Otros ingresos por funcin"), ("P&L", "Otros ingresos por funcion"), ("P&L", "Otros egresos por funcin"), ("P&L", "Otros egresos por funcion")]
+                        target_sheets = sheet_name_map[selected_id]
+                        snap_excel_bytes = SnapshotVaultManager.get_note_excel(empresa_seleccionada, periodo_actual, selected_id) or b""
+                        import importlib
+                        import src.reporting.formatting as _fmt_mod
+                        import src.reporting.word_export as _we_mod
+                        importlib.reload(_fmt_mod)
+                        importlib.reload(_we_mod)
+                        from src.reporting.word_export import WordExportEngine
+                        word_nota_out = WordExportEngine.generate_notes_word(
+                            elements=snap_note_elements,
+                            title=selected_label,
+                            unit=unidad_nota,
+                            note_code=selected_id,
+                            excel_bytes=snap_excel_bytes,
+                            target_lang=target_lang
+                        )
+                        if hasattr(word_nota_out, "seek"):
+                            word_nota_out.seek(0)
+                            word_bytes_val = word_nota_out.getvalue()
+                        else:
+                            word_bytes_val = word_nota_out
+
+                        st.session_state[cache_key] = {
+                            "selected_label": selected_label,
+                            "unidad_nota": unidad_nota,
+                            "selected_id": selected_id,
+                            "excel_bytes": snap_excel_bytes,
+                            "eval_bytes": snap_excel_bytes,
+                            "word_bytes": word_bytes_val,
+                            "elements": snap_note_elements,
+                            "target_sheets": target_sheets,
+                            "tie_out_type": "success",
+                            "tie_out_text": f"🔒 **[Snapshot Inmutable]** Nota cargada directamente desde el cierre certificado de **{periodo_actual}**."
                         }
+                    except Exception as e:
+                        st.error(f"❌ Error al cargar nota desde Snapshot: {e}")
+                        st.exception(e)
+                else:
+                    st.info(f"Procesando y mapeando saldos para {selected_label}...")
+                    
+                    # Cargar mapeos con caché (evita re-lectura si el archivo no cambió)
+                    map_bal_local = os.path.join(empresa_path, "map_balance.xlsx")
+                    map_pl_local  = os.path.join(empresa_path, "map_pl.xlsx")
+                    map_balance_df = read_excel_cached(map_bal_local, dtype=str) if os.path.exists(map_bal_local) else None
+                    map_pl_df      = read_excel_cached(map_pl_local,  dtype=str) if os.path.exists(map_pl_local)  else None
+
+                    if map_balance_df is None:
+                        st.error("❌ No se pudo cargar el maestro de Mapeo Balance.")
+                        st.stop()
+
+                    import importlib
+                    import src.reporting.note_generator as note_gen_module
+                    importlib.reload(note_gen_module)
+                    NoteGenerator = note_gen_module.NoteGenerator
+
+                    try:
+                        # Cargar contextos con caché en session_state.
+                        _ctx_cache_key = f"_entity_ctx__{empresa_seleccionada}__{periodo_actual}__{periodo_comp}"
+                        if _ctx_cache_key not in st.session_state:
+                            with st.spinner("Cargando saldos y compilando contextos de datos..."):
+                                st.session_state[_ctx_cache_key] = load_all_entity_contexts(
+                                    active_entity=empresa_seleccionada,
+                                    periodo_actual=periodo_actual,
+                                    periodo_comp=periodo_comp,
+                                    map_balance_df=map_balance_df,
+                                    map_pl_df=map_pl_df
+                                )
+                        entity_contexts = st.session_state[_ctx_cache_key]
+
+                        is_consolidated = empresa_seleccionada.startswith("[GRUPO]")
+                        target_sheets = sheet_name_map[selected_id]
                         
-                        rubros = NOTE_TO_RUBRO_MAP.get(selected_id)
-                        if rubros:
-                            db = SessionLocal()
-                            db_total = 0.0
-                            for rep, lin in rubros:
-                                r_recs = db.query(HistoricalDataRecord).filter_by(
-                                    empresa=empresa_seleccionada,
-                                    periodo=periodo_actual,
-                                    reporte=rep,
-                                    linea_item=lin
-                                ).all()
-                                for r_rec in r_recs:
-                                    db_total += abs(float(r_rec.monto))
-                            db.close()
+                        engine = NoteGenerator(template_nota)
+                        excel_nota_out = engine.generate(
+                            sheet_names=target_sheets,
+                            entity_contexts=entity_contexts,
+                            active_entity_name=empresa_seleccionada,
+                            is_consolidated=is_consolidated,
+                            scale_factor=scale_factor_nota,
+                            periodo_actual_str=periodo_actual,
+                            periodo_comp_str=periodo_comp,
+                            map_balance_df=map_balance_df,
+                            map_pl_df=map_pl_df,
+                            target_lang=target_lang,
+                            evaluate_formulas=False
+                        )
+                        
+                        # Inyectar datos de anexos externos (si existen para la empresa/período)
+                        import importlib
+                        import src.core.external_notes_manager as ext_mgr_module
+                        importlib.reload(ext_mgr_module)
+                        ExternalNotesManager = ext_mgr_module.ExternalNotesManager
+                        excel_nota_out = ExternalNotesManager.inject_external_data(
+                            excel_nota_out,
+                            empresa=empresa_seleccionada,
+                            periodo_actual=periodo_actual,
+                            periodo_comp=periodo_comp if periodo_comp != "Ninguno" else None,
+                            target_lang=target_lang
+                        )
+                        excel_eval_out = evaluate_formulas_in_workbook(excel_nota_out)
+                        preview_nota_df = pd.read_excel(excel_eval_out, sheet_name=target_sheets[0], header=None)
+                        
+                        # --- SEMÁFORO FINANCIERO DE CUADRATURA (TIE-OUT) ---
+                        tie_out_type = None
+                        tie_out_text = None
+                        try:
+                            from src.models.database import SessionLocal
+                            from src.models.historical_data import HistoricalDataRecord
                             
-                            # Buscar la fila de "Total" en el preview_nota_df
-                            total_row_idx = None
-                            for idx, row_series in preview_nota_df.iterrows():
-                                row_str = " ".join([str(val).strip().lower() for val in row_series.values if pd.notna(val)])
-                                if "total" in row_str and "sub" not in row_str:
-                                    if any(k in row_str for k in ["corriente", "general", "administrac", "operac", "bruto", "neto", "saldo"]):
-                                        total_row_idx = idx
-                                        break
-                                        
-                            if total_row_idx is None:
+                            NOTE_TO_RUBRO_MAP = {
+                                 "#N04": [("Balance", "Efectivo y efectivo equivalente")],
+                                 "#N05": [("Balance", "Otros activos no financieros, corrientes")],
+                                 "#N06": [("Balance", "Deudores comerciales y otras cuentas por cobrar, corrientes")],
+                                 "#N07": [("Balance", "Inventarios")],
+                                 "#N08": [("Balance", "Activos intangibles distinto a la plusvalía"), ("Balance", "Activos intangibles distinto a la plusvalia")],
+                                 "#N09": [("Balance", "Propiedades, plantas y equipos")],
+                                 "#N10": [("Balance", "Activo por derechos de uso")],
+                                 "#N11": [("Balance", "Plusvalia"), ("Balance", "Plusvalía")],
+                                 "#N12": [("Balance", "Activo por impuestos, corrientes"), ("Balance", "Pasivo por impuestos, corrientes")],
+                                 "#N13": [("Balance", "Activo por impuestos diferidos, no corrientes")],
+                                 "#N14": [("Balance", "Cuentas por cobrar a entidades relacionadas, no corrientes"),
+                                          ("Balance", "Cuentas por pagar entidades relacionadas, corrientes"), 
+                                          ("Balance", "Cuentas por pagar entidades relacionadas, no corrientes"),
+                                          ("Balance", "Inversion en empresas relacionadas")],
+                                 "#N15": [("Balance", "Otros pasivos financieros corrientes"), ("Balance", "Otros pasivos financieros, no corriente")],
+                                 "#N16": [("Balance", "Pasivos por derechos de uso, corrientes"), ("Balance", "Pasivos por derechos de uso, no corrientes")],
+                                 "#N17": [("Balance", "Cuentas comerciales y otras cuentas por pagar, corrientes"),
+                                          ("Balance", "Cuentas comerciales y otras cuentas por pagar, no corrientes")],
+                                 "#N18": [("Balance", "Provisiones por beneficios a los empleados")],
+                                 "#N19": [("Balance", "Otras provisiones, no corrientes")],
+                                 "#N20": [("Balance", "Capital emitido"), ("Balance", "Otras reservas"), ("Balance", "Resultados acumulados")],
+                                 "#N21": [("P&L", "Ingresos de actividades ordinarias")],
+                                 "#N22": [("P&L", "Gastos de administracin"), ("P&L", "Gastos de administración")],
+                                 "#N23": [("P&L", "Diferencias de cambio"), ("P&L", "Diferencia de cambio")],
+                                 "#N24": [("P&L", "Costos financieros")],
+                                 "#N25": [("P&L", "Otros ingresos por funcin"), ("P&L", "Otros ingresos por funcion"), ("P&L", "Otros egresos por funcin"), ("P&L", "Otros egresos por funcion")]
+                            }
+                            
+                            rubros = NOTE_TO_RUBRO_MAP.get(selected_id)
+                            if rubros:
+                                db = SessionLocal()
+                                db_total = 0.0
+                                for rep, lin in rubros:
+                                    r_recs = db.query(HistoricalDataRecord).filter_by(
+                                        empresa=empresa_seleccionada,
+                                        periodo=periodo_actual,
+                                        reporte=rep,
+                                        linea_item=lin
+                                    ).all()
+                                    for r_rec in r_recs:
+                                        db_total += abs(float(r_rec.monto))
+                                db.close()
+                                
+                                # Buscar la fila de "Total" en el preview_nota_df
+                                total_row_idx = None
                                 for idx, row_series in preview_nota_df.iterrows():
                                     row_str = " ".join([str(val).strip().lower() for val in row_series.values if pd.notna(val)])
                                     if "total" in row_str and "sub" not in row_str:
-                                        total_row_idx = idx
-                                        break
-                                    
-                            if total_row_idx is not None:
-                                total_row = preview_nota_df.iloc[total_row_idx]
-                                numeric_cols = []
-                                import datetime
-                                import re
-                                for col_idx, val in enumerate(total_row.values):
-                                    if pd.notna(val) and isinstance(val, (int, float)):
-                                        is_date_col = False
-                                        for r in range(0, total_row_idx):
-                                            cell_val = preview_nota_df.iloc[r, col_idx]
-                                            if pd.isna(cell_val) or str(cell_val).strip() == "":
-                                                for c in range(col_idx - 1, -1, -1):
-                                                    left_val = preview_nota_df.iloc[r, c]
-                                                    if pd.notna(left_val) and str(left_val).strip() != "":
-                                                        cell_val = left_val
-                                                        break
-                                            if pd.notna(cell_val) and str(cell_val).strip() != "":
-                                                if isinstance(cell_val, (datetime.datetime, pd.Timestamp)):
-                                                    is_date_col = True
-                                                    break
-                                                if len(str(cell_val)) <= 25 and re.search(r'\b(202\d|199\d)\b', str(cell_val)):
-                                                    is_date_col = True
-                                                    break
-                                        if is_date_col:
-                                            numeric_cols.append((col_idx, float(val)))
+                                        if any(k in row_str for k in ["corriente", "general", "administrac", "operac", "bruto", "neto", "saldo"]):
+                                            total_row_idx = idx
+                                            break
+                                            
+                                if total_row_idx is None:
+                                    for idx, row_series in preview_nota_df.iterrows():
+                                        row_str = " ".join([str(val).strip().lower() for val in row_series.values if pd.notna(val)])
+                                        if "total" in row_str and "sub" not in row_str:
+                                            total_row_idx = idx
+                                            break
                                         
-                                excel_total = None
-                                if numeric_cols:
-                                    if len(numeric_cols) == 1:
-                                        excel_total = abs(numeric_cols[0][1]) * scale_factor_nota
-                                    else:
-                                        neto_col_idx = None
-                                        for col_idx, val in numeric_cols:
+                                if total_row_idx is not None:
+                                    total_row = preview_nota_df.iloc[total_row_idx]
+                                    numeric_cols = []
+                                    import datetime
+                                    import re
+                                    for col_idx, val in enumerate(total_row.values):
+                                        if pd.notna(val) and isinstance(val, (int, float)):
+                                            is_date_col = False
                                             for r in range(0, total_row_idx):
                                                 cell_val = preview_nota_df.iloc[r, col_idx]
-                                                if pd.notna(cell_val) and "neto" in str(cell_val).strip().lower():
-                                                    neto_col_idx = col_idx
-                                                    break
-                                            if neto_col_idx is not None:
-                                                break
-                                        
-                                        if neto_col_idx is not None:
-                                            for col_idx, val in numeric_cols:
-                                                if col_idx == neto_col_idx:
-                                                    excel_total = abs(val) * scale_factor_nota
-                                                    break
-                                        else:
-                                            excel_total = abs(numeric_cols[0][1]) * scale_factor_nota
+                                                if pd.isna(cell_val) or str(cell_val).strip() == "":
+                                                    for c in range(col_idx - 1, -1, -1):
+                                                        left_val = preview_nota_df.iloc[r, c]
+                                                        if pd.notna(left_val) and str(left_val).strip() != "":
+                                                            cell_val = left_val
+                                                            break
+                                                if pd.notna(cell_val) and str(cell_val).strip() != "":
+                                                    if isinstance(cell_val, (datetime.datetime, pd.Timestamp)):
+                                                        is_date_col = True
+                                                        break
+                                                    if len(str(cell_val)) <= 25 and re.search(r'\b(202\d|199\d)\b', str(cell_val)):
+                                                        is_date_col = True
+                                                        break
+                                            if is_date_col:
+                                                numeric_cols.append((col_idx, float(val)))
                                             
-                                if excel_total is not None:
-                                    diff = abs(excel_total - db_total)
-                                    if diff < 1000.0:
-                                        tie_out_type = "success"
-                                        tie_out_text = f"⚖️ **[Tie-Out OK]** El total de la Nota (${excel_total:,.0f}) coincide perfectamente con el Estado Financiero Principal (${db_total:,.0f})."
-                                    else:
-                                        tie_out_type = "warning"
-                                        tie_out_text = f"⚖️ **[Tie-Out Diferencia]** Se detectó un descuadre de **${diff:,.0f}** entre el total de la Nota (${excel_total:,.0f}) y los Estados Financieros (${db_total:,.0f})."
-                        else:
+                                    excel_total = None
+                                    if numeric_cols:
+                                        if len(numeric_cols) == 1:
+                                            excel_total = abs(numeric_cols[0][1]) * scale_factor_nota
+                                        else:
+                                            neto_col_idx = None
+                                            for col_idx, val in numeric_cols:
+                                                for r in range(0, total_row_idx):
+                                                    cell_val = preview_nota_df.iloc[r, col_idx]
+                                                    if pd.notna(cell_val) and "neto" in str(cell_val).strip().lower():
+                                                        neto_col_idx = col_idx
+                                                        break
+                                                if neto_col_idx is not None:
+                                                    break
+                                            
+                                            if neto_col_idx is not None:
+                                                for col_idx, val in numeric_cols:
+                                                    if col_idx == neto_col_idx:
+                                                        excel_total = abs(val) * scale_factor_nota
+                                                        break
+                                            else:
+                                                excel_total = abs(numeric_cols[0][1]) * scale_factor_nota
+                                                
+                                    if excel_total is not None:
+                                        diff = abs(excel_total - db_total)
+                                        if diff < 1000.0:
+                                            tie_out_type = "success"
+                                            tie_out_text = f"⚖️ **[Tie-Out OK]** El total de la Nota (${excel_total:,.0f}) coincide perfectamente con el Estado Financiero Principal (${db_total:,.0f})."
+                                        else:
+                                            tie_out_type = "warning"
+                                            tie_out_text = f"⚖️ **[Tie-Out Diferencia]** Se detectó un descuadre de **${diff:,.0f}** entre el total de la Nota (${excel_total:,.0f}) y los Estados Financieros (${db_total:,.0f})."
+                            else:
+                                tie_out_type = "info"
+                                tie_out_text = "ℹ️ Esta nota no tiene rubros principales en el balance asociados para validación automática."
+                        except Exception as tie_err:
                             tie_out_type = "info"
-                            tie_out_text = "ℹ️ Esta nota no tiene rubros principales en el balance asociados para validación automática."
-                    except Exception as tie_err:
-                        tie_out_type = "info"
-                        tie_out_text = f"ℹ️ Validación de Tie-Out omitida temporalmente: {tie_err}"
-                    
-                    # Intentar extraer usando rangos nombrados
-                    from src.core.excel_utils import extract_named_ranges_from_excel
-                    named_ranges = extract_named_ranges_from_excel(excel_nota_out, selected_id)
-                    
-                    elements = []
-                    if named_ranges:
-                        for r_name, df_chunk in named_ranges:
-                            elements.append(("table", df_chunk, target_sheets[0]))
-                    else:
-                        for sheet_name in target_sheets:
-                            sheet_df = pd.read_excel(excel_eval_out, sheet_name=sheet_name, header=None)
-                            if len(target_sheets) > 1:
-                                elements.append(("text", f"Pestaña: {sheet_name.strip()}", sheet_name, None))
-                            sheet_elements = split_sheet_into_elements(sheet_df, sheet_name=sheet_name)
-                            for s_item in sheet_elements:
-                                el_type = s_item[0]
-                                el_val = s_item[1]
-                                s_name = s_item[2] if len(s_item) > 2 else sheet_name
-                                exp_code = s_item[3] if len(s_item) > 3 else None
-                                elements.append((el_type, el_val, s_name, exp_code))
-                    
-                    from src.reporting.word_export import WordExportEngine
-                    word_nota_out = WordExportEngine.generate_notes_word(
-                        elements=elements,
-                        title=selected_label,
-                        unit=unidad_nota,
-                        note_code=selected_id,
-                        excel_bytes=excel_eval_out.getvalue(),
-                        target_lang=target_lang
-                    )
-                    
-                    excel_nota_out.seek(0)
-                    excel_eval_out.seek(0)
-                    if hasattr(word_nota_out, "seek"):
-                        word_nota_out.seek(0)
-                        word_bytes_val = word_nota_out.getvalue()
-                    else:
-                        word_bytes_val = word_nota_out
+                            tie_out_text = f"ℹ️ Validación de Tie-Out omitida temporalmente: {tie_err}"
+                        
+                        # Intentar extraer usando rangos nombrados
+                        from src.core.excel_utils import extract_named_ranges_from_excel
+                        named_ranges = extract_named_ranges_from_excel(excel_nota_out, selected_id)
+                        
+                        elements = []
+                        if named_ranges:
+                            for r_name, df_chunk in named_ranges:
+                                elements.append(("table", df_chunk, target_sheets[0]))
+                        else:
+                            excel_eval_out.seek(0)
+                            xl_eval_f = pd.ExcelFile(excel_eval_out)
+                            for sheet_name in target_sheets:
+                                if sheet_name not in xl_eval_f.sheet_names:
+                                    continue
+                                sheet_df = xl_eval_f.parse(sheet_name=sheet_name, header=None)
+                                if len(target_sheets) > 1:
+                                    elements.append(("text", f"Pestaña: {sheet_name.strip()}", sheet_name, None))
+                                sheet_elements = split_sheet_into_elements(sheet_df, sheet_name=sheet_name)
+                                for s_item in sheet_elements:
+                                    el_type = s_item[0]
+                                    el_val = s_item[1]
+                                    s_name = s_item[2] if len(s_item) > 2 else sheet_name
+                                    exp_code = s_item[3] if len(s_item) > 3 else None
+                                    elements.append((el_type, el_val, s_name, exp_code))
+                        
+                        import importlib
+                        import src.reporting.formatting as _fmt_mod
+                        import src.reporting.word_export as _we_mod
+                        importlib.reload(_fmt_mod)
+                        importlib.reload(_we_mod)
+                        from src.reporting.word_export import WordExportEngine
+                        word_nota_out = WordExportEngine.generate_notes_word(
+                            elements=elements,
+                            title=selected_label,
+                            unit=unidad_nota,
+                            note_code=selected_id,
+                            excel_bytes=excel_eval_out.getvalue(),
+                            target_lang=target_lang
+                        )
+                        
+                        excel_nota_out.seek(0)
+                        excel_eval_out.seek(0)
+                        if hasattr(word_nota_out, "seek"):
+                            word_nota_out.seek(0)
+                            word_bytes_val = word_nota_out.getvalue()
+                        else:
+                            word_bytes_val = word_nota_out
 
-                    st.session_state[cache_key] = {
-                        "selected_label": selected_label,
-                        "unidad_nota": unidad_nota,
-                        "selected_id": selected_id,
-                        "excel_bytes": excel_nota_out.getvalue(),
-                        "eval_bytes": excel_eval_out.getvalue(),
-                        "word_bytes": word_bytes_val,
-                        "elements": elements,
-                        "target_sheets": target_sheets,
-                        "tie_out_type": tie_out_type,
-                        "tie_out_text": tie_out_text
-                    }
-                except Exception as e:
-                    st.error(f"❌ Error al procesar nota: {e}")
-                    st.exception(e)
+                        st.session_state[cache_key] = {
+                            "selected_label": selected_label,
+                            "unidad_nota": unidad_nota,
+                            "selected_id": selected_id,
+                            "excel_bytes": excel_nota_out.getvalue(),
+                            "eval_bytes": excel_eval_out.getvalue(),
+                            "word_bytes": word_bytes_val,
+                            "elements": elements,
+                            "target_sheets": target_sheets,
+                            "tie_out_type": tie_out_type,
+                            "tie_out_text": tie_out_text
+                        }
+                    except Exception as e:
+                        st.error(f"❌ Error al procesar nota: {e}")
+                        st.exception(e)
 
         # Mostrar contenido si existe en cache de session_state
         if cache_key in st.session_state:
@@ -747,6 +846,9 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
             nota_word_tag = f"{{{{{cached['selected_id']}}}}}"
             st.markdown(f"💡 **Etiqueta Word para Nota Completa:** `{nota_word_tag}` *(Inyecta textos y todos los cuadros asociados)*")
                 
+            import importlib
+            import src.reporting.formatting as _fmt_mod
+            importlib.reload(_fmt_mod)
             from src.reporting.formatting import apply_corporate_style
             from io import BytesIO
             eval_io = BytesIO(cached["eval_bytes"])

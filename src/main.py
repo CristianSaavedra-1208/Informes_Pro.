@@ -449,6 +449,12 @@ def main():
     def run_cons(): pg_cons.render(empresa_seleccionada, empresa_path)
     def run_estados():
         import importlib
+        import src.core.excel_utils as ex_mod
+        importlib.reload(ex_mod)
+        import src.reporting.formatting as fmt_mod
+        importlib.reload(fmt_mod)
+        import src.reporting.word_export as wexp_mod
+        importlib.reload(wexp_mod)
         import src.reporting.balance_generator as bg_mod
         importlib.reload(bg_mod)
         import src.reporting.er_generator as erg_mod
@@ -470,6 +476,12 @@ def main():
         pg_estados.render(empresa_seleccionada, empresa_path)
     def run_informes():
         import importlib
+        import src.core.excel_utils as ex_mod
+        importlib.reload(ex_mod)
+        import src.reporting.formatting as fmt_mod
+        importlib.reload(fmt_mod)
+        import src.reporting.word_export as wexp_mod
+        importlib.reload(wexp_mod)
         import src.reporting.note_generator as ng_mod
         importlib.reload(ng_mod)
         import src.core.external_notes_manager as ext_mgr
@@ -482,8 +494,32 @@ def main():
     def run_audit(): pg_audit.render(empresa_seleccionada, empresa_path)
     def run_param(): pg_param.render(empresa_seleccionada, empresa_path)
     def run_conf(): pg_conf.render(empresa_seleccionada, empresa_path)
-    def run_reportes_cons(): pg_reportes_cons.render(empresa_seleccionada, empresa_path)
-    def run_reporte_corp(): pg_reporte_corp.render(empresa_seleccionada, empresa_path)
+    def run_reportes_cons():
+        import importlib
+        import src.core.excel_utils as ex_mod
+        importlib.reload(ex_mod)
+        import src.reporting.formatting as fmt_mod
+        importlib.reload(fmt_mod)
+        import src.reporting.word_export as wexp_mod
+        importlib.reload(wexp_mod)
+        import src.reporting.patrimonio_generator as pat_mod
+        importlib.reload(pat_mod)
+        import src.ui_pages.reportes_consolidados as pg_reportes_cons
+        importlib.reload(pg_reportes_cons)
+        pg_reportes_cons.render(empresa_seleccionada, empresa_path)
+    def run_reporte_corp():
+        import importlib
+        import src.core.excel_utils as ex_mod
+        importlib.reload(ex_mod)
+        import src.reporting.formatting as fmt_mod
+        importlib.reload(fmt_mod)
+        import src.reporting.word_export as wexp_mod
+        importlib.reload(wexp_mod)
+        import src.core.word_template_engine as wte_mod
+        importlib.reload(wte_mod)
+        import src.ui_pages.reporte_corporativo as pg_reporte_corp
+        importlib.reload(pg_reporte_corp)
+        pg_reporte_corp.render(empresa_seleccionada, empresa_path)
 
     es_grupo = empresa_seleccionada.startswith("[GRUPO]")
     user_role = st.session_state.get('auth_role', 'Analista Contable')

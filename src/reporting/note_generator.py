@@ -56,13 +56,44 @@ def check_extra_word_match(ew, acct_names):
                 
     return True
 
-def detect_row_corriente_status(ws, row):
-    # Escanear hacia atrás las celdas en Col 1 y 2
+def detect_row_corriente_status(ws, row, col=None):
+    # 1. Si se especifica columna, verificar primero las cabeceras de esa columna dentro del bloque actual
+    if col is not None:
+        for r in range(row - 1, 0, -1):
+            # Detenerse si cruzamos el límite de la tabla actual (#Nxx.y o Total)
+            is_boundary = False
+            for c_chk in range(1, min(6, ws.max_column + 1)):
+                v_chk = ws.cell(row=r, column=c_chk).value
+                if v_chk is not None:
+                    s_chk = str(v_chk).strip()
+                    if re.search(r'#N\d+\.\d+', s_chk) or (s_chk.lower().startswith("total") and r < row - 1):
+                        is_boundary = True
+                        break
+            for c_hdr in ([col, col - 1] if col > 1 else [col]):
+                if c_hdr != col and ws.cell(row=r, column=col).value is not None:
+                    continue
+                vh = ws.cell(row=r, column=c_hdr).value
+                if vh is not None and isinstance(vh, str):
+                    vh_low = vh.strip().lower()
+                    if len(vh_low) <= 35:
+                        if "no corriente" in vh_low or "no-corriente" in vh_low or "largo plazo" in vh_low:
+                            return "no_corriente"
+                        elif "corriente" in vh_low or "corto plazo" in vh_low:
+                            return "corriente"
+            if is_boundary:
+                break
+
+    # 2. Escanear hacia atrás las celdas en Col 1 y 2 dentro del bloque actual
     for r in range(row, 0, -1):
         for c in [1, 2]:
             val = ws.cell(row=r, column=c).value
             if val is not None:
                 val_str = str(val).strip().lower()
+                if r < row and (re.search(r'#n\d+\.\d+', val_str) or val_str.startswith("total")):
+                    return "unknown"
+                # Ignorar párrafos narrativos largos (ej: "La composición del rubro de cuentas por cobrar corrientes...")
+                if len(val_str) > 45:
+                    continue
                 if any(kw in val_str for kw in ["moneda", "vencimiento", "vencimientos"]):
                     return "unknown"
                 if "no corriente" in val_str or "no-corriente" in val_str or "largo plazo" in val_str:
@@ -167,24 +198,79 @@ def _get_movement_concept_key(norm_lbl):
         return 'saldo_final'
     return norm_lbl
 
-def _extract_movement_table_rows(source_ws, start_r):
+def _is_movement_header_or_title_row(ws_obj, r, label_col=1):
+    lbl_val = ws_obj.cell(r, label_col).value
+    lbl = str(lbl_val).strip() if lbl_val is not None else ""
+    lbl_low = lbl.lower()
+
+    if re.search(r'#N\d+\.\d+', lbl) or "[comparativo]" in lbl_low:
+        return True
+    if re.match(r'^20\d{2}$', lbl):
+        return True
+    if lbl_low in ("tipo", "concepto", "detalle", "m$", "ms", "r.u.t.", "rut") or lbl_low.startswith("detalle al") or lbl_low.startswith("concepto al"):
+        return True
+    if any(k in lbl_low for k in ("vencimiento de pasivos", "cambios en pasivo", "transacciones significativas", "detalle leasing", "detalle prestamos", "bonos emitidos")):
+        return True
+
+    right_strs = []
+    for c in range(label_col + 1, min(label_col + 15, ws_obj.max_column + 1)):
+        v = ws_obj.cell(r, c).value
+        if v is not None and str(v).strip() != "":
+            right_strs.append(str(v).strip().lower())
+
+    if not lbl:
+        if not right_strs:
+            return True
+        if all(
+            s in ("m$", "ms", "pagos") or
+            any(h in s for h in ("edificios", "redes de", "plantas", "terrenos", "construcciones", "transmisión", "transmision", "equipos", "equipo", "vehículos", "vehiculos", "muebles", "instalación", "instalacion", "otros", "activos", "obras", "naturaleza de", "descripción de", "descripcion de"))
+            for s in right_strs
+        ):
+            return True
+
+    if right_strs and any(s in ("m$", "ms", "90 días", "90 dias", "nuevos contratos", "nuevos créditos", "nuevos creditos", "terrenos", "concesiones", "bruto", "nombre entidad") for s in right_strs):
+        return True
+
+    return False
+
+def _is_movement_total_row(ws_obj, r, label_col=1):
+    lbl_val = ws_obj.cell(r, label_col).value
+    lbl_low = str(lbl_val).strip().lower() if lbl_val is not None else ""
+    return any(lbl_low.startswith(k) for k in ("total", "sub total", "subtotal", "sub- total", "valores netos al final"))
+
+def _extract_movement_table_rows(source_ws, start_r, label_col=1):
     concept_map = {}
+    seen_data_rows = 0
     for r in range(start_r + 1, min(start_r + 35, source_ws.max_row + 1)):
-        label = ""
-        for c in range(1, min(4, source_ws.max_column + 1)):
-            v = source_ws.cell(r, c).value
-            if v and isinstance(v, str):
-                label += " " + v
-        label = label.strip()
+        # Si aparece otro marcador #Nxx.y en cualquier columna, fin de la tabla
+        hit_next_tag = False
+        for c_chk in range(1, min(6, source_ws.max_column + 1)):
+            v_chk = source_ws.cell(r, c_chk).value
+            if v_chk and isinstance(v_chk, str) and re.search(r'#N\d+\.\d+', v_chk):
+                hit_next_tag = True
+                break
+        if hit_next_tag:
+            break
+
+        if _is_movement_header_or_title_row(source_ws, r, label_col=label_col):
+            continue
+
+        if _is_movement_total_row(source_ws, r, label_col=label_col):
+            if seen_data_rows > 0:
+                break
+            continue
+
+        v = source_ws.cell(r, label_col).value
+        label = str(v).strip() if (v is not None and isinstance(v, str)) else ""
         if not label:
             continue
-        if re.search(r'#N\d+\.\d+', label):
-            break
+
         norm_lbl = _norm_movement_concept(label)
         key = _get_movement_concept_key(norm_lbl)
         if key:
             concept_map[key] = r
-        if 'saldofinal' in norm_lbl or 'al31' in norm_lbl or 'al30' in norm_lbl:
+            seen_data_rows += 1
+        if key == 'saldo_final' and seen_data_rows > 1:
             break
     return concept_map
 
@@ -226,6 +312,7 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
 
         # Localizar tabla en ext_cmp_ws si existe
         ext_cmp_r0 = None
+        ext_cmp_c0 = None
         cmp_concept_map = {}
         if ext_cmp_ws and code_tag:
             for r_scan in range(1, ext_cmp_ws.max_row + 1):
@@ -233,14 +320,16 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                     v_scan = ext_cmp_ws.cell(r_scan, c_scan).value
                     if v_scan and isinstance(v_scan, str) and code_tag in v_scan:
                         ext_cmp_r0 = r_scan
+                        ext_cmp_c0 = c_scan
                         break
                 if ext_cmp_r0 is not None:
                     break
             if ext_cmp_r0 is not None:
-                cmp_concept_map = _extract_movement_table_rows(ext_cmp_ws, ext_cmp_r0)
+                cmp_concept_map = _extract_movement_table_rows(ext_cmp_ws, ext_cmp_r0, label_col=ext_cmp_c0)
 
         # Localizar tabla en ext_act_ws si existe
         ext_act_r0 = None
+        ext_act_c0 = None
         act_concept_map = {}
         if ext_act_ws and code_tag:
             for r_scan in range(1, ext_act_ws.max_row + 1):
@@ -248,53 +337,65 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                     v_scan = ext_act_ws.cell(r_scan, c_scan).value
                     if v_scan and isinstance(v_scan, str) and code_tag in v_scan:
                         ext_act_r0 = r_scan
+                        ext_act_c0 = c_scan
                         break
                 if ext_act_r0 is not None:
                     break
             if ext_act_r0 is not None:
-                act_concept_map = _extract_movement_table_rows(ext_act_ws, ext_act_r0)
+                act_concept_map = _extract_movement_table_rows(ext_act_ws, ext_act_r0, label_col=ext_act_c0)
+
+        act_col_offset = (ext_act_c0 - comp_c) if ext_act_c0 is not None else 0
+        cmp_col_offset = (ext_cmp_c0 - comp_c) if ext_cmp_c0 is not None else 0
 
         end_row = start_row
         for r in range(start_row + 2, min(start_row + 35, ws.max_row + 1)):
-            label_cell = ""
-            for c_lbl in range(1, min(4, ws.max_column + 1)):
-                v_lbl = ws.cell(r, c_lbl).value
-                if v_lbl is not None:
-                    label_cell += " " + str(v_lbl).strip().lower()
-            
-            if "saldo final" in label_cell or ("total" in label_cell and "sub" not in label_cell):
+            v_lbl = ws.cell(r, comp_c).value
+            label_cell = str(v_lbl).strip().lower() if v_lbl is not None else ""
+            if "saldo final" in label_cell or "valores netos al final" in label_cell or (label_cell.startswith("total") and "sub" not in label_cell):
                 end_row = r
                 break
         
         if end_row <= start_row:
             end_row = min(start_row + 15, ws.max_row)
 
+        # Determinar la última columna real del cuadro en ws para no escribir ceros fuera de la tabla
+        max_table_col = comp_c
+        for r_scan in range(start_row, end_row + 1):
+            for c_scan in range(comp_c + 1, ws.max_column + 1):
+                if ws.cell(r_scan, c_scan).value is not None:
+                    if c_scan > max_table_col:
+                        max_table_col = c_scan
+
         # 1. Actualizar fechas e inyectar ext_act_ws en Bloque 1 (Actual)
         for r_orig in range(start_row, end_row + 1):
-            label_r = ""
-            for c_lbl in range(1, min(4, ws.max_column + 1)):
-                v_lbl = ws.cell(r_orig, c_lbl).value
-                if v_lbl and isinstance(v_lbl, str):
-                    label_r += " " + v_lbl
-            concept_k = _get_movement_concept_key(_norm_movement_concept(label_r))
+            is_hdr_or_title = _is_movement_header_or_title_row(ws, r_orig, label_col=comp_c)
+            is_tot_row = _is_movement_total_row(ws, r_orig, label_col=comp_c)
+            v_lbl_orig = ws.cell(r_orig, comp_c).value
+            label_r = str(v_lbl_orig).strip() if (v_lbl_orig is not None and isinstance(v_lbl_orig, str)) else ""
+            concept_k = _get_movement_concept_key(_norm_movement_concept(label_r)) if (not is_hdr_or_title and not is_tot_row and label_r) else None
 
-            for c_orig in range(1, ws.max_column + 1):
+            for c_orig in range(1, max_table_col + 1):
                 cell_o = ws.cell(r_orig, c_orig)
-                if cell_o.value and isinstance(cell_o.value, str):
+                if isinstance(cell_o.value, (int, float)) and cell_o.value in (2024, 2025, 2026, 2027) and c_orig == comp_c:
+                    cell_o.value = int(act_yr_str)
+                elif cell_o.value and isinstance(cell_o.value, str):
                     val_low = cell_o.value.strip().lower()
-                    if "saldo final" in val_low:
+                    if "saldo final" in val_low or "detalle al" in val_low or "concepto al" in val_low:
                         cell_o.value = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', act_date_str, cell_o.value)
                     elif "saldo inicial" in val_low:
                         cell_o.value = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', act_init_str, cell_o.value)
+                    elif re.match(r'^20\d{2}$', val_low) and c_orig == comp_c:
+                        cell_o.value = act_yr_str
 
             # Inyectar datos de ext_act_ws si existe para este concepto
-            if concept_k and concept_k in act_concept_map:
+            if concept_k and concept_k in act_concept_map and ext_act_ws is not None:
                 ext_r = act_concept_map[concept_k]
-                for c_data in range(3, min(ws.max_column + 1, ext_act_ws.max_column + 1)):
+                for c_data in range(comp_c + 1, max_table_col + 1):
                     target_c = ws.cell(r_orig, c_data)
                     if isinstance(target_c.value, str) and target_c.value.startswith('='):
                         continue
-                    v_ext = ext_act_ws.cell(ext_r, c_data).value
+                    c_ext = c_data + act_col_offset
+                    v_ext = ext_act_ws.cell(ext_r, c_ext).value if (1 <= c_ext <= ext_act_ws.max_column) else None
                     if v_ext is None or str(v_ext).strip() in ['', '-', '-   ']:
                         target_c.value = 0
                     elif isinstance(v_ext, (int, float)):
@@ -309,32 +410,40 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
         block_height = end_row - start_row + 1
         insert_at = end_row + 2
         row_shift = insert_at - start_row
+        shift_amt = block_height + 1
 
-        ws.insert_rows(insert_at, amount=block_height + 1)
+        ws.insert_rows(insert_at, amount=shift_amt)
+
+        # Desplazar las referencias de fila en todas las fórmulas que quedaron debajo del bloque insertado
+        for r_below in range(insert_at + shift_amt, ws.max_row + 1):
+            for c_below in range(1, ws.max_column + 1):
+                val_below = ws.cell(r_below, c_below).value
+                if isinstance(val_below, str) and val_below.startswith('='):
+                    ws.cell(r_below, c_below).value = shift_formula_rows(val_below, shift_amt, min_row=insert_at)
 
         # 2. Construir el bloque comparativo (Block 2)
         for offset in range(block_height):
             orig_r = start_row + offset
             target_r = insert_at + offset
 
-            label_orig = ""
-            for c_lbl in range(1, min(4, ws.max_column + 1)):
-                v_lbl = ws.cell(orig_r, c_lbl).value
-                if v_lbl and isinstance(v_lbl, str):
-                    label_orig += " " + v_lbl
-            concept_k = _get_movement_concept_key(_norm_movement_concept(label_orig))
+            is_hdr_or_title = _is_movement_header_or_title_row(ws, orig_r, label_col=comp_c)
+            is_tot_row = _is_movement_total_row(ws, orig_r, label_col=comp_c)
+            v_lbl_orig = ws.cell(orig_r, comp_c).value
+            label_orig = str(v_lbl_orig).strip() if (v_lbl_orig is not None and isinstance(v_lbl_orig, str)) else ""
+            concept_k = _get_movement_concept_key(_norm_movement_concept(label_orig)) if (not is_hdr_or_title and not is_tot_row and label_orig) else None
 
-            for c in range(1, ws.max_column + 1):
+            for c in range(1, max_table_col + 1):
                 orig_cell = ws.cell(orig_r, c)
                 target_cell = ws.cell(target_r, c)
                 
                 val_o = orig_cell.value
-                if isinstance(val_o, str) and val_o.upper().startswith('=SUM(') and ':' in val_o:
+                if isinstance(val_o, str) and val_o.upper().startswith('=SUM(') and ':' in val_o and not is_tot_row:
                     target_cell.value = re.sub(r'([A-Za-z]+)\d+', rf'\g<1>{target_r}', val_o)
-                elif c >= 3 and concept_k and concept_k in cmp_concept_map:
+                elif c >= comp_c + 1 and concept_k and concept_k in cmp_concept_map and ext_cmp_ws is not None:
                     ext_r = cmp_concept_map[concept_k]
-                    if c <= ext_cmp_ws.max_column:
-                        val_ext = ext_cmp_ws.cell(ext_r, c).value
+                    c_ext = c + cmp_col_offset
+                    if 1 <= c_ext <= ext_cmp_ws.max_column:
+                        val_ext = ext_cmp_ws.cell(ext_r, c_ext).value
                         if val_ext is None or str(val_ext).strip() in ['', '-', '-   ']:
                             target_cell.value = 0
                         elif isinstance(val_ext, (int, float)):
@@ -349,10 +458,17 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                             target_cell.value = 0
                     else:
                         target_cell.value = 0
+                elif c >= comp_c + 1 and concept_k and concept_k in act_concept_map and concept_k not in cmp_concept_map:
+                    # Si el bloque actual provino de un anexo externo pero no existe anexo para el período comparativo,
+                    # no arrastrar los montos del período actual al período comparativo.
+                    if isinstance(val_o, str) and val_o.startswith('='):
+                        target_cell.value = shift_formula_rows(val_o, row_shift, min_row=start_row)
+                    else:
+                        target_cell.value = 0
                 else:
                     val = orig_cell.value
                     if val is not None:
-                        if isinstance(val, (int, float)) and val == int(act_yr_str):
+                        if isinstance(val, (int, float)) and val == int(act_yr_str) and c == comp_c:
                             target_cell.value = int(cmp_yr_str)
                         elif isinstance(val, str):
                             if val.startswith('='):
@@ -362,7 +478,7 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                                 val_lower = val.strip().lower()
                                 if "saldo inicial" in val_lower:
                                     val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_init_str, val_new)
-                                elif "saldo final" in val_lower:
+                                elif "saldo final" in val_lower or "detalle al" in val_lower or "concepto al" in val_lower:
                                     val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_date_str, val_new)
                                 else:
                                     val_new = re.sub(r'\b\d{2}[\.\/]\d{2}[\.\/]20\d{2}\b', cmp_date_str, val_new)
@@ -405,7 +521,7 @@ def detect_row_section_rubro(ws, current_row):
                         return pl_key
     return None
 
-def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, section_rubro=None, filter_sign=None):
+def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, section_rubro=None, filter_sign=None, col=None):
     """
     Retorna el valor filtrado (corriente vs no corriente y bruto vs depreciación) para el matched_key.
     Si el estado de la fila es corriente o no corriente, se filtran las cuentas
@@ -474,7 +590,7 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
     if 'acct_details' not in group_data:
         return float(group_data.get(flow_key, 0.0))
         
-    status = detect_row_corriente_status(ws, row)
+    status = detect_row_corriente_status(ws, row, col=col)
         
     # Filtrar detalles de cuentas por corriente/no corriente y signo (bruto vs depreciación)
     filtered_sum = 0.0
@@ -489,6 +605,14 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
         if sheet_title_low in ['intangibles', 'intangible']:
             clasif_lbl = str(detail.get('clasificacion_bal', '')).lower()
             if clasif_lbl and 'intangib' not in clasif_lbl:
+                continue
+        elif sheet_title_low in ['efectivo']:
+            clasif_lbl = str(detail.get('clasificacion_bal', '')).lower()
+            if clasif_lbl and 'efectivo' not in clasif_lbl:
+                continue
+        elif sheet_title_low in ['cuentas por pagar']:
+            clasif_lbl = str(detail.get('clasificacion_bal', '')).lower()
+            if clasif_lbl and not any(kw in clasif_lbl for kw in ['pagar', 'comercial', 'proveedor']):
                 continue
 
         if status != "unknown":
@@ -1001,28 +1125,36 @@ class NoteGenerator:
             if periodo_comp_str and periodo_comp_str != "Ninguno":
                 periods.append(periodo_comp_str)
                 
-            map_bal_clean = None
-            if map_balance_df is not None and not map_balance_df.empty:
-                map_bal_clean = map_balance_df.copy()
+            def _clean_map_df(m_df):
+                if m_df is None or m_df.empty:
+                    return None
+                m_clean = m_df.copy()
                 mc_cols = ['N° de Cuenta \n', 'N de Cuenta', 'N° de Cuenta', 'Cuenta', 'cuenta_id']
-                mc_col = next((c for c in map_bal_clean.columns if c.strip() in [x.strip() for x in mc_cols]), None)
+                mc_col = next((c for c in m_clean.columns if c.strip() in [x.strip() for x in mc_cols]), None)
                 if mc_col:
-                    map_bal_clean[mc_col] = map_bal_clean[mc_col].astype(str).str.strip()
-                    map_bal_clean.rename(columns={mc_col: 'cuenta_key'}, inplace=True)
-                    
-            map_pl_clean = None
-            if map_pl_df is not None and not map_pl_df.empty:
-                map_pl_clean = map_pl_df.copy()
-                mc_cols = ['N° de Cuenta \n', 'N de Cuenta', 'N° de Cuenta', 'Cuenta', 'cuenta_id']
-                mc_col = next((c for c in map_pl_clean.columns if c.strip() in [x.strip() for x in mc_cols]), None)
-                if mc_col:
-                    map_pl_clean[mc_col] = map_pl_clean[mc_col].astype(str).str.strip()
-                    map_pl_clean.rename(columns={mc_col: 'cuenta_key'}, inplace=True)
+                    m_clean[mc_col] = m_clean[mc_col].astype(str).str.strip()
+                    m_clean.rename(columns={mc_col: 'cuenta_key'}, inplace=True)
+                return m_clean
+
+            map_bal_clean = _clean_map_df(map_balance_df)
+            map_pl_clean = _clean_map_df(map_pl_df)
             
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
             for co in companies:
                 for per in periods:
                     tb = TrialBalanceDB.get_trial_balance(co, per)
                     if tb is not None and not tb.empty:
+                        mb_per_clean = map_bal_clean
+                        mp_per_clean = map_pl_clean
+                        if per and (SnapshotVaultManager.has_active_snapshot(co, per) or SnapshotVaultManager.has_active_snapshot(active_entity_name, per)):
+                            f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(co, per)
+                            if f_mb is None:
+                                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(active_entity_name, per)
+                            if f_mb is not None:
+                                mb_per_clean = _clean_map_df(f_mb)
+                            if f_mp is not None:
+                                mp_per_clean = _clean_map_df(f_mp)
+
                         tb_cols = ['N° de Cuenta \n', 'N de Cuenta', 'N° de Cuenta', 'Cuenta', 'cuenta_id']
                         tb_cuenta_col = next((c for c in tb.columns if c.strip() in [x.strip() for x in tb_cols]), None)
                         
@@ -1036,11 +1168,11 @@ class NoteGenerator:
                             tb = tb.copy()
                             tb[tb_cuenta_col] = tb[tb_cuenta_col].astype(str).str.strip()
                             
-                            if map_bal_clean is not None and 'cuenta_key' in map_bal_clean.columns:
-                                tb = pd.merge(tb, map_bal_clean, left_on=tb_cuenta_col, right_on='cuenta_key', how='left')
+                            if mb_per_clean is not None and 'cuenta_key' in mb_per_clean.columns:
+                                tb = pd.merge(tb, mb_per_clean, left_on=tb_cuenta_col, right_on='cuenta_key', how='left')
                                 
-                            if map_pl_clean is not None and 'cuenta_key' in map_pl_clean.columns:
-                                tb = pd.merge(tb, map_pl_clean, left_on=tb_cuenta_col, right_on='cuenta_key', how='left')
+                            if mp_per_clean is not None and 'cuenta_key' in mp_per_clean.columns:
+                                tb = pd.merge(tb, mp_per_clean, left_on=tb_cuenta_col, right_on='cuenta_key', how='left')
                                 
                             for _, r_val in tb.iterrows():
                                 c_id = r_val[tb_cuenta_col]
@@ -1106,7 +1238,7 @@ class NoteGenerator:
         def analyze_columns(ws):
             col_mapping = {} # col_idx -> {'entity': str, 'year': int, 'period_type': str}
             
-            for c in range(1, ws.max_column + 1):
+            for c in range(2, ws.max_column + 1):
 
                 col_entity = None
                 col_year = None
@@ -1162,12 +1294,30 @@ class NoteGenerator:
                         col_period_type = 'actual'
                         
                 # --- Validar si es columna descriptiva de texto (no de datos) ---
-                # Si en las cabeceras hay palabras descriptivas o de movimientos, no es columna de datos.
+                # Si en las cabeceras de la primera tabla (filas 1-6) hay palabras descriptivas o de movimientos, no es columna de datos.
+                has_data_header = False
+                for r in range(1, 7):
+                    vh = ws.cell(row=r, column=c).value
+                    if vh is not None and str(vh).strip() != '':
+                        vhs = str(vh).strip().lower()
+                        vh_clean = clean_label(vh)
+                        if vh_clean in SECTION_TITLE_TO_PL_RUBRO or re.search(r'#n\d+', vhs):
+                            continue
+                        if any(k in vhs for k in ['bruto', 'depreciaci', 'acumulada', 'neto', 'm$', '$', 'costo']) or isinstance(vh, (_dt.datetime, _dt.date)) or re.search(r'\b202\d\b', vhs):
+                            has_data_header = True
+                            break
+
                 is_label_col = False
-                for r in range(1, 15):
+                for r in range(1, 7):
                     val_h = get_merged_cell_value(ws, r, c)
                     if val_h is not None and not isinstance(val_h, (_dt.datetime, _dt.date)):
                         val_h_clean = clean_label(val_h)
+                        if re.search(r'#n\d+\.\d+', val_h_clean) or val_h_clean in SECTION_TITLE_TO_PL_RUBRO:
+                            is_label_col = True
+                            break
+                        # Ignorar párrafos narrativos largos
+                        if len(val_h_clean) > 45:
+                            continue
                         # Usar límites de palabra \b para evitar falsos positivos como 'rut' dentro de 'bruto'
                         if re.search(r'\b(detalle|nombre|concepto|cuenta|descripcion|nombre entidad|rut|codigo|especificacion|glosa|item|tipo de relacion|relacion|saldo inicial|saldo final|adiciones|desapropiaciones|transferencias|deterioro|gasto por depreciacion)\b', val_h_clean):
                             is_label_col = True
@@ -1175,15 +1325,6 @@ class NoteGenerator:
 
                 if is_label_col:
                     continue
-
-                has_data_header = False
-                for r in range(1, 7):
-                    vh = ws.cell(row=r, column=c).value
-                    if vh is not None and str(vh).strip() != '':
-                        vhs = str(vh).strip().lower()
-                        if any(k in vhs for k in ['bruto', 'depreciaci', 'acumulada', 'neto', 'm$', '$', 'costo']) or isinstance(vh, (_dt.datetime, _dt.date)) or re.search(r'\b202\d\b', vhs):
-                            has_data_header = True
-                            break
 
                 if not has_data_header:
                     continue
@@ -1219,7 +1360,7 @@ class NoteGenerator:
             # encabezados como "M$", "$", "%" o fechas y asignarlas a la entidad activa
             if not col_mapping:
                 numeric_header_cols = []
-                for c in range(1, ws.max_column + 1):
+                for c in range(2, ws.max_column + 1):
                     for r in range(1, 13):
                         val = get_merged_cell_value(ws, r, c)
                         if val is None:
@@ -1372,14 +1513,38 @@ class NoteGenerator:
                     if is_d:
                         row_date_cells.append(c)
 
-                # 2. Si hay 2 o más columnas con fechas en la fila, la primera (izquierda) es actual, la segunda es comp
+                # 2. Si hay 2 o más columnas con fechas en la fila, determinar esquema de pares (Actual / Comparativo)
                 if len(row_date_cells) >= 2:
                     row_date_cells.sort()
-                    c_act = row_date_cells[0]
-                    c_cmp = row_date_cells[1]
-                    ws.cell(row=r, column=c_act).value = _actual_dot
-                    if not is_no_comp_notes:
-                        ws.cell(row=r, column=c_cmp).value = _comp_dot
+                    if len(row_date_cells) >= 4 and len(row_date_cells) % 2 == 0:
+                        # Verificar si la fila inferior (r+1) tiene subcabeceras repetidas (ej: Corriente / No corriente bajo cada fecha en #N16.1)
+                        sub_hdrs = [str(ws.cell(row=r + 1, column=col_d).value or "").strip().lower() for col_d in row_date_cells] if r < ws.max_row else []
+                        has_grouped_subheaders = sum(1 for sh in sub_hdrs if "corriente" in sh) >= 2
+                        if has_grouped_subheaders:
+                            half = len(row_date_cells) // 2
+                            act_cols = row_date_cells[:half]
+                            cmp_cols = row_date_cells[half:]
+                        else:
+                            # Pares alternados (Actual, Comp) bajo encabezados de grupo (ej: Corriente [Actual, Comp] | No corriente [Actual, Comp] en #N14.1)
+                            act_cols = row_date_cells[0::2]
+                            cmp_cols = row_date_cells[1::2]
+                    else:
+                        act_cols = [row_date_cells[0]]
+                        cmp_cols = [row_date_cells[1]]
+
+                    for c_act in act_cols:
+                        ws.cell(row=r, column=c_act).value = _actual_dot
+                        if c_act in col_mapping:
+                            col_mapping[c_act]['period_type'] = 'actual'
+                    for c_cmp in cmp_cols:
+                        if c_cmp in col_mapping:
+                            col_mapping[c_cmp]['period_type'] = 'comp'
+                        if not is_no_comp_notes:
+                            ws.cell(row=r, column=c_cmp).value = _comp_dot
+                        else:
+                            v_cmp_orig = ws.cell(row=r, column=c_cmp).value
+                            if isinstance(v_cmp_orig, (datetime.datetime, datetime.date)):
+                                ws.cell(row=r, column=c_cmp).value = v_cmp_orig.strftime("%d.%m.%Y")
                 elif len(row_date_cells) == 1:
                     c = row_date_cells[0]
                     val = ws.cell(row=r, column=c).value
@@ -1400,6 +1565,17 @@ class NoteGenerator:
                             is_comp_cell = True
                     if not (is_comp_cell and is_no_comp_notes):
                         ws.cell(row=r, column=c).value = target_dot
+                    elif isinstance(val, (datetime.datetime, datetime.date)):
+                        ws.cell(row=r, column=c).value = val.strftime("%d.%m.%Y")
+
+            # Asegurar que template_year_to_period_type incluya los años efectivos tras reemplazo de cabeceras
+            try:
+                if _actual_yr and str(_actual_yr).isdigit():
+                    template_year_to_period_type[int(_actual_yr)] = 'actual'
+                if not is_no_comp_notes and _comp_yr and str(_comp_yr).isdigit() and int(_comp_yr) != int(_actual_yr):
+                    template_year_to_period_type[int(_comp_yr)] = 'comp'
+            except Exception:
+                pass
 
             # Si es reporte individual, remapear todas las columnas de 'Consolidado' a la empresa activa
             if not is_consolidated:
@@ -1415,6 +1591,31 @@ class NoteGenerator:
                                 ws.cell(row=r, column=c).value = val.replace("Consolidado", active_entity_name).replace("CONSOLIDADO", active_entity_name)
 
             # 3.5 Limpiar columnas activas en filas de datos para evitar números obsoletos de la plantilla
+            if ws.title.strip().lower() == 'impuestos diferidos':
+                # Impuestos Diferidos (#N13.1..#N13.5) se alimenta íntegramente desde el Anexo Externo.
+                # Limpiamos residuos estáticos de la plantilla (ej. fila 73 con valores de ejemplo,
+                # celdas 0 huérfanas entre cuadros en C27/C67 y arrastre =+D42 en C33) y omitimos
+                # el cruce automático de cuentas contables para no contaminar #N13.1.
+                for r_id in range(1, ws.max_row + 1):
+                    v_lbl = ws.cell(row=r_id, column=2).value
+                    lbl_str = str(v_lbl).strip().lower() if v_lbl is not None else ""
+                    for c_id in range(3, min(ws.max_column + 1, 8)):
+                        cell_id = ws.cell(row=r_id, column=c_id)
+                        if cell_id.__class__.__name__ == 'MergedCell':
+                            continue
+                        v_id = cell_id.value
+                        if v_id is None:
+                            continue
+                        if not lbl_str and v_id == 0:
+                            cell_id.value = None
+                        elif isinstance(v_id, str) and v_id.strip() in ("-", "—", "–"):
+                            cell_id.value = 0
+                        elif isinstance(v_id, (int, float)) and v_id != 0 and not (2020 <= v_id <= 2035):
+                            cell_id.value = 0
+                        elif isinstance(v_id, str) and v_id.startswith("=") and "SUM" not in v_id.upper() and "tasa efectiva" not in lbl_str:
+                            cell_id.value = 0
+                continue
+
             is_no_comp_notes = (not periodo_comp_str) or str(periodo_comp_str).strip().lower() in ["ninguno", "none", ""]
             if is_no_comp_notes:
                 active_cols = [
@@ -1679,7 +1880,10 @@ class NoteGenerator:
                             'amortizacion derechos de uso': 'amortizacion por derechos de uso',
                             'costos arriendos ic': 'costos arriendos intercompania',
                             'depreciacion en gtos de adm': 'depreciacion del ejercicio',
-                            'amortizacion intangibles': 'amortizacion de intangibles'
+                            'amortizacion intangibles': 'amortizacion de intangibles',
+                            'costo financiero por instrumentos de cobertura': 'instrumentos de cobertura (2)',
+                            'ganancia en instrumentos de cobertura*': 'instrumentos de cobertura (1)',
+                            'ganancia en instrumentos de cobertura': 'instrumentos de cobertura (1)',
                         }
                         if cell_clean in PL_ALIASES:
                             alias_candidate = PL_ALIASES[cell_clean]
@@ -1702,7 +1906,20 @@ class NoteGenerator:
                     sample_context = None
                     for k in [active_entity_name, 'Consolidado'] + list(entity_contexts.keys()):
                         if k in entity_contexts:
-                            sample_context = entity_contexts[k]['actual']
+                            act_c = entity_contexts[k].get('actual', {}) or {}
+                            cmp_c = entity_contexts[k].get('comp', {}) or {}
+                            merged_n1 = dict(cmp_c.get('nota1', {}))
+                            merged_n1.update(act_c.get('nota1', {}))
+                            merged_n2 = dict(cmp_c.get('nota2', {}))
+                            merged_n2.update(act_c.get('nota2', {}))
+                            merged_pl = {}
+                            for p_src in [cmp_c.get('pl', {}), act_c.get('pl', {})]:
+                                for r_k, r_v in (p_src or {}).items():
+                                    if r_k not in merged_pl:
+                                        merged_pl[r_k] = {}
+                                    if isinstance(r_v, dict):
+                                        merged_pl[r_k].update(r_v)
+                            sample_context = {'nota1': merged_n1, 'nota2': merged_n2, 'pl': merged_pl}
                             break
                     
                     if sample_context:
@@ -1733,39 +1950,42 @@ class NoteGenerator:
                                         matched_rubro = rubro_clean
                                         break
 
-                            sheet_title_lower = str(ws.title).strip().lower()
-                            LABEL_ALIASES = {
-                                'bodega central (*)': 'mercaderias',
-                                'bodega central': 'mercaderias',
-                                'otras bodegas (**)': 'mercaderias',
-                                'bodega tecnica': 'mercaderias',
-                                'bodega de contratistas': 'mercaderias',
-                                'bodega de operaciones': 'mercaderias',
-                                'licencias': 'licencias',
-                                'derecho de uso (1)': 'derecho de uso (1)',
-                                'saldo inicial': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo inicial',
-                                'saldo final': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo final',
-                                'plusvalia': 'plusvalia por adquisiciones de empresas',
-                                'plusvalía': 'plusvalia por adquisiciones de empresas',
-                                'capital emitido': 'capital emitido',
-                                'otras reservas': 'otras reservas',
-                                'resultados acumulados': 'ganancias (perdidas) acumuladas',
-                                'ganancias perdidas acumuladas': 'ganancias (perdidas) acumuladas',
-                            }
-                            if matched_key is None:
-                                if cell_clean in sample_context.get('nota1', {}):
-                                    matched_key = cell_clean
-                                    match_type = 'nota1'
-                                elif cell_clean in LABEL_ALIASES:
-                                    alias_target = LABEL_ALIASES[cell_clean]
-                                    for k_ctx in sample_context.get('nota1', {}):
+                        sheet_title_lower = str(ws.title).strip().lower()
+                        LABEL_ALIASES = {
+                            'bodega central (*)': 'mercaderias',
+                            'bodega central': 'mercaderias',
+                            'otras bodegas (**)': 'mercaderias',
+                            'bodega tecnica': 'mercaderias',
+                            'bodega de contratistas': 'mercaderias',
+                            'bodega de operaciones': 'mercaderias',
+                            'licencias': 'licencias',
+                            'derecho de uso (1)': 'derecho de uso (1)',
+                            'saldo inicial': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo inicial',
+                            'saldo final': 'plusvalia por adquisiciones de empresas' if sheet_title_lower in ['plusvalia', 'plusvalía'] else 'saldo final',
+                            'plusvalia': 'plusvalia por adquisiciones de empresas',
+                            'plusvalía': 'plusvalia por adquisiciones de empresas',
+                            'capital emitido': 'capital emitido',
+                            'otras reservas': 'otras reservas',
+                            'resultados acumulados': 'ganancias (perdidas) acumuladas',
+                            'ganancias perdidas acumuladas': 'ganancias (perdidas) acumuladas',
+                        }
+                        if matched_key is None and not is_results_note:
+                            if cell_clean in sample_context.get('nota1', {}):
+                                matched_key = cell_clean
+                                match_type = 'nota1'
+                            elif cell_clean in sample_context.get('nota2', {}):
+                                matched_key = cell_clean
+                                match_type = 'nota2'
+                            elif cell_clean in LABEL_ALIASES:
+                                alias_target = LABEL_ALIASES[cell_clean]
+                                for ctx_t in ['nota1', 'nota2']:
+                                    for k_ctx in sample_context.get(ctx_t, {}):
                                         if clean_label(k_ctx) == clean_label(alias_target) or k_ctx == alias_target:
                                             matched_key = k_ctx
-                                            match_type = 'nota1'
+                                            match_type = ctx_t
                                             break
-                                elif cell_clean in sample_context.get('nota2', {}):
-                                    matched_key = cell_clean
-                                    match_type = 'nota2'
+                                    if matched_key is not None:
+                                        break
                         
                         # 2.2 Búsqueda tolerante por prefijo/sufijo para cortes menores (máx 5 de diferencia)
                         if matched_key is None:
@@ -1799,6 +2019,8 @@ class NoteGenerator:
                                             break
                                 else:
                                     for k_ctx in sample_context.get(ctx_type, {}):
+                                        if {cell_clean, k_ctx} == {'euro', 'euros'}:
+                                            continue
                                         if (k_ctx.startswith(cell_clean) or cell_clean.startswith(k_ctx)) and abs(len(k_ctx) - len(cell_clean)) <= 5:
                                             matched_key = k_ctx
                                             match_type = ctx_type
@@ -1830,8 +2052,8 @@ class NoteGenerator:
                             if val_temp is not None and isinstance(val_temp, str):
                                 extra_words.append(clean_label(val_temp))
                                 
-                    # Obtener nombres de cuentas del contexto activo para validación de palabras extra
-                    active_ctx = entity_contexts.get(active_entity_name, {}).get('actual', {})
+                    # Obtener nombres de cuentas del contexto activo (o comparativo como respaldo) para validación de palabras extra
+                    active_ctx = sample_context if sample_context else entity_contexts.get(active_entity_name, {}).get('actual', {})
                     acct_names = []
                     if active_ctx:
                         if match_type == 'nota1' and matched_key in active_ctx.get('nota1', {}):
@@ -1974,25 +2196,25 @@ class NoteGenerator:
                             
                         val_to_write = None
                         if is_gross:
-                            val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, filter_sign='gross') / scale_factor
+                            val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, filter_sign='gross', col=c) / scale_factor
                         elif is_depr:
-                            val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, filter_sign='depr') / scale_factor
+                            val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, filter_sign='depr', col=c) / scale_factor
                         elif is_net:
-                            val_to_write = (get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, filter_sign='gross') + 
-                                            get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, filter_sign='depr')) / scale_factor
+                            val_to_write = (get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, filter_sign='gross', col=c) + 
+                                            get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, filter_sign='depr', col=c)) / scale_factor
                         else:
                             if match_type == 'nota1':
-                                val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws) / scale_factor
+                                val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, col=c) / scale_factor
                                 # Fallback a nota2 si el resultado da cero
                                 if val_to_write == 0.0:
-                                    val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws) / scale_factor
+                                    val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, col=c) / scale_factor
                             elif match_type == 'nota2':
-                                val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws) / scale_factor
+                                val_to_write = get_filtered_value(period_ctx, matched_key, 'nota2', flow_key, row, ws, col=c) / scale_factor
                                 # Fallback a nota1 si el resultado da cero
                                 if val_to_write == 0.0:
-                                    val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws) / scale_factor
+                                    val_to_write = get_filtered_value(period_ctx, matched_key, 'nota1', flow_key, row, ws, col=c) / scale_factor
                             elif match_type == 'pl':
-                                val_to_write = get_filtered_value(period_ctx, matched_key, 'pl', flow_key, row, ws, section_rubro=matched_rubro) / scale_factor
+                                val_to_write = get_filtered_value(period_ctx, matched_key, 'pl', flow_key, row, ws, section_rubro=matched_rubro, col=c) / scale_factor
                                 
                         if val_to_write is not None:
                             val_to_write = round(val_to_write)

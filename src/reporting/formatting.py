@@ -1,4 +1,227 @@
 import pandas as pd
+import re
+
+
+def detect_internal_header_rows(df: pd.DataFrame):
+    """
+    Identifica los índices posicionales de fila (0-based en df) que conforman el encabezado
+    interno de una tabla cuando el DataFrame no tiene nombres de columna reales (ej. cuadros
+    de Notas donde los encabezados vienen en las primeras filas) o cuando existe un segundo
+    bloque de encabezado intermedio (ej. segundo año en #PATRIMONIO o en cuadros de notas).
+    Retorna: (hdr_rows_set, bottom_hdr_rows_set)
+    """
+    hdr_rows = set()
+    bottom_hdr_rows = set()
+    if df is None or df.empty:
+        return hdr_rows, bottom_hdr_rows
+
+    num_rows = len(df)
+    num_cols = len(df.columns)
+    df_cols = list(df.columns)
+
+    def _is_dummy_col(c):
+        if isinstance(c, (int, float)):
+            return True
+        s = str(c).replace("\nM$", "").replace("\nCh$", "").replace("\nTh$", "").strip()
+        return s == "" or s.isdigit()
+
+    has_real_header = not all(_is_dummy_col(c) for c in df_cols)
+
+    def _clean(v):
+        if pd.isna(v) or v is None:
+            return ""
+        return str(v).replace("\xa0", " ").strip()
+
+    def _is_unit_token(s):
+        sl = s.lower()
+        return sl in ["m$", "ch$", "th$", "us$", "$", "%", "uf", "mus$", "mch$", "miles de $"]
+
+    def _row_is_unit_line(r_idx):
+        if r_idx < 0 or r_idx >= num_rows:
+            return False
+        row_vals = [_clean(df.iloc[r_idx, c]) for c in range(num_cols)]
+        right_vals = [v for v in row_vals[1:] if v != ""]
+        if not right_vals:
+            return False
+        has_unit = any(_is_unit_token(v) for v in right_vals)
+        if not has_unit:
+            return False
+        non_unit_cells = [v for v in row_vals if v != "" and not _is_unit_token(v)]
+        allowed_col_labels = {
+            "detalle", "concepto", "movimiento", "movimientos", "tipo", "tipo de contrato",
+            "rubro", "item", "ítem", "cuenta", "descripción", "descripcion", "clasificación",
+            "clasificacion", "rut", "r.u.t.", "entidad", "institución", "institucion",
+            "nombre", "nombre entidad", "participación", "participacion", "moneda", "nota", "notas",
+            "cuentas comerciales según plazo", "cuentas comerciales segun plazo"
+        }
+        return all(v.lower() in allowed_col_labels for v in non_unit_cells)
+
+    def _cell_looks_like_date_or_hdr(s):
+        if not s:
+            return False
+        sl = s.lower()
+        if _is_unit_token(sl):
+            return True
+        if re.search(r'\b20\d{2}\b', sl) or re.search(r'\d{2}[./-]\d{2}[./-]\d{2,4}', sl):
+            return True
+        hdr_keywords = [
+            "corriente", "no corriente", "activos", "pasivos", "bruto", "neto", "amortizaci",
+            "depreciaci", "moneda", "banco", "vencimiento", "tasa", "interés", "interes",
+            "concesiones", "licencias", "marcas", "cartera", "terrenos", "edificios", "redes",
+            "plantas", "equipos", "vehículos", "vehiculos", "muebles", "instalación", "instalacion",
+            "obras", "leasing", "total", "residencial", "mayorista", "eliminaciones", "aumento",
+            "baja", "valor al cierre", "10%", "90 días", "90 dias", "1 año", "1 ano", "5 años",
+            "5 anos", "3 años", "3 anos", "7 años", "7 anos", "saldo inicial", "saldo final",
+            "nuevos", "adiciones", "capital", "reajuste", "otros", "mark to market", "instrument",
+            "description", "issuer", "currency", "issue date", "maturity", "transaction",
+            "annual", "cobertura", "partida cubierta", "riesgo", "liquidación", "liquidacion",
+            "naturaleza", "relación", "relacion", "transacción", "transaccion", "efecto",
+            "participación", "participacion", "acciones", "monto", "inicio", "termino", "término",
+            "ganancia", "acumulad", "reserva", "patrimonio", "issued", "retained", "equity",
+            "activo m$", "pasivo m$"
+        ]
+        return any(k in sl for k in hdr_keywords)
+
+    if not has_real_header:
+        last_unit_row = None
+        for r in range(min(5, num_rows)):
+            if _row_is_unit_line(r):
+                last_unit_row = r
+
+        if last_unit_row is not None:
+            for r in range(0, last_unit_row + 1):
+                hdr_rows.add(r)
+            bottom_hdr_rows.add(last_unit_row)
+        else:
+            max_hdr_r = None
+            for r in range(min(3, num_rows)):
+                row_vals = [_clean(df.iloc[r, c]) for c in range(num_cols)]
+                right_vals = [v for v in row_vals[1:] if v != ""]
+                c0 = row_vals[0]
+                if r == 0 and num_rows > 1:
+                    next_vals = [_clean(df.iloc[1, c]) for c in range(1, num_cols) if _clean(df.iloc[1, c]) != ""]
+                    if next_vals and any(_cell_looks_like_date_or_hdr(v) for v in next_vals):
+                        if (c0 != "" and not right_vals) or (c0 == "" and right_vals and all(_cell_looks_like_date_or_hdr(v) for v in right_vals)):
+                            hdr_rows.add(0)
+                            max_hdr_r = 0
+                            continue
+                if right_vals and all(_cell_looks_like_date_or_hdr(v) for v in right_vals):
+                    all_pure_nums = all(
+                        v.replace(".", "").replace(",", "").replace("-", "").replace("(", "").replace(")", "").isdigit()
+                        and not re.match(r'^20\d{2}$', v.strip())
+                        for v in right_vals
+                    )
+                    if not all_pure_nums:
+                        for prev_r in range(0, r + 1):
+                            hdr_rows.add(prev_r)
+                        max_hdr_r = r
+            if max_hdr_r is not None:
+                bottom_hdr_rows.add(max_hdr_r)
+            elif num_rows > 0:
+                hdr_rows.add(0)
+                bottom_hdr_rows.add(0)
+
+    allowed_col_labels = {
+        "detalle", "concepto", "movimiento", "movimientos", "tipo", "tipo de contrato",
+        "rubro", "item", "ítem", "cuenta", "descripción", "descripcion", "clasificación",
+        "clasificacion", "rut", "r.u.t.", "entidad", "institución", "institucion",
+        "nombre", "nombre entidad", "participación", "participacion", "moneda", "nota", "notas",
+        "cuentas comerciales según plazo", "cuentas comerciales segun plazo"
+    }
+
+    # Detectar bloques de encabezados intermedios (ej. segundo año en #PATRIMONIO o en cuadros multi-año de Notas)
+    for r in range(1, num_rows - 1):
+        if r in hdr_rows:
+            continue
+        c0 = _clean(df.iloc[r, 0])
+        c0_low = c0.lower()
+        is_allowed_c0 = (
+            c0 == "" or
+            c0_low in allowed_col_labels or
+            c0_low.startswith("detalle al") or
+            c0_low.startswith("concepto al")
+        )
+        if is_allowed_c0 and _row_is_unit_line(r + 1):
+            right_vals = [_clean(df.iloc[r, c]).lower() for c in range(1, num_cols) if _clean(df.iloc[r, c]) != ""]
+            if right_vals and any(_cell_looks_like_date_or_hdr(v) for v in right_vals):
+                hdr_rows.add(r)
+                hdr_rows.add(r + 1)
+                bottom_hdr_rows.add(r + 1)
+                for back_step in [1, 2]:
+                    prev_r = r - back_step
+                    if prev_r <= 0 or prev_r in hdr_rows:
+                        break
+                    prev_all = [_clean(df.iloc[prev_r, c]) for c in range(num_cols)]
+                    prev_non_empty = [v for v in prev_all if v != ""]
+                    if not prev_non_empty:
+                        break
+                    prev_c0_low = prev_all[0].lower()
+                    if any(prev_c0_low.startswith(k) for k in ["total", "saldo final", "saldo al", "valores netos", "sub total", "subtotal"]):
+                        break
+                    # Caso A: fila superior con 1 o 2 celdas de fecha/año o título de cuadro (ej. '2025', '31.12.2024', 'VENCIMIENTO DE PASIVOS...')
+                    if len(prev_non_empty) <= 2 and all(
+                        re.search(r'\b20\d{2}\b', pv) or
+                        re.search(r'\d{2}[./-]\d{2}[./-]\d{2,4}', pv) or
+                        any(k in pv.lower() for k in ["vencimiento", "cambios en pasivo", "movimiento"])
+                        for pv in prev_non_empty
+                    ):
+                        hdr_rows.add(prev_r)
+                        continue
+                    # Caso B: fila superior de títulos de columna multilínea (c0 vacío y celdas derechas son etiquetas de cabecera)
+                    if prev_all[0] == "" and all(_cell_looks_like_date_or_hdr(pv) or pv.lower() in ["pagos", "equipo", "descripción de la", "descripcion de la", "edificios y", "redes de", "plantas", "equipos"] for pv in prev_non_empty):
+                        hdr_rows.add(prev_r)
+                        continue
+                    break
+
+    return hdr_rows, bottom_hdr_rows
+
+
+def is_separator_row_series(row_series) -> bool:
+    """Retorna True si todas las celdas de la fila están vacías o son marcadores nulos."""
+    for v in row_series:
+        if pd.notna(v) and v is not None:
+            s = str(v).replace("\xa0", "").strip()
+            if s not in ["", "nan", "None", "||"]:
+                return False
+    return True
+
+
+def ensure_subtable_separator_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garantiza que cuando un DataFrame contiene dos o más cuadros apilados verticalmente
+    (detectados por bloques de encabezado intermedios en detect_internal_header_rows),
+    exista exactamente una fila vacía de separación antes de cada cuadro intermedio,
+    respetando la línea de separación de las plantillas Excel.
+    Es 100% idempotente.
+    """
+    if df is None or df.empty:
+        return df
+
+    orig_attrs = dict(getattr(df, "attrs", {}))
+    df_non_empty = df[~df.apply(is_separator_row_series, axis=1)].reset_index(drop=True)
+    if df_non_empty.empty:
+        df_non_empty.attrs.update(orig_attrs)
+        return df_non_empty
+
+    hdr_rows, _ = detect_internal_header_rows(df_non_empty)
+    mid_starts = sorted([r for r in hdr_rows if r > 0 and (r - 1) not in hdr_rows])
+    if not mid_starts:
+        df_non_empty.attrs.update(orig_attrs)
+        return df_non_empty
+
+    chunks = []
+    prev_idx = 0
+    sep_row_df = pd.DataFrame([[""] + [None] * (len(df_non_empty.columns) - 1)], columns=df_non_empty.columns)
+    for r_start in mid_starts:
+        chunks.append(df_non_empty.iloc[prev_idx:r_start])
+        chunks.append(sep_row_df)
+        prev_idx = r_start
+    chunks.append(df_non_empty.iloc[prev_idx:])
+
+    result = pd.concat(chunks, ignore_index=True)
+    result.attrs.update(orig_attrs)
+    return result
+
 
 def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=None, unit=None, is_miles=None, target_lang=None):
     import openpyxl
@@ -11,7 +234,7 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
         except Exception:
             target_lang = 'es'
 
-    df = df.copy()
+    df = ensure_subtable_separator_rows(df.copy())
 
     if str(target_lang).lower() == 'en':
         from src.core.ifrs_glossary import translate_ifrs_term
@@ -51,21 +274,35 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 is_miles = False
 
     if is_miles:
-        new_cols = []
-        for i, col in enumerate(df.columns):
-            col_str = str(col)
-            # Agregar \nM$ a columnas de fecha/período o numéricas (no primera col y no Nota)
-            if any(char.isdigit() for char in col_str) or (i > 0 and col_str.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"]):
-                if "M$" not in col_str:
-                    new_cols.append(f"{col_str}\nM$")
+        has_real_hdr_cols = not all(
+            isinstance(c, (int, float)) or str(c).strip() == "" or str(c).strip().isdigit()
+            for c in df.columns
+        )
+        if has_real_hdr_cols:
+            new_cols = []
+            for i, col in enumerate(df.columns):
+                col_str = str(col)
+                # Agregar \nM$ a columnas de fecha/período o numéricas (no primera col y no Nota)
+                if any(char.isdigit() for char in col_str) or (i > 0 and col_str.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"]):
+                    if "M$" not in col_str:
+                        new_cols.append(f"{col_str}\nM$")
+                    else:
+                        new_cols.append(col_str)
                 else:
                     new_cols.append(col_str)
-            else:
-                new_cols.append(col_str)
-        df.columns = new_cols
+            df.columns = new_cols
 
     if len(df.columns) > 0:
         df.iloc[:, 0] = df.iloc[:, 0].fillna("").astype(str).replace({"nan": "", "None": ""})
+
+    internal_hdr_rows, bottom_hdr_rows = detect_internal_header_rows(df)
+    sep_rows = {
+        r_pos for r_pos in range(len(df))
+        if r_pos not in internal_hdr_rows and is_separator_row_series(df.iloc[r_pos])
+    }
+    if sep_rows and len(df.columns) > 0:
+        for r_pos in sep_rows:
+            df.iloc[r_pos, 0] = "\u00a0"
 
     for i in range(1, len(df.columns)):
         col_series = df.iloc[:, i]
@@ -139,15 +376,23 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
         {
             'selector': 'th',
             'props': [
-                ('background-color', '#E8EEF6'),
-                ('color', '#1F3864'),
-                ('font-weight', 'bold'),
+                ('background-color', '#E8EEF6 !important'),
+                ('color', '#1F3864 !important'),
+                ('font-weight', 'bold !important'),
                 ('font-family', 'Inter, sans-serif'),
-                ('border', 'none'),
+                ('border', 'none !important'),
                 ('padding', '8px'),
-                ('border-top', 'none'),
-                ('border-bottom', '2px solid #1F3864'),
+                ('border-top', 'none !important'),
+                ('border-left', 'none !important'),
+                ('border-right', 'none !important'),
+                ('border-bottom', '2px solid #1F3864 !important'),
                 ('text-align', 'left')
+            ]
+        },
+        {
+            'selector': 'tr',
+            'props': [
+                ('border', 'none !important')
             ]
         },
         {
@@ -155,9 +400,9 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             'props': [
                 ('font-family', 'Inter, sans-serif'),
                 ('font-size', '0.85em'),
-                ('border-left', 'none'),
-                ('border-right', 'none'),
-                ('border-top', 'none'),
+                ('border-left', 'none !important'),
+                ('border-right', 'none !important'),
+                ('border-top', 'none !important'),
                 ('border-bottom', '1px solid #E1E1E1'),
                 ('padding', '6px 10px'),
                 ('background-clip', 'padding-box')
@@ -225,6 +470,9 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 }
             )
 
+    # Detectar de antemano las filas de cabecera internas (Notas y bloques multi-año como #PATRIMONIO)
+    internal_hdr_rows, bottom_hdr_rows = detect_internal_header_rows(df)
+
     dynamic_styled = False
     if excel_bytes is not None:
         try:
@@ -244,8 +492,8 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                     return None
                 style = border_side.style
                 if style == 'double':
-                    css_style = 'double'
-                    width = '3px'
+                    css_style = 'solid'
+                    width = '1px'
                 elif style in ('medium', 'mediumDashed', 'mediumDashDot', 'mediumDashDotDot'):
                     css_style = 'solid'
                     width = '2px'
@@ -307,6 +555,8 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 
                 excel_date_cols = []
                 for col in range(1, ws.max_column + 1):
+                    if col <= excel_name_col:
+                        continue
                     for row in range(1, 7):
                         val = ws.cell(row=row, column=col).value
                         if val is not None:
@@ -386,13 +636,42 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
             row_styles_matrix = pd.DataFrame('', index=df.index, columns=df.columns)
             row_top_borders = {}
             row_bottom_borders = {}
+            curr_excel_row = 1
+
+            def _is_unit_only_row(r_series):
+                c0 = clean_str(r_series.iloc[0]) if len(r_series) > 0 else ""
+                if c0 != "":
+                    return False
+                rest = [clean_str(r_series.iloc[c]) for c in range(1, len(r_series)) if pd.notna(r_series.iloc[c]) and clean_str(r_series.iloc[c]) != ""]
+                return bool(rest) and all(v in ["m$", "ch$", "th$", "us$", "$", "%", "uf"] for v in rest)
             
-            for idx, df_row in df.iterrows():
-                search_val = clean_str(df_row.iloc[0])
+            for row_pos, (idx, df_row) in enumerate(df.iterrows()):
+                first_col_str = clean_str(df_row.iloc[0])
+                first_col_empty = (first_col_str == "")
+                search_val = first_col_str
+                search_excel_col = ws_cols_mapping.get(0, 1)
                 if not search_val and len(df_row) > 1:
                     search_val = clean_str(df_row.iloc[1])
-                found_row = row_map.get(search_val)
+                    search_excel_col = ws_cols_mapping.get(1, search_excel_col + 1)
+
+                found_row = None
+                if search_val:
+                    for r in range(curr_excel_row, ws.max_row + 1):
+                        val = ws.cell(row=r, column=search_excel_col).value
+                        if val is not None and clean_str(val) == search_val:
+                            found_row = r
+                            curr_excel_row = r + 1
+                            break
+                    if found_row is None:
+                        found_row = row_map.get(search_val)
                 
+                next_is_unit_row = (row_pos + 1 < len(df)) and _is_unit_only_row(df.iloc[row_pos + 1])
+                curr_is_mid_hdr_title = first_col_empty and next_is_unit_row
+                curr_is_unit_row = _is_unit_only_row(df_row)
+                is_internal_hdr = (row_pos in internal_hdr_rows)
+                is_bot_hdr = (row_pos in bottom_hdr_rows)
+                next_is_internal_hdr = ((row_pos + 1) in internal_hdr_rows)
+
                 row_top_b = None
                 row_bottom_b = None
                 
@@ -403,7 +682,7 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                         cell = ws.cell(row=found_row, column=excel_col)
                         
                         if cell.font:
-                            if cell.font.bold:
+                            if cell.font.bold or curr_is_mid_hdr_title or is_internal_hdr:
                                 css_styles.append("font-weight: bold")
                             else:
                                 css_styles.append("font-weight: normal")
@@ -413,6 +692,8 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                                 css_styles.append(f"font-size: {cell.font.size}pt")
                             if cell.font.name:
                                 css_styles.append(f"font-family: '{cell.font.name}', sans-serif")
+                        elif curr_is_mid_hdr_title or is_internal_hdr:
+                            css_styles.append("font-weight: bold")
                         
                         val_curr = df_row.iloc[j] if j < len(df_row) else None
                         def _is_num_cell(v):
@@ -428,45 +709,87 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                             css_styles.append("text-align: right !important")
                         else:
                             val_str = str(val_curr).strip() if val_curr is not None else ""
-                            is_num_col_header = (j >= 2) and (val_str.lower() in ["m$", "$", "%", "activos", "pasivos"] or any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202"]))
-                            if not is_num_col_header:
-                                css_styles = [s for s in css_styles if not s.startswith("text-align")]
+                            is_num_col_header = (j >= 1) and (
+                                first_col_empty or
+                                val_str.lower() in ["m$", "$", "%", "activos", "pasivos", "corriente", "no corriente", "us$", "uf", "th$"] or
+                                any(k in val_str.lower() for k in ["capital", "ganancia", "acumulad", "reserva", "patrimonio", "issued", "retained", "equity"]) or
+                                any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202", "31-", "30-"])
+                            )
+                            css_styles = [s for s in css_styles if not s.startswith("text-align")]
+                            if is_num_col_header:
+                                css_styles.append("text-align: right !important")
+                                css_styles.append("white-space: normal !important")
+                            else:
                                 css_styles.append("text-align: left !important")
                                 
-                        if cell.fill and cell.fill.fill_type == 'solid' and cell.fill.fgColor:
-                            c_rgb = str(cell.fill.fgColor.rgb)
-                            if len(c_rgb) == 8 and c_rgb != '00000000' and not c_rgb.startswith('000000'):
-                                css_styles.append(f"background-color: #{c_rgb[2:]}")
-                            elif len(c_rgb) == 6:
-                                css_styles.append(f"background-color: #{c_rgb}")
-                        
-                        top_b = None
-                        bottom_b = None
-                        if cell.border:
-                            top_b = convert_border(cell.border.top)
-                            bottom_b = convert_border(cell.border.bottom)
-                        
-                        if top_b:
-                            css_styles.append(f"border-top: {top_b} !important")
-                            if not row_top_b and top_b != 'none':
-                                row_top_b = top_b
+                        if is_internal_hdr:
+                            css_styles.append("background-color: #E8EEF6 !important")
+                            css_styles.append("color: #1F3864 !important")
+                            css_styles.append("font-weight: bold !important")
+                            css_styles.append("border-top: none !important")
+                            css_styles.append("border-left: none !important")
+                            css_styles.append("border-right: none !important")
+                            if is_bot_hdr:
+                                css_styles.append("border-bottom: 2px solid #1F3864 !important")
+                            else:
+                                css_styles.append("border-bottom: none !important")
                         else:
-                            css_styles.append("border-top: none")
+                            if cell.fill and cell.fill.fill_type == 'solid' and cell.fill.fgColor:
+                                c_rgb = str(cell.fill.fgColor.rgb)
+                                if len(c_rgb) == 8 and c_rgb != '00000000' and not c_rgb.startswith('000000'):
+                                    css_styles.append(f"background-color: #{c_rgb[2:]}")
+                                elif len(c_rgb) == 6:
+                                    css_styles.append(f"background-color: #{c_rgb}")
                             
-                        if bottom_b:
-                            css_styles.append(f"border-bottom: {bottom_b} !important")
-                            if not row_bottom_b and bottom_b not in ('none', '1px solid #f0f0f0'):
-                                row_bottom_b = bottom_b
+                            top_b = None
+                            bottom_b = None
+                            if cell.border:
+                                top_b = convert_border(cell.border.top)
+                                bottom_b = convert_border(cell.border.bottom)
+                            
+                            if curr_is_mid_hdr_title:
+                                css_styles.append("padding-top: 14px !important")
+                                css_styles.append("padding-bottom: 2px !important")
+                                bottom_b = None
+
+                            if curr_is_unit_row and not bottom_b:
+                                bottom_b = "1px solid #000000"
+
+                            if top_b:
+                                css_styles.append(f"border-top: {top_b} !important")
+                                if not row_top_b and top_b != 'none':
+                                    row_top_b = top_b
+                            else:
+                                css_styles.append("border-top: none")
+                                
+                            if curr_is_mid_hdr_title or next_is_internal_hdr:
+                                css_styles.append("border-bottom: none !important")
+                            elif bottom_b:
+                                css_styles.append(f"border-bottom: {bottom_b} !important")
+                                if not row_bottom_b and bottom_b not in ('none', '1px solid #f0f0f0'):
+                                    row_bottom_b = bottom_b
+                            else:
+                                css_styles.append("border-bottom: 1px solid #f0f0f0")
+                    elif is_internal_hdr:
+                        css_styles.append("background-color: #E8EEF6 !important")
+                        css_styles.append("color: #1F3864 !important")
+                        css_styles.append("font-weight: bold !important")
+                        css_styles.append("border-top: none !important")
+                        css_styles.append("border-left: none !important")
+                        css_styles.append("border-right: none !important")
+                        if is_bot_hdr:
+                            css_styles.append("border-bottom: 2px solid #1F3864 !important")
                         else:
-                            css_styles.append("border-bottom: 1px solid #f0f0f0")
+                            css_styles.append("border-bottom: none !important")
                         
                     if css_styles:
                         row_styles_matrix.loc[idx, col_name] = "; ".join(css_styles)
                             
-                if row_top_b:
-                    row_top_borders[idx] = row_top_b
-                if row_bottom_b:
-                    row_bottom_borders[idx] = row_bottom_b
+                if not is_internal_hdr:
+                    if row_top_b:
+                        row_top_borders[idx] = row_top_b
+                    if row_bottom_b:
+                        row_bottom_borders[idx] = row_bottom_b
             
             # Aplicar propagación de bordes horizontalmente en filas de totales
             for idx in row_styles_matrix.index:
@@ -486,14 +809,31 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 idx = df.index[i]
                 row_top_b = row_top_borders.get(idx)
                 row_bottom_b = row_bottom_borders.get(idx)
-                if row_top_b and i > 0:
+                if row_top_b and i > 0 and (i - 1) not in internal_hdr_rows:
                     prev_idx = df.index[i - 1]
                     for col_name in df_cols:
                         row_styles_matrix.loc[prev_idx, col_name] += f"; border-bottom: {row_top_b} !important"
-                if row_bottom_b and i < len(df) - 1:
+                if row_bottom_b and i < len(df) - 1 and (i + 1) not in internal_hdr_rows:
                     next_idx = df.index[i + 1]
                     for col_name in df_cols:
                         row_styles_matrix.loc[next_idx, col_name] += f"; border-top: {row_bottom_b} !important"
+
+            # Reforzar que el bloque de cabecera interna sea 100% sólido sin líneas internas
+            for row_pos in internal_hdr_rows:
+                idx_h = df.index[row_pos]
+                is_bot_h = (row_pos in bottom_hdr_rows)
+                b_bot_h = "2px solid #1F3864" if is_bot_h else "none"
+                for col_name in df_cols:
+                    style_str = row_styles_matrix.loc[idx_h, col_name]
+                    style_str = re.sub(r'border-top:[^;]+', 'border-top: none !important', style_str)
+                    style_str = re.sub(r'border-bottom:[^;]+', f'border-bottom: {b_bot_h} !important', style_str)
+                    row_styles_matrix.loc[idx_h, col_name] = style_str
+                if (row_pos + 1) < len(df) and (row_pos + 1) not in internal_hdr_rows and is_bot_h:
+                    nxt_idx = df.index[row_pos + 1]
+                    for col_name in df_cols:
+                        style_str = row_styles_matrix.loc[nxt_idx, col_name]
+                        style_str = re.sub(r'border-top:[^;]+', 'border-top: 2px solid #1F3864 !important', style_str)
+                        row_styles_matrix.loc[nxt_idx, col_name] = style_str
             
             styler = styler.apply(lambda _: row_styles_matrix, axis=None)
             dynamic_styled = True
@@ -519,34 +859,52 @@ def apply_corporate_style(df, excel_bytes=None, sheet_name=None, col_indices=Non
                 classif == "ganancia (pérdida)"
             )
             
-            if is_bottom_line:
-                for i, col_name in enumerate(row.index):
-                    if col_name in numeric_cols:
-                        styles[i] = 'border-top: 1px solid #404040 !important; border-bottom: 3px double #404040 !important; font-weight: bold; color: #000000; background-color: #FFFFFF;'
-                    elif i == 0:
-                        styles[i] = 'font-weight: bold; color: #000000; border-bottom: 1px solid #D9D9D9 !important; background-color: #FFFFFF;'
-                return styles
-                
-            is_total = (
-                "total" in classif or 
-                "bruta" in classif or 
-                "antes de" in classif or 
-                "antes del" in classif or 
-                "incremento" in classif or
-                ("ganancia" in classif and "acumulada" not in classif) or
-                ("pérdida" in classif and "acumulada" not in classif and "operacionales" not in classif and "operaciones continuadas" in classif) or
-                "saldo final" in classif
-            )
-            
-            if is_total:
-                for i, col_name in enumerate(row.index):
-                    if col_name in numeric_cols:
-                        styles[i] = 'border-top: 1px solid #404040 !important; border-bottom: 1px solid #D9D9D9 !important; font-weight: bold; color: #000000; background-color: #FFFFFF;'
-                    elif i == 0:
-                        styles[i] = 'font-weight: bold; color: #000000; border-bottom: 1px solid #D9D9D9 !important; background-color: #FFFFFF;'
+            from src.reporting.word_export import _is_total_or_subtotal_label
+            if is_bottom_line or _is_total_or_subtotal_label(classif):
+                for i in range(len(row)):
+                    styles[i] = 'border-top: 1px solid #404040 !important; border-bottom: 1px solid #404040 !important; font-weight: bold; color: #000000; background-color: #FFFFFF;'
             return styles
 
         styler = styler.apply(highlight_totals, axis=1)
+
+    # Aplicar estilo corporativo celeste (#E8EEF6) y texto azul marino (#1F3864) en negrita
+    # a las filas de encabezado internas de cuadros de Notas y bloques intermedios (ej. #PATRIMONIO),
+    # así como la fila en blanco de separación entre cuadros.
+    if internal_hdr_rows or sep_rows:
+        df_cols_list = list(df.columns)
+        hdr_styles_matrix = pd.DataFrame('', index=df.index, columns=df.columns)
+        for row_pos, idx_val in enumerate(df.index):
+            if row_pos in sep_rows:
+                prev_bot = "1px solid #404040"
+                if row_pos > 0:
+                    prev_idx_val = df.index[row_pos - 1]
+                    if dynamic_styled and 'row_bottom_borders' in locals() and prev_idx_val in row_bottom_borders:
+                        prev_bot = row_bottom_borders[prev_idx_val]
+                    for j, c_name in enumerate(df_cols_list):
+                        hdr_styles_matrix.loc[prev_idx_val, c_name] = f"border-bottom: {prev_bot} !important;"
+                for j, c_name in enumerate(df_cols_list):
+                    hdr_styles_matrix.loc[idx_val, c_name] = (
+                        f"background-color: #FFFFFF !important; "
+                        f"border-top: {prev_bot} !important; "
+                        f"border-bottom: none !important; "
+                        f"border-left: none !important; "
+                        f"border-right: none !important; "
+                        f"height: 22px !important;"
+                    )
+            elif row_pos in internal_hdr_rows:
+                is_bot_hdr = (row_pos in bottom_hdr_rows)
+                b_bottom = "2px solid #1F3864" if is_bot_hdr else "none"
+                for j, c_name in enumerate(df_cols_list):
+                    hdr_styles_matrix.loc[idx_val, c_name] = (
+                        f"background-color: #E8EEF6 !important; "
+                        f"color: #1F3864 !important; "
+                        f"font-weight: bold !important; "
+                        f"border-top: none !important; "
+                        f"border-left: none !important; "
+                        f"border-right: none !important; "
+                        f"border-bottom: {b_bottom} !important;"
+                    )
+        styler = styler.apply(lambda _: hdr_styles_matrix, axis=None)
         
     return styler
 

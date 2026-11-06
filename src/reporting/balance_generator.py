@@ -108,7 +108,29 @@ class BalanceGenerator:
             else:
                 tb_df_comp['saldo_final'] = 0.0
 
-            merged_comp = build_balance_sabana(tb_df_comp, map_balance_df)
+            map_balance_comp_df = map_balance_df
+            try:
+                import os
+                from src.core.snapshot_vault_manager import SnapshotVaultManager
+                # Inferir nombre de empresa desde template_path si es posible
+                tp_norm = str(self.template_path or "").replace("\\", "/")
+                emp_inferred = None
+                if "data/empresas/" in tp_norm:
+                    parts = tp_norm.split("data/empresas/")[1].split("/")
+                    if len(parts) >= 2:
+                        emp_inferred = parts[0]
+                if emp_inferred and periodo_comp_str and SnapshotVaultManager.has_active_snapshot(emp_inferred, periodo_comp_str):
+                    f_mb_c, _ = SnapshotVaultManager.get_frozen_mappings(emp_inferred, periodo_comp_str)
+                    if f_mb_c is not None and not f_mb_c.empty:
+                        map_balance_comp_df = f_mb_c.copy()
+                        col_map_acc_c = next((c for c in map_balance_comp_df.columns if str(c).strip().lower() in ['n° de cuenta', 'n de cuenta', 'cuenta', 'cuenta_id']), map_balance_comp_df.columns[0])
+                        map_balance_comp_df['N° de Cuenta'] = map_balance_comp_df[col_map_acc_c].astype(str).str.strip()
+                        if cls_col in map_balance_comp_df.columns:
+                            map_balance_comp_df[cls_col] = map_balance_comp_df[cls_col].apply(lambda x: str(x).strip() if pd.notna(x) else x)
+            except Exception:
+                pass
+
+            merged_comp = build_balance_sabana(tb_df_comp, map_balance_comp_df)
             mapped_mask_comp = merged_comp[cls_col].notna()
             agg_mapped_comp = merged_comp[mapped_mask_comp].groupby(cls_col, as_index=False)['saldo_final'].sum()
             pl_residual_comp = merged_comp[~mapped_mask_comp]['saldo_final'].sum()

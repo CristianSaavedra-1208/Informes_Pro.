@@ -1,7 +1,18 @@
 import streamlit as st
 import pandas as pd
 import os
-from src.core.excel_utils import df_to_excel_bytes, format_periodo
+import importlib
+import src.core.excel_utils as _ex_utils_mod
+import src.reporting.formatting as _fmt_mod
+import src.reporting.word_export as _wexp_mod
+import src.reporting.ori_generator as _ori_mod
+import src.reporting.patrimonio_generator as _pat_mod
+importlib.reload(_ex_utils_mod)
+importlib.reload(_fmt_mod)
+importlib.reload(_wexp_mod)
+importlib.reload(_ori_mod)
+importlib.reload(_pat_mod)
+from src.core.excel_utils import df_to_excel_bytes, format_periodo, clean_patrimonio_preview_df
 
 def render(empresa_seleccionada, empresa_path):
     target_lang = st.session_state.get('idioma_reporte', 'es')
@@ -129,90 +140,129 @@ def render(empresa_seleccionada, empresa_path):
                         importlib.reload(bg_mod)
                         from src.reporting.balance_generator import BalanceGenerator
                         
-                        template_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
-                        if not os.path.exists(template_path):
-                            st.error(f"❌ No se encontró la plantilla base '{template_path}' en la carpeta de la empresa activa.")
-                        else:
-                            # Recargar Trial Balance fresco para incluir los últimos ajustes de auditoría
-                            import importlib
-                            import src.models.trial_balance_db as tb_db_mod
-                            importlib.reload(tb_db_mod)
-                            from src.models.trial_balance_db import TrialBalanceDB
-                            tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
-                            tb_df_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
-                            st.session_state['tb_df'] = tb_df
-                            st.session_state['tb_df_comp'] = tb_df_comp
-                            map_balance_df = st.session_state['map_balance_df'].copy()
-                            
-                            target_lang = st.session_state.get('idioma_reporte', 'es')
-                            engine = BalanceGenerator(template_path)
-                            excel_output = engine.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp, target_lang=target_lang)
-                            st.session_state['balance_excel_binary'] = excel_output.getvalue()
-                            
-                            # Read back for on-screen preview
-                            excel_output.seek(0)
-                            
-                            import openpyxl
-                            wb_check = openpyxl.load_workbook(excel_output, data_only=True)
-                            ws_check = wb_check.active
-                            
-                            from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
-                            
-                            cfg = read_template_config(wb_check)
-                            if cfg is None:
-                                name_col_idx, nota_col_idx, val25_col_idx, val24_col_idx = detect_balance_columns(ws_check, wb_check)
-                                cfg = {
-                                    "name_col": name_col_idx,
-                                    "nota_col": nota_col_idx if nota_col_idx else 0,
-                                    "val_actual_col": val25_col_idx,
-                                    "val_comp_col": val24_col_idx,
-                                    "data_start_row": 5,
-                                }
-                            
-                            col_actual = str(periodo_actual)
-                            col_comp = str(periodo_comp)
-                            if col_actual == col_comp:
-                                col_comp = f"{col_comp} (Comp)"
-                            
-                            excel_output.seek(0)
-                            preview_df = read_excel_preview(excel_output, cfg, col_actual, col_comp)
-                            
-                            if "Nota" in preview_df.columns:
-                                def clean_nota(val):
-                                    if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan" or val == 0:
-                                        return ""
-                                    try:
-                                        float_val = float(val)
-                                        if float_val.is_integer():
-                                            return str(int(float_val))
-                                        return str(float_val)
-                                    except:
-                                        return str(val).strip()
-                                preview_df["Nota"] = preview_df["Nota"].apply(clean_nota)
-                            
+                        from src.core.snapshot_vault_manager import SnapshotVaultManager
+                        from src.reporting.word_export import WordExportEngine
+                        target_lang = st.session_state.get('idioma_reporte', 'es')
+                        is_closed_act = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+                        snap_res_bal = SnapshotVaultManager.get_statement(empresa_seleccionada, periodo_actual, "BALANCE", comp_period=periodo_comp, scale_factor=scale_factor) if is_closed_act else None
+                        snap_df = snap_res_bal[0] if snap_res_bal else None
+
+                        if snap_df is not None:
+                            preview_df = snap_df.copy()
+                            snap_ex = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "BALANCE")
+                            if not snap_ex or abs(scale_factor - 1000.0) >= 0.01:
+                                from src.reporting.excel_export import generate_excel_report
+                                snap_ex = generate_excel_report(preview_df, title="Estado de Situación Financiera Clasificado", subtitle=f"Expresado en {unidad}")
+                            st.session_state['balance_excel_binary'] = snap_ex
+                            date_cols_snap = [c for c in preview_df.columns if c not in ["Clasificación", "Nota", "Notas"]]
+                            col_actual = date_cols_snap[0] if len(date_cols_snap) >= 1 else str(periodo_actual)
+                            col_comp = date_cols_snap[1] if len(date_cols_snap) >= 2 else str(periodo_comp)
                             if col_actual in preview_df.columns:
                                 preview_df[col_actual] = pd.to_numeric(preview_df[col_actual], errors='coerce')
                             if col_comp in preview_df.columns:
                                 preview_df[col_comp] = pd.to_numeric(preview_df[col_comp], errors='coerce')
-                            
-                            # Generate Word Version
-                            from src.reporting.word_export import WordExportEngine
                             word_output = WordExportEngine.generate_classified_balance_word(
-                                df=preview_df, 
+                                df=preview_df,
                                 title="Estado de Situación Financiera Clasificado",
                                 unit=unidad,
                                 entity_name=empresa_seleccionada.replace('[GRUPO] ', ''),
-                                excel_bytes=excel_output.getvalue(),
+                                excel_bytes=snap_ex,
                                 target_lang=target_lang
                             )
-                            
                             st.session_state['preview_df'] = preview_df
                             st.session_state['balance_word_binary'] = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
                             st.session_state['balance_col_actual'] = col_actual
                             st.session_state['balance_col_comp'] = col_comp
-                            
                             elapsed_time = time.time() - start_time
-                            st.success(f"✅ Balance Clasificado generado en {unidad}. La ecuación A-P+R=0 ha sido inyectada (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
+                            st.success(f"🔒 Balance Clasificado cargado desde Snapshot inmutable ({periodo_actual}) en {unidad} (Tiempo: {elapsed_time:.2f} s).")
+                        else:
+                            template_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                            if not os.path.exists(template_path):
+                                st.error(f"❌ No se encontró la plantilla base '{template_path}' en la carpeta de la empresa activa.")
+                            else:
+                                # Recargar Trial Balance fresco para incluir los últimos ajustes de auditoría
+                                import importlib
+                                import src.models.trial_balance_db as tb_db_mod
+                                importlib.reload(tb_db_mod)
+                                from src.models.trial_balance_db import TrialBalanceDB
+                                tb_df = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+                                tb_df_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp) if periodo_comp != "Ninguno" and periodo_comp in available_periods else None
+                                st.session_state['tb_df'] = tb_df
+                                st.session_state['tb_df_comp'] = tb_df_comp
+                                map_balance_df = st.session_state['map_balance_df'].copy()
+                                
+                                engine = BalanceGenerator(template_path)
+                                excel_output = engine.generate(tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_df_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp, target_lang=target_lang)
+                                st.session_state['balance_excel_binary'] = excel_output.getvalue()
+                                
+                                # Read back for on-screen preview
+                                excel_output.seek(0)
+                                
+                                import openpyxl
+                                wb_check = openpyxl.load_workbook(excel_output, data_only=True)
+                                ws_check = wb_check.active
+                                
+                                from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
+                                
+                                cfg = read_template_config(wb_check)
+                                if cfg is None:
+                                    name_col_idx, nota_col_idx, val25_col_idx, val24_col_idx = detect_balance_columns(ws_check, wb_check)
+                                    cfg = {
+                                        "name_col": name_col_idx,
+                                        "nota_col": nota_col_idx if nota_col_idx else 0,
+                                        "val_actual_col": val25_col_idx,
+                                        "val_comp_col": val24_col_idx,
+                                        "data_start_row": 5,
+                                    }
+                                
+                                col_actual = str(periodo_actual)
+                                col_comp = str(periodo_comp)
+                                if col_actual == col_comp:
+                                    col_comp = f"{col_comp} (Comp)"
+                                
+                                excel_output.seek(0)
+                                preview_df = read_excel_preview(excel_output, cfg, col_actual, col_comp)
+                                
+                                if "Nota" in preview_df.columns:
+                                    def clean_nota(val):
+                                        if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan" or val == 0:
+                                            return ""
+                                        try:
+                                            float_val = float(val)
+                                            if float_val.is_integer():
+                                                return str(int(float_val))
+                                            return str(float_val)
+                                        except:
+                                            return str(val).strip()
+                                    preview_df["Nota"] = preview_df["Nota"].apply(clean_nota)
+                                
+                                if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                                    preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        preview_df, empresa_seleccionada, "BALANCE", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
+                                
+                                if col_actual in preview_df.columns:
+                                    preview_df[col_actual] = pd.to_numeric(preview_df[col_actual], errors='coerce')
+                                if col_comp in preview_df.columns:
+                                    preview_df[col_comp] = pd.to_numeric(preview_df[col_comp], errors='coerce')
+                                
+                                # Generate Word Version
+                                word_output = WordExportEngine.generate_classified_balance_word(
+                                    df=preview_df, 
+                                    title="Estado de Situación Financiera Clasificado",
+                                    unit=unidad,
+                                    entity_name=empresa_seleccionada.replace('[GRUPO] ', ''),
+                                    excel_bytes=excel_output.getvalue(),
+                                    target_lang=target_lang
+                                )
+                                
+                                st.session_state['preview_df'] = preview_df
+                                st.session_state['balance_word_binary'] = word_output.getvalue() if hasattr(word_output, 'getvalue') else word_output
+                                st.session_state['balance_col_actual'] = col_actual
+                                st.session_state['balance_col_comp'] = col_comp
+                                
+                                elapsed_time = time.time() - start_time
+                                st.success(f"✅ Balance Clasificado generado en {unidad}. La ecuación A-P+R=0 ha sido inyectada (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
                     except Exception as e:
                         st.error(f"Error generando el reporte: {e}")
 
@@ -356,25 +406,45 @@ def render(empresa_seleccionada, empresa_path):
                         importlib.reload(erg_mod)
                         from src.reporting.er_generator import ERGenerator
                         
-                        template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
-                        if not os.path.exists(template_er_path):
-                            st.error(f"❌ No se encontró la plantilla base '{template_er_path}' en la carpeta de la empresa.")
-                        else:
-                            target_lang = st.session_state.get('idioma_reporte', 'es')
-                            engine = ERGenerator(template_er_path)
-                            excel_output, preview_df = engine.generate(
-                                pl_df, 
-                                scale_factor=scale_factor, 
-                                pl_df_comp=pl_df_comp, 
-                                periodo_actual_str=periodo_actual, 
-                                periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None,
-                                target_lang=target_lang
-                            )
+                        from src.core.snapshot_vault_manager import SnapshotVaultManager
+                        target_lang = st.session_state.get('idioma_reporte', 'es')
+                        is_closed_act = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+                        snap_res_er = SnapshotVaultManager.get_statement(empresa_seleccionada, periodo_actual, "ER", comp_period=periodo_comp, scale_factor=scale_factor) if is_closed_act else None
+                        snap_er = snap_res_er[0] if snap_res_er else None
+
+                        if snap_er is not None:
+                            preview_df = snap_er.copy()
+                            snap_ex = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "ER")
+                            if not snap_ex or abs(scale_factor - 1000.0) >= 0.01:
+                                from src.reporting.excel_export import generate_excel_report
+                                snap_ex = generate_excel_report(preview_df, title="Estado de Resultados Clasificados", subtitle=f"Expresado en {unidad_medida}")
                             st.session_state['er_preview_df'] = preview_df
-                            st.session_state['er_excel_binary'] = excel_output.getvalue()
-                            
+                            st.session_state['er_excel_binary'] = snap_ex
                             elapsed_time = time.time() - start_time
-                            st.success(f"✅ Estado de Resultados generado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
+                            st.success(f"🔒 Estado de Resultados cargado desde Snapshot inmutable ({periodo_actual}) (Tiempo: {elapsed_time:.2f} s).")
+                        else:
+                            template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                            if not os.path.exists(template_er_path):
+                                st.error(f"❌ No se encontró la plantilla base '{template_er_path}' en la carpeta de la empresa.")
+                            else:
+                                engine = ERGenerator(template_er_path)
+                                excel_output, preview_df = engine.generate(
+                                    pl_df, 
+                                    scale_factor=scale_factor, 
+                                    pl_df_comp=pl_df_comp, 
+                                    periodo_actual_str=periodo_actual, 
+                                    periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None,
+                                    target_lang=target_lang
+                                )
+                                if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                                    preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        preview_df, empresa_seleccionada, "ER", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
+                                st.session_state['er_preview_df'] = preview_df
+                                st.session_state['er_excel_binary'] = excel_output.getvalue()
+                                
+                                elapsed_time = time.time() - start_time
+                                st.success(f"✅ Estado de Resultados generado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
                     except Exception as e:
                         st.error(f"Error generando el reporte: {e}")
 
@@ -667,163 +737,180 @@ def render(empresa_seleccionada, empresa_path):
                         import time
                         start_time = time.time()
                         
+                        from src.core.snapshot_vault_manager import SnapshotVaultManager
                         from src.reporting.cash_flow_generator import CashFlowGenerator
-                        cf_filename = "Estado de Flujos de Efectivo.xlsx" if metodo_flujo == "Directo" else "Estado de Flujos de Efectivo Indirecto.xlsx"
-                        template_cf_path = os.path.join(empresa_path, cf_filename)
-                        
-                        if not os.path.exists(template_cf_path):
-                            import shutil
-                            src_template = os.path.join("templates", cf_filename)
-                            if os.path.exists(src_template):
-                                shutil.copy2(src_template, template_cf_path)
-                                
-                        if not os.path.exists(template_cf_path):
-                            st.error(f"❌ Falta la plantilla '{template_cf_path}'.")
-                        else:
-                            # Cargar mapeos de balance y PL, con fallbacks desde el disco si no están en memoria
-                            map_bal_copy = st.session_state.get('map_balance_df')
-                            if map_bal_copy is None or (isinstance(map_bal_copy, pd.DataFrame) and map_bal_copy.empty):
-                                map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
-                                if os.path.exists(map_bal_path):
-                                    map_bal_copy = pd.read_excel(map_bal_path)
-                                    st.session_state['map_balance_df'] = map_bal_copy
-                                else:
-                                    map_bal_copy = pd.DataFrame()
-                            else:
-                                map_bal_copy = map_bal_copy.copy()
+                        target_lang = st.session_state.get('idioma_reporte', 'es')
+                        is_closed_act_cf = (metodo_flujo == "Directo") and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+                        snap_res_cf = SnapshotVaultManager.get_statement(empresa_seleccionada, periodo_actual, "EFE", comp_period=periodo_comp, scale_factor=scale_factor_cf) if is_closed_act_cf else None
+                        snap_cf = snap_res_cf[0] if snap_res_cf else None
 
-                            map_pl_copy = st.session_state.get('map_pl_df')
-                            if map_pl_copy is None or (isinstance(map_pl_copy, pd.DataFrame) and map_pl_copy.empty):
-                                map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
-                                if os.path.exists(map_pl_path):
-                                    map_pl_copy = pd.read_excel(map_pl_path)
-                                    st.session_state['map_pl_df'] = map_pl_copy
-                                else:
-                                    map_pl_copy = None
-                            else:
-                                map_pl_copy = map_pl_copy.copy()
-                            
-                            target_lang = st.session_state.get('idioma_reporte', 'es')
-                            cf_engine = CashFlowGenerator(template_cf_path)
-                            ex_cf, matriz_audit = cf_engine.generate(
-                                empresa=empresa_seleccionada,
-                                periodo_actual_str=str(periodo_actual),
-                                periodo_comp_str=str(periodo_comp),
-                                map_balance_df=map_bal_copy,
-                                map_pl_df=map_pl_copy,
-                                method=metodo_flujo,
-                                is_consolidado=False,
-                                scale_factor=scale_factor_cf,
-                                target_lang=target_lang
-                            )
-                            
-                            st.session_state['flujo_excel_binary'] = ex_cf.getvalue()
-                            st.session_state['flujo_audit_data'] = matriz_audit
-                            
-                            # Mapear dinámicamente las columnas para Flujo de Efectivo
-                            ex_cf.seek(0)
-                            import openpyxl
-                            import datetime
-                            import re
-                            wb_check = openpyxl.load_workbook(ex_cf, data_only=True)
-                            ws_check = wb_check.active
-                            
-                            name_col_idx = 1
-                            for col in range(1, 10):
-                                for row in range(1, 15):
-                                    val = ws_check.cell(row=row, column=col).value
-                                    if val and str(val).strip().lower() in ["concepto", "descripcion", "detalle", "flujos", "origen/aplicacion"]:
-                                        name_col_idx = col
-                                        break
-                                        
-                            date_cols = []
-                            for col in range(1, ws_check.max_column + 1):
-                                if col == name_col_idx:
-                                    continue
-                                for row in range(1, 10):
-                                    val = ws_check.cell(row=row, column=col).value
-                                    if val is not None:
-                                        is_date = (
-                                            isinstance(val, (datetime.datetime, datetime.date)) or
-                                            (isinstance(val, str) and re.search(r'20\d{2}', val))
-                                        )
-                                        if is_date:
-                                            date_cols.append(col)
-                                            break
-                            date_cols = sorted(list(set(date_cols)))
-                            
-                            val25_col_idx = 3
-                            val24_col_idx = 4
-                            if len(date_cols) >= 2:
-                                val25_col_idx = date_cols[0]
-                                val24_col_idx = date_cols[1]
-                                
-                            nota_col_idx = None
-                            for col in range(name_col_idx + 1, val24_col_idx):
-                                if col != val25_col_idx:
-                                    nota_col_idx = col
-                                    break
-                            if nota_col_idx is None:
-                                nota_col_idx = val25_col_idx + 1 if val25_col_idx + 1 < val24_col_idx else name_col_idx + 1
-                                
-                            header_row_idx = 8
-                            for row in range(1, 15):
-                                v25 = ws_check.cell(row=row, column=val25_col_idx).value
-                                v24 = ws_check.cell(row=row, column=val24_col_idx).value
-                                v_name = ws_check.cell(row=row, column=name_col_idx).value
-                                v_str = f"{v25} {v24} {v_name}".lower()
-                                if any(k in v_str for k in ["flujos de efectivo procedentes", "cobros procedentes", "utilidad (pérdida)", "utilidad (perdida)", "ganancia (pérdida)", "resultado del ejercicio"]):
-                                    header_row_idx = row - 1
-                                    break
-                                elif any(k in v_str for k in ["actual", "anterior", "m$", "31-12", "31 de"]):
-                                    header_row_idx = row
-                                    
-                            ex_cf.seek(0)
-                            df_raw = pd.read_excel(ex_cf, header=None)
-                            df_data = df_raw.iloc[header_row_idx:].reset_index(drop=True)
-                            
-                            col_actual = str(periodo_actual)
-                            col_comp = str(periodo_comp)
-                            if col_actual == col_comp:
-                                col_comp = f"{col_comp} (Comp)"
-                                
-                            def is_cf_title_or_header_row(row_val):
-                                if pd.isna(row_val):
-                                    return True
-                                r_str = str(row_val).strip().lower()
-                                if r_str == "" or r_str == "nan":
-                                    return True
-                                title_patterns = [
-                                    "estados separados de flujos",
-                                    "estado de flujos de efectivo",
-                                    "por los ejercicios terminados",
-                                    "pacifico cable",
-                                    "db terra chile holdco",
-                                    "nota",
-                                    "m$"
-                                ]
-                                return any(pat in r_str for pat in title_patterns)
-
-                            has_nota = (nota_col_idx is not None and 
-                                        nota_col_idx != name_col_idx and 
-                                        nota_col_idx != val25_col_idx and 
-                                        nota_col_idx != val24_col_idx and
-                                        nota_col_idx <= ws_check.max_column)
-
-                            if has_nota:
-                                cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-                                preview_cf = df_data.iloc[:, cols_to_keep].copy()
-                                preview_cf.columns = ["Descripción", "Nota", col_actual, col_comp]
-                            else:
-                                cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-                                preview_cf = df_data.iloc[:, cols_to_keep].copy()
-                                preview_cf.columns = ["Descripción", col_actual, col_comp]
-
-                            preview_cf = preview_cf[~preview_cf["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
-                            
+                        if snap_cf is not None:
+                            preview_cf = snap_cf.copy()
+                            snap_ex_cf = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "EFE")
+                            if not snap_ex_cf or abs(scale_factor_cf - 1000.0) >= 0.01:
+                                from src.reporting.excel_export import generate_excel_report
+                                snap_ex_cf = generate_excel_report(preview_cf, title="Estado de Flujos de Efectivo", subtitle=f"Expresado en {unidad_medida_cf}")
+                            st.session_state['flujo_excel_binary'] = snap_ex_cf
+                            st.session_state['flujo_audit_data'] = []
                             st.session_state['flujo_preview_df'] = preview_cf
                             elapsed_time = time.time() - start_time
-                            st.success(f"✅ Flujo de Efectivo generado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
+                            st.success(f"🔒 Flujo de Efectivo cargado desde Snapshot inmutable ({periodo_actual}) (Tiempo: {elapsed_time:.2f} s).")
+                        else:
+                            cf_filename = "Estado de Flujos de Efectivo.xlsx" if metodo_flujo == "Directo" else "Estado de Flujos de Efectivo Indirecto.xlsx"
+                            template_cf_path = os.path.join(empresa_path, cf_filename)
+                            
+                            if not os.path.exists(template_cf_path):
+                                import shutil
+                                src_template = os.path.join("templates", cf_filename)
+                                if os.path.exists(src_template):
+                                    shutil.copy2(src_template, template_cf_path)
+                                    
+                            if not os.path.exists(template_cf_path):
+                                st.error(f"❌ Falta la plantilla '{template_cf_path}'.")
+                            else:
+                                # Cargar mapeos de balance y PL, con fallbacks desde el disco si no están en memoria
+                                map_bal_copy = st.session_state.get('map_balance_df')
+                                if map_bal_copy is None or (isinstance(map_bal_copy, pd.DataFrame) and map_bal_copy.empty):
+                                    map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+                                    if os.path.exists(map_bal_path):
+                                        map_bal_copy = pd.read_excel(map_bal_path)
+                                        st.session_state['map_balance_df'] = map_bal_copy
+                                    else:
+                                        map_bal_copy = pd.DataFrame()
+                                else:
+                                    map_bal_copy = map_bal_copy.copy()
+
+                                map_pl_copy = st.session_state.get('map_pl_df')
+                                if map_pl_copy is None or (isinstance(map_pl_copy, pd.DataFrame) and map_pl_copy.empty):
+                                    map_pl_path = os.path.join(empresa_path, "map_pl.xlsx")
+                                    if os.path.exists(map_pl_path):
+                                        map_pl_copy = pd.read_excel(map_pl_path)
+                                        st.session_state['map_pl_df'] = map_pl_copy
+                                    else:
+                                        map_pl_copy = None
+                                else:
+                                    map_pl_copy = map_pl_copy.copy()
+                                
+                                cf_engine = CashFlowGenerator(template_cf_path)
+                                ex_cf, matriz_audit = cf_engine.generate(
+                                    empresa=empresa_seleccionada,
+                                    periodo_actual_str=str(periodo_actual),
+                                    periodo_comp_str=str(periodo_comp),
+                                    map_balance_df=map_bal_copy,
+                                    map_pl_df=map_pl_copy,
+                                    method=metodo_flujo,
+                                    is_consolidado=False,
+                                    scale_factor=scale_factor_cf,
+                                    target_lang=target_lang
+                                )
+                                
+                                st.session_state['flujo_excel_binary'] = ex_cf.getvalue()
+                                st.session_state['flujo_audit_data'] = matriz_audit
+                                
+                                # Mapear dinámicamente las columnas para Flujo de Efectivo
+                                ex_cf.seek(0)
+                                import openpyxl
+                                import datetime
+                                import re
+                                wb_check = openpyxl.load_workbook(ex_cf, data_only=True)
+                                ws_check = wb_check.active
+                                
+                                name_col_idx = 1
+                                for col in range(1, 10):
+                                    for row in range(1, 15):
+                                        val = ws_check.cell(row=row, column=col).value
+                                        if val and str(val).strip().lower() in ["concepto", "descripcion", "detalle", "flujos", "origen/aplicacion"]:
+                                            name_col_idx = col
+                                            break
+                                            
+                                date_cols = []
+                                for col in range(1, ws_check.max_column + 1):
+                                    if col == name_col_idx:
+                                        continue
+                                    for row in range(1, 10):
+                                        val = ws_check.cell(row=row, column=col).value
+                                        if val is not None:
+                                            is_date = (
+                                                isinstance(val, (datetime.datetime, datetime.date)) or
+                                                (isinstance(val, str) and re.search(r'20\d{2}', val))
+                                            )
+                                            if is_date:
+                                                date_cols.append(col)
+                                                break
+                                date_cols = sorted(list(set(date_cols)))
+                                
+                                val25_col_idx = 3
+                                val24_col_idx = 4
+                                if len(date_cols) >= 2:
+                                    val25_col_idx = date_cols[0]
+                                    val24_col_idx = date_cols[1]
+                                    
+                                nota_col_idx = None
+                                for col in range(name_col_idx + 1, val24_col_idx):
+                                    if col != val25_col_idx:
+                                        nota_col_idx = col
+                                        break
+                                if nota_col_idx is None:
+                                    nota_col_idx = val25_col_idx + 1 if val25_col_idx + 1 < val24_col_idx else name_col_idx + 1
+                                    
+                                header_row_idx = 8
+                                for row in range(1, 15):
+                                    v25 = ws_check.cell(row=row, column=val25_col_idx).value
+                                    v24 = ws_check.cell(row=row, column=val24_col_idx).value
+                                    v_name = ws_check.cell(row=row, column=name_col_idx).value
+                                    v_str = f"{v25} {v24} {v_name}".lower()
+                                    if any(k in v_str for k in ["flujos de efectivo procedentes", "cobros procedentes", "utilidad (pérdida)", "utilidad (perdida)", "ganancia (pérdida)", "resultado del ejercicio"]):
+                                        header_row_idx = row - 1
+                                        break
+                                    elif any(k in v_str for k in ["actual", "anterior", "m$", "31-12", "31 de"]):
+                                        header_row_idx = row
+                                        
+                                ex_cf.seek(0)
+                                df_raw = pd.read_excel(ex_cf, header=None)
+                                df_data = df_raw.iloc[header_row_idx:].reset_index(drop=True)
+                                
+                                col_actual = str(periodo_actual)
+                                col_comp = str(periodo_comp)
+                                if col_actual == col_comp:
+                                    col_comp = f"{col_comp} (Comp)"
+                                    
+                                def is_cf_title_or_header_row(row_val):
+                                    if pd.isna(row_val):
+                                        return True
+                                    r_str = str(row_val).strip().lower()
+                                    if r_str == "" or r_str == "nan":
+                                        return True
+                                    title_patterns = [
+                                        "estados separados de flujos",
+                                        "estado de flujos de efectivo",
+                                        "por los ejercicios terminados",
+                                        "pacifico cable",
+                                        "db terra chile holdco",
+                                        "nota",
+                                        "m$"
+                                    ]
+                                    return any(pat in r_str for pat in title_patterns)
+
+                                has_nota = (nota_col_idx is not None and 
+                                            nota_col_idx != name_col_idx and 
+                                            nota_col_idx != val25_col_idx and 
+                                            nota_col_idx != val24_col_idx and
+                                            nota_col_idx <= ws_check.max_column)
+
+                                if has_nota:
+                                    cols_to_keep = [name_col_idx - 1, nota_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                    preview_cf = df_data.iloc[:, cols_to_keep].copy()
+                                    preview_cf.columns = ["Descripción", "Nota", col_actual, col_comp]
+                                else:
+                                    cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                    preview_cf = df_data.iloc[:, cols_to_keep].copy()
+                                    preview_cf.columns = ["Descripción", col_actual, col_comp]
+
+                                preview_cf = preview_cf[~preview_cf["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
+                                
+                                st.session_state['flujo_preview_df'] = preview_cf
+                                elapsed_time = time.time() - start_time
+                                st.success(f"✅ Flujo de Efectivo generado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
                     except Exception as e:
                         st.error(f"Error generando Flujo de Efectivo: {e}")
                         
@@ -928,115 +1015,137 @@ def render(empresa_seleccionada, empresa_path):
             btn_run_patrimonio = st.form_submit_button("🚀 Ejecutar Cambios en el Patrimonio", type="primary", use_container_width=True)
 
         if btn_run_patrimonio:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            from src.core.excel_utils import clean_patrimonio_preview_df
+            import time
+            start_time = time.time()
             scale_factor = 1000.0 if "M$" in st.session_state.get('um_bal', 'M$') else 1.0
-            # Auto-generar Balance si no está en sesión
-            if 'preview_df' not in st.session_state or st.session_state['preview_df'] is None:
-                tmpl_bal = os.path.join(empresa_path, "Balance clasificado.xlsx")
-                tb_act = st.session_state.get('tb_df')
-                if tb_act is None or (isinstance(tb_act, pd.DataFrame) and tb_act.empty):
-                    from src.models.trial_balance_db import TrialBalanceDB
-                    tb_act = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
-                    st.session_state['tb_df'] = tb_act
+            is_closed_act_pat = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+            snap_res_pat = SnapshotVaultManager.get_statement(empresa_seleccionada, periodo_actual, "PATRIMONIO", comp_period=periodo_comp, scale_factor=scale_factor) if is_closed_act_pat else None
+            snap_pat = snap_res_pat[0] if snap_res_pat else None
 
-                tb_comp = st.session_state.get('tb_df_comp')
-                if (tb_comp is None or (isinstance(tb_comp, pd.DataFrame) and tb_comp.empty)) and periodo_comp != "Ninguno":
-                    from src.models.trial_balance_db import TrialBalanceDB
-                    tb_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp)
-                    st.session_state['tb_df_comp'] = tb_comp
-
-                map_bal = st.session_state.get('map_balance_df')
-                if map_bal is None or (isinstance(map_bal, pd.DataFrame) and map_bal.empty):
-                    map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
-                    if os.path.exists(map_bal_path):
-                        map_bal = pd.read_excel(map_bal_path, dtype=str)
-                        st.session_state['map_balance_df'] = map_bal
-
-                if os.path.exists(tmpl_bal) and tb_act is not None and map_bal is not None:
-                    import importlib
-                    import src.reporting.balance_generator as bg_mod
-                    importlib.reload(bg_mod)
-                    from src.reporting.balance_generator import BalanceGenerator
-                    from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
-                    import openpyxl
-                    b_engine = BalanceGenerator(tmpl_bal)
-                    b_out = b_engine.generate(tb_act, map_bal, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
-                    st.session_state['balance_excel_binary'] = b_out.getvalue()
-                    b_out.seek(0)
-                    wb_c = openpyxl.load_workbook(b_out, data_only=True)
-                    ws_c = wb_c.active
-                    b_cfg = read_template_config(wb_c)
-                    if b_cfg is None:
-                        n_col, nt_col, v_act, v_comp = detect_balance_columns(ws_c, wb_c)
-                        b_cfg = {"name_col": n_col, "nota_col": nt_col if nt_col else 0, "val_actual_col": v_act, "val_comp_col": v_comp, "data_start_row": 5}
-                    c_act = str(periodo_actual)
-                    c_cmp = str(periodo_comp) if periodo_comp != "Ninguno" else f"{c_act} (Comp)"
-                    b_out.seek(0)
-                    st.session_state['preview_df'] = read_excel_preview(b_out, b_cfg, c_act, c_cmp)
-
-            # Auto-generar ER si no está en sesión
-            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
-                tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
-                pl_act = st.session_state.get('pl_df')
-                if pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty):
-                    from src.models.pl_cubo_db import PlCuboDB
-                    pl_act = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
-                    st.session_state['pl_df'] = pl_act
-
-                pl_cmp = st.session_state.get('pl_df_comp')
-                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and periodo_comp != "Ninguno":
-                    from src.models.pl_cubo_db import PlCuboDB
-                    pl_cmp = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp)
-                    st.session_state['pl_df_comp'] = pl_cmp
-
-                if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
-                    from src.reporting.er_generator import ERGenerator
-                    er_eng = ERGenerator(tmpl_er)
-                    er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
-                    st.session_state['er_preview_df'] = er_prev
-                    st.session_state['er_excel_binary'] = er_out.getvalue()
-
-            if 'preview_df' not in st.session_state or 'er_preview_df' not in st.session_state:
-                st.warning("⚠️ No se pudieron cargar los datos de Balance y P&L. Por favor, asegúrate de tener un Trial Balance cargado.")
+            if snap_pat is not None:
+                prev = clean_patrimonio_preview_df(snap_pat.copy())
+                snap_ex_pat = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "PATRIMONIO")
+                if not snap_ex_pat or abs(scale_factor - 1000.0) >= 0.01:
+                    from src.reporting.excel_export import generate_excel_report
+                    snap_ex_pat = generate_excel_report(prev, title="Estado de Cambios en el Patrimonio", subtitle=f"Expresado en {st.session_state.get('um_bal', 'M$')}")
+                st.session_state['pat_excel_binary'] = snap_ex_pat
+                st.session_state['pat_preview_df'] = prev
+                elapsed_time = time.time() - start_time
+                st.success(f"🔒 Estado de Patrimonio cargado desde Snapshot inmutable ({periodo_actual}) (Tiempo: {elapsed_time:.2f} s).")
             else:
-                with st.spinner("Realizando cuadratura de capital, reservas e inyectando resultados del ER..."):
-                    try:
-                        import sys
-                        import time
-                        start_time = time.time()
-                        from src.reporting.patrimonio_generator import PatrimonioGenerator
-                        
-                        template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
-                        if not os.path.exists(template_pat_path):
-                            st.error(f"❌ No se encontró la plantilla '{template_pat_path}'.")
-                        else:
-                            bal_df = st.session_state['preview_df'].copy()
-                            pl_df = st.session_state['er_preview_df'].copy()
+                # Auto-generar Balance si no está en sesión
+                if 'preview_df' not in st.session_state or st.session_state['preview_df'] is None:
+                    tmpl_bal = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                    tb_act = st.session_state.get('tb_df')
+                    if tb_act is None or (isinstance(tb_act, pd.DataFrame) and tb_act.empty):
+                        from src.models.trial_balance_db import TrialBalanceDB
+                        tb_act = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
+                        st.session_state['tb_df'] = tb_act
+
+                    tb_comp = st.session_state.get('tb_df_comp')
+                    if (tb_comp is None or (isinstance(tb_comp, pd.DataFrame) and tb_comp.empty)) and periodo_comp != "Ninguno":
+                        from src.models.trial_balance_db import TrialBalanceDB
+                        tb_comp = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_comp)
+                        st.session_state['tb_df_comp'] = tb_comp
+
+                    map_bal = st.session_state.get('map_balance_df')
+                    if map_bal is None or (isinstance(map_bal, pd.DataFrame) and map_bal.empty):
+                        map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+                        if os.path.exists(map_bal_path):
+                            map_bal = pd.read_excel(map_bal_path, dtype=str)
+                            st.session_state['map_balance_df'] = map_bal
+
+                    if os.path.exists(tmpl_bal) and tb_act is not None and map_bal is not None:
+                        import importlib
+                        import src.reporting.balance_generator as bg_mod
+                        importlib.reload(bg_mod)
+                        from src.reporting.balance_generator import BalanceGenerator
+                        from src.core.excel_utils import detect_balance_columns, read_template_config, read_excel_preview
+                        import openpyxl
+                        b_engine = BalanceGenerator(tmpl_bal)
+                        b_out = b_engine.generate(tb_act, map_bal, scale_factor=scale_factor, tb_df_comp=tb_comp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                        st.session_state['balance_excel_binary'] = b_out.getvalue()
+                        b_out.seek(0)
+                        wb_c = openpyxl.load_workbook(b_out, data_only=True)
+                        ws_c = wb_c.active
+                        b_cfg = read_template_config(wb_c)
+                        if b_cfg is None:
+                            n_col, nt_col, v_act, v_comp = detect_balance_columns(ws_c, wb_c)
+                            b_cfg = {"name_col": n_col, "nota_col": nt_col if nt_col else 0, "val_actual_col": v_act, "val_comp_col": v_comp, "data_start_row": 5}
+                        c_act = str(periodo_actual)
+                        c_cmp = str(periodo_comp) if periodo_comp != "Ninguno" else f"{c_act} (Comp)"
+                        b_out.seek(0)
+                        b_prev = read_excel_preview(b_out, b_cfg, c_act, c_cmp)
+                        if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                            b_prev = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                b_prev, empresa_seleccionada, "BALANCE", periodo_actual, periodo_comp, scale_factor=scale_factor
+                            )
+                        st.session_state['preview_df'] = b_prev
+
+                # Auto-generar ER si no está en sesión
+                if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                    tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                    pl_act = st.session_state.get('pl_df')
+                    if pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty):
+                        from src.models.pl_cubo_db import PlCuboDB
+                        pl_act = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_actual)
+                        st.session_state['pl_df'] = pl_act
+
+                    pl_cmp = st.session_state.get('pl_df_comp')
+                    if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and periodo_comp != "Ninguno":
+                        from src.models.pl_cubo_db import PlCuboDB
+                        pl_cmp = PlCuboDB.get_pl_cubo(empresa_seleccionada, periodo_comp)
+                        st.session_state['pl_df_comp'] = pl_cmp
+
+                    if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
+                        from src.reporting.er_generator import ERGenerator
+                        er_eng = ERGenerator(tmpl_er)
+                        er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                        if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                            er_prev = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                er_prev, empresa_seleccionada, "ER", periodo_actual, periodo_comp, scale_factor=scale_factor
+                            )
+                        st.session_state['er_preview_df'] = er_prev
+                        st.session_state['er_excel_binary'] = er_out.getvalue()
+
+                if 'preview_df' not in st.session_state or 'er_preview_df' not in st.session_state:
+                    st.warning("⚠️ No se pudieron cargar los datos de Balance y P&L. Por favor, asegúrate de tener un Trial Balance cargado.")
+                else:
+                    with st.spinner("Realizando cuadratura de capital, reservas e inyectando resultados del ER..."):
+                        try:
+                            import sys
+                            from src.reporting.patrimonio_generator import PatrimonioGenerator
                             
-                            target_lang = st.session_state.get('idioma_reporte', 'es')
-                            pat_engine = PatrimonioGenerator(template_pat_path)
-                            ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None, empresa=empresa_seleccionada, target_lang=target_lang)
-                            st.session_state['pat_excel_binary'] = ex_pat
-                            
-                            ex_pat.seek(0)
-                            from src.core.excel_utils import detect_patrimonio_skiprows
-                            pat_skip = detect_patrimonio_skiprows(ex_pat)
-                            ex_pat.seek(0)
-                            prev = pd.read_excel(ex_pat, skiprows=pat_skip)
-                            from src.core.excel_utils import clean_preview_dataframe
-                            prev = clean_preview_dataframe(prev)
-                            first_col = prev.columns[0]
-                            prev = prev.dropna(how='all', subset=[first_col])
-                            st.session_state['pat_preview_df'] = prev
-                            
-                            elapsed_time = time.time() - start_time
-                            st.success(f"✅ Estado de Patrimonio generado matemáticamente contra el P&L (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
-                    except Exception as e:
-                        st.error(f"Error generando Patrimonio: {e}")
+                            template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
+                            if not os.path.exists(template_pat_path):
+                                st.error(f"❌ No se encontró la plantilla '{template_pat_path}'.")
+                            else:
+                                bal_df = st.session_state['preview_df'].copy()
+                                pl_df = st.session_state['er_preview_df'].copy()
+                                
+                                target_lang = st.session_state.get('idioma_reporte', 'es')
+                                pat_engine = PatrimonioGenerator(template_pat_path)
+                                ex_pat = pat_engine.generate(bal_df, pl_df, periodo_actual_str=str(periodo_actual), periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None, empresa=empresa_seleccionada, target_lang=target_lang)
+                                st.session_state['pat_excel_binary'] = ex_pat
+                                
+                                ex_pat.seek(0)
+                                from src.core.excel_utils import detect_patrimonio_skiprows
+                                pat_skip = detect_patrimonio_skiprows(ex_pat)
+                                ex_pat.seek(0)
+                                prev = pd.read_excel(ex_pat, skiprows=pat_skip)
+                                prev = clean_patrimonio_preview_df(prev)
+                                st.session_state['pat_preview_df'] = prev
+                                
+                                elapsed_time = time.time() - start_time
+                                st.success(f"✅ Estado de Patrimonio generado matemáticamente contra el P&L (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
+                        except Exception as e:
+                            st.error(f"Error generando Patrimonio: {e}")
                         
         if 'pat_preview_df' in st.session_state:
-            disp = st.session_state['pat_preview_df'].copy()
-            for col in disp.columns[1:]:
-                disp[col] = pd.to_numeric(disp[col], errors='coerce')
+            from src.core.excel_utils import clean_patrimonio_preview_df
+            disp = clean_patrimonio_preview_df(st.session_state['pat_preview_df'].copy())
             
 
             from src.reporting.formatting import apply_corporate_style
@@ -1100,117 +1209,141 @@ def render(empresa_seleccionada, empresa_path):
             btn_run_ori = st.form_submit_button("🚀 Ejecutar Resultados Integrales", type="primary", use_container_width=True)
 
         if btn_run_ori:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            import time
+            start_time = time.time()
             scale_factor = 1000.0 if "M$" in st.session_state.get('um_er', 'M$') else 1.0
-            # Auto-generar ER si no está en sesión
-            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
-                tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
-                from src.core.sabana_builder import build_pl_sabana
-                pl_act = st.session_state.get('pl_df')
-                map_pl = st.session_state.get('map_pl_df')
-                tb_act = st.session_state.get('tb_df')
-                if (pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty)) and tb_act is not None and map_pl is not None:
-                    pl_act = build_pl_sabana(None, map_pl, tb_act)
-                    st.session_state['pl_df'] = pl_act
+            is_closed_act_ori = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+            snap_res_ori = SnapshotVaultManager.get_statement(empresa_seleccionada, periodo_actual, "ORI", comp_period=periodo_comp, scale_factor=scale_factor) if is_closed_act_ori else None
+            snap_ori = snap_res_ori[0] if snap_res_ori else None
 
-                pl_cmp = st.session_state.get('pl_df_comp')
-                tb_cmp = st.session_state.get('tb_df_comp')
-                if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and tb_cmp is not None and map_pl is not None and periodo_comp != "Ninguno":
-                    pl_cmp = build_pl_sabana(None, map_pl, tb_cmp)
-                    st.session_state['pl_df_comp'] = pl_cmp
-
-                if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
-                    from src.reporting.er_generator import ERGenerator
-                    er_eng = ERGenerator(tmpl_er)
-                    er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
-                    st.session_state['er_preview_df'] = er_prev
-                    st.session_state['er_excel_binary'] = er_out.getvalue()
-
-            if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
-                st.warning("⚠️ No se pudieron cargar los resultados operacionales para calcular el ORI. Por favor verifica que el periodo tenga un Trial Balance cargado.")
+            if snap_ori is not None:
+                prev = snap_ori.copy()
+                snap_ex_ori = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "ORI")
+                if not snap_ex_ori or abs(scale_factor - 1000.0) >= 0.01:
+                    from src.reporting.excel_export import generate_excel_report
+                    snap_ex_ori = generate_excel_report(prev, title="Estado de Resultados Integrales", subtitle=f"Expresado en {st.session_state.get('um_er', 'M$')}")
+                st.session_state['ori_excel_binary'] = snap_ex_ori
+                st.session_state['ori_preview_df'] = prev
+                elapsed_time = time.time() - start_time
+                st.success(f"🔒 Estado de Resultados Integrales cargado desde Snapshot inmutable ({periodo_actual}) (Tiempo: {elapsed_time:.2f} s).")
             else:
-                with st.spinner("Desplegando componentes de otro resultado integral..."):
-                    try:
-                        import sys
-                        import time
-                        start_time = time.time()
-                        from src.reporting.ori_generator import OriGenerator
-                        template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
-                        if not os.path.exists(template_ori_path):
-                            st.error(f"❌ No se encontró la plantilla '{template_ori_path}'.")
-                        else:
-                            pl_df = st.session_state['er_preview_df'].copy()
-                            
-                            target_lang = st.session_state.get('idioma_reporte', 'es')
-                            ori_engine = OriGenerator(template_ori_path)
-                            ex_ori = ori_engine.generate(
-                                pl_df, 
-                                periodo_actual_str=str(periodo_actual), 
-                                periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None,
-                                bal_preview_df=st.session_state.get('preview_df'),
-                                empresa=empresa_seleccionada,
-                                target_lang=target_lang
+                # Auto-generar ER si no está en sesión
+                if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                    tmpl_er = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                    from src.core.sabana_builder import build_pl_sabana
+                    pl_act = st.session_state.get('pl_df')
+                    map_pl = st.session_state.get('map_pl_df')
+                    tb_act = st.session_state.get('tb_df')
+                    if (pl_act is None or (isinstance(pl_act, pd.DataFrame) and pl_act.empty)) and tb_act is not None and map_pl is not None:
+                        pl_act = build_pl_sabana(None, map_pl, tb_act)
+                        st.session_state['pl_df'] = pl_act
+
+                    pl_cmp = st.session_state.get('pl_df_comp')
+                    tb_cmp = st.session_state.get('tb_df_comp')
+                    if (pl_cmp is None or (isinstance(pl_cmp, pd.DataFrame) and pl_cmp.empty)) and tb_cmp is not None and map_pl is not None and periodo_comp != "Ninguno":
+                        pl_cmp = build_pl_sabana(None, map_pl, tb_cmp)
+                        st.session_state['pl_df_comp'] = pl_cmp
+
+                    if os.path.exists(tmpl_er) and pl_act is not None and not pl_act.empty:
+                        from src.reporting.er_generator import ERGenerator
+                        er_eng = ERGenerator(tmpl_er)
+                        er_out, er_prev = er_eng.generate(pl_act, scale_factor=scale_factor, pl_df_comp=pl_cmp, periodo_actual_str=periodo_actual, periodo_comp_str=periodo_comp if periodo_comp != "Ninguno" else None)
+                        if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                            er_prev = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                er_prev, empresa_seleccionada, "ER", periodo_actual, periodo_comp, scale_factor=scale_factor
                             )
-                            st.session_state['ori_excel_binary'] = ex_ori
-                            
-                            # Mapear dinámicamente las columnas para Resultados Integrales
-                            ex_ori.seek(0)
-                            import openpyxl
-                            import datetime
-                            import re
-                            wb_check = openpyxl.load_workbook(ex_ori, data_only=True)
-                            ws_check = wb_check.active
-                            
-                            name_col_idx = 1
-                            for col in range(1, 10):
-                                for row in range(1, 15):
-                                    val = ws_check.cell(row=row, column=col).value
-                                    if val and str(val).strip().lower() in ["detalle", "concepto", "clasificacion", "descripcion"]:
-                                        name_col_idx = col
-                                        break
-                                        
-                            date_cols = []
-                            for col in range(1, ws_check.max_column + 1):
-                                if col == name_col_idx:
-                                    continue
-                                for row in range(1, 10):
-                                    val = ws_check.cell(row=row, column=col).value
-                                    if val is not None:
-                                        is_date = (
-                                            isinstance(val, (datetime.datetime, datetime.date)) or
-                                            (isinstance(val, str) and re.search(r'20\d{2}', val))
-                                        )
-                                        if is_date:
-                                            date_cols.append(col)
+                        st.session_state['er_preview_df'] = er_prev
+                        st.session_state['er_excel_binary'] = er_out.getvalue()
+
+                if 'er_preview_df' not in st.session_state or st.session_state['er_preview_df'] is None:
+                    st.warning("⚠️ No se pudieron cargar los resultados operacionales para calcular el ORI. Por favor verifica que el periodo tenga un Trial Balance cargado.")
+                else:
+                    with st.spinner("Desplegando componentes de otro resultado integral..."):
+                        try:
+                            import sys
+                            from src.reporting.ori_generator import OriGenerator
+                            template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
+                            if not os.path.exists(template_ori_path):
+                                st.error(f"❌ No se encontró la plantilla '{template_ori_path}'.")
+                            else:
+                                pl_df = st.session_state['er_preview_df'].copy()
+                                
+                                target_lang = st.session_state.get('idioma_reporte', 'es')
+                                ori_engine = OriGenerator(template_ori_path)
+                                ex_ori = ori_engine.generate(
+                                    pl_df, 
+                                    periodo_actual_str=str(periodo_actual), 
+                                    periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None,
+                                    bal_preview_df=st.session_state.get('preview_df'),
+                                    empresa=empresa_seleccionada,
+                                    target_lang=target_lang
+                                )
+                                st.session_state['ori_excel_binary'] = ex_ori
+                                
+                                # Mapear dinámicamente las columnas para Resultados Integrales
+                                ex_ori.seek(0)
+                                import openpyxl
+                                import datetime
+                                import re
+                                wb_check = openpyxl.load_workbook(ex_ori, data_only=True)
+                                ws_check = wb_check.active
+                                
+                                name_col_idx = 1
+                                for col in range(1, 10):
+                                    for row in range(1, 15):
+                                        val = ws_check.cell(row=row, column=col).value
+                                        if val and str(val).strip().lower() in ["detalle", "concepto", "clasificacion", "descripcion"]:
+                                            name_col_idx = col
                                             break
-                            date_cols = sorted(list(set(date_cols)))
-                            
-                            val25_col_idx = 2
-                            val24_col_idx = 3
-                            if len(date_cols) >= 2:
-                                val25_col_idx = date_cols[0]
-                                val24_col_idx = date_cols[1]
+                                            
+                                date_cols = []
+                                for col in range(1, ws_check.max_column + 1):
+                                    if col == name_col_idx:
+                                        continue
+                                    for row in range(1, 10):
+                                        val = ws_check.cell(row=row, column=col).value
+                                        if val is not None:
+                                            is_date = (
+                                                isinstance(val, (datetime.datetime, datetime.date)) or
+                                                (isinstance(val, str) and re.search(r'20\d{2}', val))
+                                            )
+                                            if is_date:
+                                                date_cols.append(col)
+                                                break
+                                date_cols = sorted(list(set(date_cols)))
                                 
-                            ex_ori.seek(0)
-                            from src.core.excel_utils import detect_general_skiprows
-                            ori_skip = detect_general_skiprows(ex_ori)
-                            ex_ori.seek(0)
-                            df_raw = pd.read_excel(ex_ori, skiprows=ori_skip)
-                            
-                            col_actual = str(periodo_actual)
-                            col_comp = str(periodo_comp)
-                            if col_actual == col_comp:
-                                col_comp = f"{col_comp} (Comp)"
+                                val25_col_idx = 2
+                                val24_col_idx = 3
+                                if len(date_cols) >= 2:
+                                    val25_col_idx = date_cols[0]
+                                    val24_col_idx = date_cols[1]
+                                    
+                                ex_ori.seek(0)
+                                from src.core.excel_utils import detect_general_skiprows
+                                ori_skip = detect_general_skiprows(ex_ori)
+                                ex_ori.seek(0)
+                                df_raw = pd.read_excel(ex_ori, skiprows=ori_skip)
                                 
-                            cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
-                            prev = df_raw.iloc[:, cols_to_keep].copy()
-                            prev.columns = ["Detalle", col_actual, col_comp]
-                            prev = prev.dropna(how='all', subset=["Detalle"])
-                            st.session_state['ori_preview_df'] = prev
-                            
-                            elapsed_time = time.time() - start_time
-                            st.success(f"✅ Estado de Resultados Integrales cargado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
-                    except Exception as e:
-                        st.error(f"Error generando ORI: {e}")
+                                col_actual = str(periodo_actual)
+                                col_comp = str(periodo_comp)
+                                if col_actual == col_comp:
+                                    col_comp = f"{col_comp} (Comp)"
+                                    
+                                cols_to_keep = [name_col_idx - 1, val25_col_idx - 1, val24_col_idx - 1]
+                                prev = df_raw.iloc[:, cols_to_keep].copy()
+                                prev.columns = ["Detalle", col_actual, col_comp]
+                                prev = prev.dropna(how='all', subset=["Detalle"])
+                                if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                                    prev = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        prev, empresa_seleccionada, "ORI", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
+                                st.session_state['ori_preview_df'] = prev
+                                
+                                elapsed_time = time.time() - start_time
+                                st.success(f"✅ Estado de Resultados Integrales cargado con éxito (Tiempo de ejecución: {elapsed_time:.2f} segundos).")
+                        except Exception as e:
+                            st.error(f"Error generando ORI: {e}")
                         
         if 'ori_preview_df' in st.session_state:
             disp = st.session_state['ori_preview_df'].copy()

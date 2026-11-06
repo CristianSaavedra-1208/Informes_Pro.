@@ -17,13 +17,20 @@ def set_cell_bg(cell, fill_color):
     clean_color = str(fill_color).replace('#', '').strip()
     if len(clean_color) == 8:
         clean_color = clean_color[2:]
-    shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), clean_color))
-    cell._tc.get_or_add_tcPr().append(shading_elm)
+    tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('shd'):
+            tcPr.remove(c)
+    shading_elm = parse_xml(r'<w:shd {} w:val="clear" w:color="auto" w:fill="{}"/>'.format(nsdecls('w'), clean_color))
+    tcPr.append(shading_elm)
 
 
 def set_cell_margins(cell, top=35, bottom=35, left=50, right=50):
     """Ajusta los márgenes internos (padding) de la celda de Word en dxa (1 pt = 20 dxa)."""
     tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('tcMar'):
+            tcPr.remove(c)
     tcMar = parse_xml(f'<w:tcMar {nsdecls("w")}><w:top w:w="{top}" w:type="dxa"/><w:bottom w:w="{bottom}" w:type="dxa"/><w:left w:w="{left}" w:type="dxa"/><w:right w:w="{right}" w:type="dxa"/></w:tcMar>')
     tcPr.append(tcMar)
 
@@ -31,6 +38,9 @@ def set_cell_margins(cell, top=35, bottom=35, left=50, right=50):
 def set_cell_borders(cell, top=None, bottom=None):
     """Inyecta bordes OXML a una celda de Word (estilo contable idéntico a pantalla)."""
     tcPr = cell._tc.get_or_add_tcPr()
+    for c in list(tcPr):
+        if c.tag.endswith('tcBorders'):
+            tcPr.remove(c)
     borders_xml = f'<w:tcBorders {nsdecls("w")}>'
     if top and isinstance(top, dict) and top.get('val') not in ('none', None):
         borders_xml += f'<w:top w:val="{top.get("val", "single")}" w:sz="{top.get("sz", "6")}" w:space="0" w:color="{top.get("color", "000000")}"/>'
@@ -47,6 +57,40 @@ def set_cell_borders(cell, top=None, bottom=None):
     tcPr.append(parse_xml(borders_xml))
 
 
+def _is_total_or_subtotal_label(text_str: str) -> bool:
+    """Identifica filas de totales y subtotales sin falsos positivos en líneas de detalle."""
+    if not text_str:
+        return False
+    s = str(text_str).replace("\xa0", " ").strip().lower()
+    if any(excl in s for excl in [
+        "resultado por unidad", "resultados por unidad",
+        "resultado por acción", "resultado por accion", "per share",
+        "resultado por inversion", "resultado por inversión",
+        "resultado por impuesto", "ganancia (perdida) por impuesto", "ganancia (pérdida) por impuesto",
+        "ganancias acumuladas", "pérdidas acumuladas", "perdidas acumuladas", "resultados acumulados",
+        "ganancia (pérdida) acumulada", "ganancias (pérdidas) acumuladas"
+    ]):
+        return False
+    if s in ["ganancia (pérdida)", "ganancia (perdida)", "ganancias (pérdidas)", "ganancias (perdidas)", "profit (loss)"]:
+        return False
+    if ("saldo al " in s and "1 de enero" not in s and "inicial" not in s) or ("balance as of " in s and "january 1" not in s and "opening" not in s):
+        return True
+    return any(k in s for k in [
+        "total", "sub total", "subtotal",
+        "ganancia bruta", "margen bruto", "gross profit",
+        "ganancia antes de", "resultado antes de", "utilidad antes de", "profit before tax", "loss before tax",
+        "ganancias (pérdida) del ejercicio", "ganancia (pérdida) del ejercicio",
+        "ganancias (perdida) del ejercicio", "ganancia (perdida) del ejercicio",
+        "ganancia (pérdida)", "ganancias (pérdidas)",
+        "resultado del ejercicio", "resultado final", "resultado integral",
+        "(pérdida) procedente de operaciones continuadas", "(perdida) procedente de operaciones continuadas",
+        "pérdida procedente de operaciones continuadas", "perdida procedente de operaciones continuadas",
+        "procedentes de actividades de operación", "utilizados en actividades de inversión",
+        "procedentes de actividades de financiación",
+        "saldo final", "incremento (disminución)", "incremento neto"
+    ])
+
+
 def convert_border_to_docx(border_side):
     """Convierte un borde de openpyxl al formato de diccionario docx OXML."""
     if not border_side or border_side.style is None or str(border_side.style).lower() in ['none', '']:
@@ -61,7 +105,7 @@ def convert_border_to_docx(border_side):
             color_hex = c_rgb
 
     if style == 'double':
-        return {'val': 'double', 'sz': '12', 'color': color_hex}
+        return {'val': 'single', 'sz': '6', 'color': color_hex}
     elif style in ('medium', 'mediumDashed', 'mediumDashDot', 'mediumDashDotDot', 'thick'):
         return {'val': 'single', 'sz': '12', 'color': color_hex}
     elif style in ('dashed', 'dashDot', 'dashDotDot'):
@@ -138,13 +182,13 @@ def format_accounting_val(val, is_category_header=False, row_name="", target_lan
     
     # Si es número de punto flotante o entero
     if isinstance(val, (int, float)):
-        if is_per_share or (isinstance(val, float) and abs(val) < 10.0 and val != 0 and not val.is_integer()):
+        if isinstance(val, float) and abs(val) < 10.0 and val != 0 and not val.is_integer():
             if val < 0:
                 return f"({abs(val):,.2f})" if is_en else f"({abs(val):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
             else:
                 return f"{val:,.2f}" if is_en else f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         if val == 0:
-            zero_str = "0.00" if (is_per_share and is_en) else ("0,00" if is_per_share else ("0" if is_category_header else "-"))
+            zero_str = "0" if is_category_header else "-"
             return zero_str
         elif val < 0:
             return f"({abs(val):,.0f})" if is_en else f"({abs(val):,.0f})".replace(",", ".")
@@ -155,13 +199,13 @@ def format_accounting_val(val, is_category_header=False, row_name="", target_lan
         num = float(str(val).replace(",", ""))
         if pd.isna(num):
             return ""
-        if is_per_share or (abs(num) < 10.0 and num != 0 and not num.is_integer()):
+        if abs(num) < 10.0 and num != 0 and not num.is_integer():
             if num < 0:
                 return f"({abs(num):,.2f})" if is_en else f"({abs(num):,.2f})".replace(",", "X").replace(".", ",").replace("X", ".")
             else:
                 return f"{num:,.2f}" if is_en else f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         if num == 0:
-            zero_str = "0.00" if (is_per_share and is_en) else ("0,00" if is_per_share else ("0" if is_category_header else "-"))
+            zero_str = "0" if is_category_header else "-"
             return zero_str
         elif num < 0:
             return f"({abs(num):,.0f})" if is_en else f"({abs(num):,.0f})".replace(",", ".")
@@ -219,38 +263,46 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
     from src.core.ifrs_glossary import translate_ifrs_term
 
-    hdr_cells = table.rows[0].cells
-    for i, col_name in enumerate(df_cols):
-        header_text = str(col_name)
-        if str(target_lang).lower() == 'en':
-            header_text = translate_ifrs_term(header_text, target_lang='en')
-        if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"])):
-            if "M$" not in header_text and "Th$" not in header_text:
-                header_text = f"{header_text}\nM$"
-        hdr_cells[i].text = header_text
-        set_cell_bg(hdr_cells[i], "E8EEF6")
-        set_cell_margins(hdr_cells[i], top=hdr_pad_v, bottom=hdr_pad_v, left=pad_lr, right=pad_lr)
-        # Bordes de cabecera modelo base: sin línea superior, línea azul marino #1F3864 en la base (1 pt / sz="8")
-        set_cell_borders(hdr_cells[i], top=None, bottom={'val': 'single', 'sz': '8', 'color': '1F3864'})
-        
-        for paragraph in hdr_cells[i].paragraphs:
-            paragraph.paragraph_format.space_before = Pt(0)
-            paragraph.paragraph_format.space_after = Pt(0)
-            paragraph.paragraph_format.line_spacing = hdr_line_spacing
-            if i < len(col_classes) and col_classes[i] == 'numeric':
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                set_cell_nowrap(hdr_cells[i])
-            elif i < len(col_classes) and col_classes[i] == 'note':
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                set_cell_nowrap(hdr_cells[i])
-            else:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                
-            for run in paragraph.runs:
-                run.font.bold = True
-                run.font.color.rgb = RGBColor(31, 56, 100) # #1F3864
-                run.font.name = 'Arial'
-                run.font.size = Pt(hdr_font_size)
+    # Detectar si el DataFrame tiene encabezados reales de columna (ej. EEFF principales)
+    # o índices numéricos/vacíos autogenerados (ej. cuadros de Notas donde los encabezados vienen en las primeras filas)
+    has_real_header = not all(
+        isinstance(c, (int, float)) or str(c).strip() == "" or str(c).strip().isdigit()
+        for c in df_cols
+    )
+
+    if has_real_header:
+        hdr_cells = table.rows[0].cells
+        for i, col_name in enumerate(df_cols):
+            header_text = str(col_name)
+            if str(target_lang).lower() == 'en':
+                header_text = translate_ifrs_term(header_text, target_lang='en')
+            if is_miles and (any(char.isdigit() for char in header_text) or (i > 0 and header_text.lower().strip() not in ["nota", "notas", "concepto", "cuenta", "item", "rubro"])):
+                if "M$" not in header_text and "Th$" not in header_text:
+                    header_text = f"{header_text}\nM$"
+            hdr_cells[i].text = header_text
+            set_cell_bg(hdr_cells[i], "E8EEF6")
+            set_cell_margins(hdr_cells[i], top=hdr_pad_v, bottom=hdr_pad_v, left=pad_lr, right=pad_lr)
+            # Bordes de cabecera modelo base: sin línea superior, línea azul marino #1F3864 en la base (1 pt / sz="8")
+            set_cell_borders(hdr_cells[i], top=None, bottom={'val': 'single', 'sz': '8', 'color': '1F3864'})
+            
+            for paragraph in hdr_cells[i].paragraphs:
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing = hdr_line_spacing
+                if i < len(col_classes) and col_classes[i] == 'numeric':
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    set_cell_nowrap(hdr_cells[i])
+                elif i < len(col_classes) and col_classes[i] == 'note':
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    set_cell_nowrap(hdr_cells[i])
+                else:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    
+                for run in paragraph.runs:
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(31, 56, 100) # #1F3864
+                    run.font.name = 'Arial'
+                    run.font.size = Pt(hdr_font_size)
 
     # Identificar columnas numéricas vs texto
     non_numeric_names = {'balance clasificado', 'nota', 'notas', 'descripcion', 'concepto', 'cuenta_id', 'glosa'}
@@ -308,6 +360,8 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
                 excel_date_cols = []
                 for col in range(1, ws.max_column + 1):
+                    if col <= excel_name_col:
+                        continue
                     for row in range(1, 7):
                         val = ws.cell(row=row, column=col).value
                         if val is not None:
@@ -370,13 +424,19 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
             curr_excel_row = 1
 
             for idx, df_row in df.iterrows():
-                search_val = clean_str(df_row.iloc[0])
+                first_col_str = clean_str(df_row.iloc[0])
+                first_col_empty = (first_col_str == "")
+                search_val = first_col_str
+                search_excel_col = excel_name_col
+                if not search_val and len(df_row) > 1:
+                    search_val = clean_str(df_row.iloc[1])
+                    search_excel_col = ws_cols_mapping.get(1, excel_name_col + 1)
                 found_row = None
                 
                 if search_val:
                     # Búsqueda secuencial hacia adelante
                     for r in range(curr_excel_row, ws.max_row + 1):
-                        val = ws.cell(row=r, column=excel_name_col).value
+                        val = ws.cell(row=r, column=search_excel_col).value
                         if val is not None and clean_str(val) == search_val:
                             found_row = r
                             curr_excel_row = r + 1
@@ -384,7 +444,7 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                     # Si no se encontró hacia adelante, buscar en toda la hoja
                     if found_row is None:
                         for r in range(1, ws.max_row + 1):
-                            val = ws.cell(row=r, column=excel_name_col).value
+                            val = ws.cell(row=r, column=search_excel_col).value
                             if val is not None and clean_str(val) == search_val:
                                 found_row = r
                                 break
@@ -407,8 +467,6 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                         if cell.font:
                             bold = bool(cell.font.bold)
                             italic = bool(cell.font.italic)
-                            if cell.font.size:
-                                font_size = min(max(float(cell.font.size) - (2.5 if compact else 2.0), 6.5 if compact else 7.5), 8.5 if compact else 9.5)
                             if cell.font.color and cell.font.color.rgb:
                                 c_rgb = str(cell.font.color.rgb)
                                 if len(c_rgb) == 8 and c_rgb != '00000000' and not c_rgb.startswith('000000'):
@@ -436,7 +494,13 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                         elif str(df_cols[j]).lower().strip() in ['nota', 'notas']:
                             align = WD_ALIGN_PARAGRAPH.CENTER
                         else:
-                            is_num_col_hdr = (j >= 2) and (val_str.lower() in ["m$", "$", "%", "activos", "pasivos"] or any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202"]))
+                            is_num_col_hdr = (j >= 1) and (
+                                first_col_empty or
+                                (j < len(col_classes) and col_classes[j] == 'numeric') or
+                                val_str.lower() in ["m$", "$", "%", "activos", "pasivos", "corriente", "no corriente", "us$", "uf", "th$"] or
+                                any(k in val_str.lower() for k in ["capital", "ganancia", "acumulad", "reserva", "patrimonio", "issued", "retained", "equity"]) or
+                                any(k in val_str for k in ["31.12", "30.06", "31.03", "30.09", "202", "31-", "30-"])
+                            )
                             if is_num_col_hdr:
                                 align = WD_ALIGN_PARAGRAPH.RIGHT
                             else:
@@ -498,33 +562,26 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                 
                 # Identificar si la fila es un total o saldo final para propagar bordes y asegurar negrita
                 first_cell_text = str(df.iloc[idx, 0]).strip().lower() if idx < len(df) else ""
-                is_row_total = any(k in first_cell_text for k in [
-                    "saldo final", "total", "patrimonio total", "ganancia bruta", "resultado", "ganancia (pérdida)"
-                ])
+                is_row_total = _is_total_or_subtotal_label(first_cell_text)
                 
                 # Si la fila anterior tenía borde inferior y esta fila es un total/subtotal, propagar borde superior
                 if not r_top_b and (idx - 1) in row_bottom_borders and is_row_total:
                     r_top_b = row_bottom_borders[idx - 1]
                     row_top_borders[idx] = r_top_b
 
-                if r_top_b or r_bottom_b:
+                if is_row_total:
                     for j in range(num_cols):
-                        if j == 0:
-                            # En formato modelo base auditado, la columna 0 NUNCA lleva línea superior de total
-                            row_styles_data[idx][j]['top_b'] = None
-                            if is_row_total:
-                                row_styles_data[idx][j]['bottom_b'] = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                                row_styles_data[idx][j]['bold'] = True
-                            continue
+                        row_styles_data[idx][j]['top_b'] = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        row_styles_data[idx][j]['bottom_b'] = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        row_styles_data[idx][j]['bold'] = True
+                elif r_top_b or r_bottom_b:
+                    for j in range(num_cols):
                         if r_top_b and not row_styles_data[idx][j]['top_b']:
                             c = r_top_b.get('color', '404040')
-                            row_styles_data[idx][j]['top_b'] = {'val': r_top_b.get('val', 'single'), 'sz': r_top_b.get('sz', '6'), 'color': '404040' if c == '000000' else c}
+                            row_styles_data[idx][j]['top_b'] = {'val': 'single', 'sz': r_top_b.get('sz', '6'), 'color': '404040' if c == '000000' else c}
                         if r_bottom_b and not row_styles_data[idx][j]['bottom_b']:
-                            b_val = r_bottom_b.get('val', 'single')
                             c = r_bottom_b.get('color', '404040')
-                            row_styles_data[idx][j]['bottom_b'] = {'val': b_val, 'sz': '6' if b_val == 'double' else '2', 'color': '404040' if b_val == 'double' else ('D9D9D9' if is_row_total else 'E1E1E1')}
-                        if is_row_total:
-                            row_styles_data[idx][j]['bold'] = True
+                            row_styles_data[idx][j]['bottom_b'] = {'val': 'single', 'sz': '6', 'color': '404040' if c == '000000' else c}
 
             dynamic_styled = True
         except Exception as ex:
@@ -533,13 +590,21 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
             dynamic_styled = False
 
     # 3. CONSTRUCCIÓN DE FILAS EN WORD
+    from src.reporting.formatting import detect_internal_header_rows, is_separator_row_series
+    internal_hdr_rows, bottom_hdr_rows = detect_internal_header_rows(df)
+
     for row_idx, (index, row) in enumerate(df.iterrows()):
-        if row_idx + 1 < len(table.rows):
-            row_cells = table.rows[row_idx + 1].cells
+        target_row_idx = (row_idx + 1) if has_real_header else row_idx
+        if target_row_idx < len(table.rows):
+            row_cells = table.rows[target_row_idx].cells
         else:
             row_cells = table.add_row().cells
-        first_cell_str = str(row.iloc[0]).strip()
+        first_cell_str = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
         first_cell_clean = first_cell_str.lower()
+
+        is_internal_hdr = (row_idx in internal_hdr_rows)
+        is_bottom_internal_hdr = (row_idx in bottom_hdr_rows)
+        is_sep_row = (not is_internal_hdr) and is_separator_row_series(row)
 
         # Determinar si la fila no tiene datos (categoría)
         has_data_values = any(
@@ -551,7 +616,7 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
 
         for j, col_name in enumerate(df_cols):
             val = row[col_name]
-            text_val = format_accounting_val(val, is_category_header=is_category_header, row_name=first_cell_str, target_lang=target_lang)
+            text_val = "" if is_sep_row else format_accounting_val(val, is_category_header=(is_category_header or is_internal_hdr), row_name=first_cell_str, target_lang=target_lang)
             if j == 0 and str(target_lang).lower() == 'en' and text_val:
                 text_val = translate_ifrs_term(text_val, target_lang='en')
             
@@ -571,85 +636,98 @@ def populate_word_table_styled(table, df, excel_bytes=None, sheet_name=None, uni
                 top_b = st_info['top_b']
                 bottom_b = st_info['bottom_b']
                 
-                # Estilo auditado modelo base: fondo blanco sin cebrado
-                if not fill_bg:
+                if is_sep_row:
                     fill_bg = "FFFFFF"
-                    
-                # Ajuste de bordes modelo base para celdas dinámicas:
-                # Col 0 no lleva línea superior de total y separadores suaves
-                first_cell_txt = str(df.iloc[index, 0]).strip().lower() if index < len(df) else ""
-                is_dyn_grand_total = any(k in first_cell_txt for k in [
-                    "total patrimonio y pasivos", "total pasivos y patrimonio", "total liabilities and equity",
-                    "resultado final", "ganancia (pérdida) del ejercicio", "resultado del ejercicio",
-                    "saldo final de efectivo", "saldo final ejercicio"
-                ])
-                is_dyn_total = not is_dyn_grand_total and any(k in first_cell_txt for k in ["total", "saldo final", "patrimonio total", "ganancia bruta", "resultado"])
-                if j == 0:
+                    prev_is_tot = (row_idx > 0) and _is_total_or_subtotal_label(str(df.iloc[row_idx - 1, 0]).strip().lower())
+                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'} if prev_is_tot else None
+                    bottom_b = None
+                    bold = False
+                    italic = False
+                elif is_internal_hdr:
+                    fill_bg = "E8EEF6"
+                    text_color = RGBColor(31, 56, 100) # #1F3864
+                    bold = True
+                    font_size = hdr_font_size
                     top_b = None
-                    if is_dyn_grand_total or is_dyn_total:
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                    elif not bottom_b or bottom_b.get('val') in ['none', None]:
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                    bottom_b = {'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bottom_internal_hdr else None
                 else:
-                    if top_b and top_b.get('color') == '000000':
-                        top_b['color'] = '404040'
-                    if is_dyn_grand_total:
-                        bottom_b = {'val': 'double', 'sz': '6', 'color': '404040'}
-                    elif bottom_b and bottom_b.get('val') == 'double':
-                        bottom_b = {'val': 'double', 'sz': '6', 'color': '404040'}
-                    elif is_dyn_total:
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                    elif bottom_b and bottom_b.get('color') == '000000':
-                        bottom_b['color'] = '404040'
-                    elif not bottom_b or bottom_b.get('val') in ['none', None]:
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                    # Estilo auditado modelo base: fondo blanco sin cebrado
+                    if not fill_bg:
+                        fill_bg = "FFFFFF"
+                        
+                    first_cell_txt = str(df.iloc[index, 0]).strip().lower() if index < len(df) else ""
+                    is_dyn_total_row = (not is_category_header) and _is_total_or_subtotal_label(first_cell_txt)
+
+                    if is_dyn_total_row:
+                        top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        bottom_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        bold = True
+                    else:
+                        if top_b and top_b.get('val') not in ['none', None]:
+                            top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        else:
+                            top_b = None
+                        next_is_unit_hdr = False
+                        if (row_idx + 1) < len(df):
+                            nxt_r = df.iloc[row_idx + 1]
+                            nxt_c0 = clean_str(nxt_r.iloc[0]) if len(nxt_r) > 0 else ""
+                            nxt_rest = [clean_str(nxt_r.iloc[c]) for c in range(1, num_cols) if pd.notna(nxt_r.iloc[c]) and clean_str(nxt_r.iloc[c]) != ""]
+                            next_is_unit_hdr = (nxt_c0 == "") and bool(nxt_rest) and all(v in ["m$", "ch$", "th$", "us$", "$", "%", "uf"] for v in nxt_rest)
+                        if first_cell_clean == "" and next_is_unit_hdr:
+                            bottom_b = None
+                        elif bottom_b and bottom_b.get('val') not in ['none', None]:
+                            # Si la fila siguiente es una fila de total, su propio top_b ya dibujará el borde continuo
+                            next_txt = str(df.iloc[row_idx + 1, 0]).strip().lower() if (row_idx + 1) < len(df) else ""
+                            if _is_total_or_subtotal_label(next_txt):
+                                bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                            else:
+                                bottom_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        else:
+                            bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
                     
                 set_cell_bg(cell, fill_bg)
                 set_cell_borders(cell, top=top_b, bottom=bottom_b)
             else:
-                # Estilo auditado modelo base: fondo blanco sin cebrado
-                fill_bg = "FFFFFF"
-                set_cell_bg(cell, fill_bg)
-
-                is_bottom_double = not is_category_header and any(k in first_cell_clean for k in [
-                    "total activos", "total patrimonio y pasivos", "total pasivos y patrimonio", "patrimonio total", "total patrimonio",
-                    "ganancias (pérdida) del ejercicio", "ganancia (pérdida) del ejercicio", "resultado del ejercicio", "resultado final",
-                    "saldo final de efectivo", "saldo final", "saldo final ejercicio"
-                ])
-                is_any_total = not is_category_header and not is_bottom_double and any(k in first_cell_clean for k in [
-                    "total", "sub total", "subtotal", "ganancia bruta", "resultado antes de",
-                    "procedentes de actividades de operación", "utilizados en actividades de inversión", 
-                    "procedentes de actividades de financiación", "total resultados integrales", "total resultados"
-                ])
-
-                # En formato modelo base:
-                # - Cada fila normal tiene separador tenue E1E1E1
-                # - Columna 0 NO tiene línea superior en totales (línea no continua)
-                # - Columnas numéricas/notas tienen línea superior 404040 e inferior D9D9D9 (o doble 404040)
-                if is_bottom_double:
-                    if j == 0:
-                        top_b = None
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                    else:
-                        top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
-                        bottom_b = {'val': 'double', 'sz': '6', 'color': '404040'}
-                elif is_any_total:
-                    if j == 0:
-                        top_b = None
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                    else:
-                        top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
-                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'D9D9D9'}
-                else:
+                if is_sep_row:
+                    fill_bg = "FFFFFF"
+                    set_cell_bg(cell, fill_bg)
+                    prev_is_tot = (row_idx > 0) and _is_total_or_subtotal_label(str(df.iloc[row_idx - 1, 0]).strip().lower())
+                    top_b = {'val': 'single', 'sz': '6', 'color': '404040'} if prev_is_tot else None
+                    set_cell_borders(cell, top=top_b, bottom=None)
+                    bold = False
+                    italic = False
+                    font_size = base_font_size
+                    text_color = RGBColor(0, 0, 0)
+                elif is_internal_hdr:
+                    fill_bg = "E8EEF6"
+                    set_cell_bg(cell, fill_bg)
                     top_b = None
-                    bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
-                
-                set_cell_borders(cell, top=top_b, bottom=bottom_b)
-                
-                bold = is_bottom_double or is_any_total or is_category_header
-                italic = False
-                font_size = base_font_size
-                text_color = RGBColor(0, 0, 0)
+                    bottom_b = {'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bottom_internal_hdr else None
+                    set_cell_borders(cell, top=top_b, bottom=bottom_b)
+                    bold = True
+                    italic = False
+                    font_size = hdr_font_size
+                    text_color = RGBColor(31, 56, 100) # #1F3864
+                else:
+                    # Estilo auditado modelo base: fondo blanco sin cebrado
+                    fill_bg = "FFFFFF"
+                    set_cell_bg(cell, fill_bg)
+
+                    is_any_total = (not is_category_header) and _is_total_or_subtotal_label(first_cell_clean)
+
+                    if is_any_total:
+                        top_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                        bottom_b = {'val': 'single', 'sz': '6', 'color': '404040'}
+                    else:
+                        top_b = None
+                        bottom_b = {'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                    
+                    set_cell_borders(cell, top=top_b, bottom=bottom_b)
+                    
+                    bold = is_any_total or is_category_header
+                    italic = False
+                    font_size = base_font_size
+                    text_color = RGBColor(0, 0, 0)
                 if j < len(col_classes) and col_classes[j] == 'numeric':
                     align = WD_ALIGN_PARAGRAPH.RIGHT
                     set_cell_nowrap(cell)
@@ -884,6 +962,15 @@ def generate_word_report(df, title="Reporte Financiero", subtitle="Expresado en 
             target_lang = st.session_state.get('idioma_reporte', 'es')
         except Exception:
             target_lang = 'es'
+
+    if not entity_name or entity_name == "DB TERRA CHILE HOLDCO SPA AND SUBSIDIARIES":
+        try:
+            import streamlit as st
+            sess_ent = st.session_state.get('empresa_activa') or st.session_state.get('empresa_seleccionada')
+            if sess_ent:
+                entity_name = str(sess_ent).replace("[GRUPO] ", "").strip()
+        except Exception:
+            pass
 
     from src.core.ifrs_glossary import translate_ifrs_term
 

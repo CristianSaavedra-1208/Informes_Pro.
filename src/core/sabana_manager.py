@@ -86,6 +86,8 @@ class SabanaManager:
         _tb_cache_act = {}
         _tb_cache_comp = {}
 
+        from src.core.snapshot_vault_manager import SnapshotVaultManager
+
         for co in companies:
             tb_act = TrialBalanceDB.get_trial_balance(co, periodo_actual)
             tb_comp = TrialBalanceDB.get_trial_balance(co, periodo_comp) if periodo_comp and periodo_comp != "Ninguno" else None
@@ -93,14 +95,47 @@ class SabanaManager:
             _tb_cache_act[co] = tb_act
             _tb_cache_comp[co] = tb_comp
 
-            sab_bal_act = build_balance_sabana(tb_act, map_balance_df)
-            sab_pl_act = build_pl_sabana(None, map_pl_df, tb_act)
+            # Resolver mapeos/contexto de periodo_actual (Congelado si está Cerrado)
+            mb_act, mp_act = map_balance_df, map_pl_df
+            frozen_ctx_act = None
+            if periodo_actual and (SnapshotVaultManager.has_active_snapshot(co, periodo_actual) or SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual)):
+                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(co, periodo_actual)
+                if f_mb is None:
+                    f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_actual)
+                if f_mb is not None:
+                    mb_act = f_mb
+                if f_mp is not None:
+                    mp_act = f_mp
+                frozen_ctx_act = SnapshotVaultManager.get_frozen_entity_context(co, periodo_actual, target_company=co)
+                if frozen_ctx_act is None:
+                    frozen_ctx_act = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_actual, target_company=co)
 
-            sab_bal_comp = build_balance_sabana(tb_comp, map_balance_df) if tb_comp is not None else None
-            sab_pl_comp = build_pl_sabana(None, map_pl_df, tb_comp) if tb_comp is not None else None
+            # Resolver mapeos/contexto de periodo_comp (Congelado si está Cerrado)
+            mb_comp, mp_comp = map_balance_df, map_pl_df
+            frozen_ctx_comp = None
+            if periodo_comp and periodo_comp != "Ninguno" and (SnapshotVaultManager.has_active_snapshot(co, periodo_comp) or SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp)):
+                f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(co, periodo_comp)
+                if f_mb_c is None:
+                    f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_comp)
+                if f_mb_c is not None:
+                    mb_comp = f_mb_c
+                if f_mp_c is not None:
+                    mp_comp = f_mp_c
+                frozen_ctx_comp = SnapshotVaultManager.get_frozen_entity_context(co, periodo_comp, target_company=co)
+                if frozen_ctx_comp is None:
+                    frozen_ctx_comp = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_comp, target_company=co)
 
-            ctx_act = build_entity_context(tb_act, map_balance_df, map_pl_df, empresa_name=co, periodo_str=periodo_actual)
-            ctx_comp = build_entity_context(tb_comp, map_balance_df, map_pl_df, empresa_name=co, periodo_str=periodo_comp) if tb_comp is not None else {'nota1': {}, 'nota2': {}, 'pl': {}}
+            sab_bal_act = build_balance_sabana(tb_act, mb_act)
+            sab_pl_act = build_pl_sabana(None, mp_act, tb_act)
+
+            sab_bal_comp = build_balance_sabana(tb_comp, mb_comp) if tb_comp is not None else None
+            sab_pl_comp = build_pl_sabana(None, mp_comp, tb_comp) if tb_comp is not None else None
+
+            ctx_act = frozen_ctx_act if frozen_ctx_act is not None else build_entity_context(tb_act, mb_act, mp_act, empresa_name=co, periodo_str=periodo_actual)
+            if tb_comp is not None:
+                ctx_comp = frozen_ctx_comp if frozen_ctx_comp is not None else build_entity_context(tb_comp, mb_comp, mp_comp, empresa_name=co, periodo_str=periodo_comp)
+            else:
+                ctx_comp = {'nota1': {}, 'nota2': {}, 'pl': {}}
 
             contexts[co] = {
                 'actual': ctx_act,
@@ -122,8 +157,26 @@ class SabanaManager:
             tb_act_comb = pd.concat(tb_act_list, ignore_index=True) if tb_act_list else None
             tb_comp_comb = pd.concat(tb_comp_list, ignore_index=True) if tb_comp_list else None
 
-            ctx_act_comb = build_entity_context(tb_act_comb, map_balance_df, map_pl_df, empresa_name=companies, periodo_str=periodo_actual)
-            ctx_comp_comb = build_entity_context(tb_comp_comb, map_balance_df, map_pl_df, empresa_name=companies, periodo_str=periodo_comp) if tb_comp_comb is not None else {'nota1': {}, 'nota2': {}, 'pl': {}}
+            frozen_comb_act = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_actual, target_company=active_entity) if SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual) else None
+            frozen_comb_comp = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_comp, target_company=active_entity) if (periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp)) else None
+
+            mb_comb_act, mp_comb_act = map_balance_df, map_pl_df
+            if SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual):
+                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_actual)
+                if f_mb is not None: mb_comb_act = f_mb
+                if f_mp is not None: mp_comb_act = f_mp
+
+            mb_comb_comp, mp_comb_comp = map_balance_df, map_pl_df
+            if periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp):
+                f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_comp)
+                if f_mb_c is not None: mb_comb_comp = f_mb_c
+                if f_mp_c is not None: mp_comb_comp = f_mp_c
+
+            ctx_act_comb = frozen_comb_act if frozen_comb_act is not None else build_entity_context(tb_act_comb, mb_comb_act, mp_comb_act, empresa_name=companies, periodo_str=periodo_actual)
+            if tb_comp_comb is not None:
+                ctx_comp_comb = frozen_comb_comp if frozen_comb_comp is not None else build_entity_context(tb_comp_comb, mb_comb_comp, mp_comb_comp, empresa_name=companies, periodo_str=periodo_comp)
+            else:
+                ctx_comp_comb = {'nota1': {}, 'nota2': {}, 'pl': {}}
 
             # Aplicar eliminaciones intercompañía
             def apply_intercompany_eliminations(ctx):

@@ -449,40 +449,34 @@ class ExternalNotesManager:
             "base_cmp_data_cols": [4],
         },
         "#N13.1": {
-            "desc_cols": [3],
-            "ext_data_cols": [4, 5],
-            "base_act_data_cols": [4, 5],
-            "base_cmp_data_cols": [6, 7],
+            "desc_cols": [2],
+            "ext_data_cols": [3, 4],
+            "base_act_data_cols": [3, 4],
+            "base_cmp_data_cols": [5, 6],
         },
         "#N13.2": {
-            "desc_cols": [3],
-            "ext_data_cols": [4],
-            "base_act_data_cols": [4],
-            "base_cmp_data_cols": [5],
+            "desc_cols": [2],
+            "ext_data_cols": [3],
+            "base_act_data_cols": [3],
+            "base_cmp_data_cols": [4],
         },
         "#N13.3": {
-            "desc_cols": [3],
-            "ext_data_cols": [4],
-            "base_act_data_cols": [4],
-            "base_cmp_data_cols": [5],
+            "desc_cols": [2],
+            "ext_data_cols": [3],
+            "base_act_data_cols": [3],
+            "base_cmp_data_cols": [4],
         },
         "#N13.4": {
-            "desc_cols": [3],
-            "ext_data_cols": [4],
-            "base_act_data_cols": [4],
-            "base_cmp_data_cols": [5],
+            "desc_cols": [2],
+            "ext_data_cols": [3],
+            "base_act_data_cols": [3],
+            "base_cmp_data_cols": [4],
         },
         "#N13.5": {
-            "desc_cols": [3],
-            "ext_data_cols": [4],
-            "base_act_data_cols": [4],
-            "base_cmp_data_cols": [5],
-        },
-        "#N14.1": {
-            "desc_cols": [3, 4, 5],
-            "ext_data_cols": [6],
-            "base_act_data_cols": [6],
-            "base_cmp_data_cols": [7],
+            "desc_cols": [2],
+            "ext_data_cols": [3],
+            "base_act_data_cols": [3],
+            "base_cmp_data_cols": [4],
         },
         "#N14.3": {
             "desc_cols": [2, 3, 4],
@@ -547,11 +541,35 @@ class ExternalNotesManager:
     def _inject_table_data(cls, ext_ws, target_ws, is_comparative: bool = False, target_lang: str = "es"):
         """
         Inyecta los datos de ext_ws en target_ws alineando inteligentemente por código de cuadro (#Nxx.y),
-        respetando si se inyecta como Período Actual o Período Comparativo.
+        respetando si se inyecta como Período Actual o Período Comparativo y compensando desplazamientos
+        de columnas entre distintas versiones de la plantilla maestra y el anexo externo.
         """
         from src.core.ifrs_glossary import translate_ifrs_term
         import re
+        import datetime
+        import unicodedata
         is_en = (str(target_lang).lower() == "en")
+
+        def _norm_concept(val) -> str:
+            if val is None:
+                return ""
+            s = str(val).strip().lower()
+            s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+            s = re.sub(r"\s+", " ", s).rstrip(":.")
+            return s
+
+        def _is_header_value(val) -> bool:
+            if val is None:
+                return False
+            if isinstance(val, (datetime.datetime, datetime.date)):
+                return True
+            if isinstance(val, str):
+                v_low = val.strip().lower()
+                if v_low in ("m$", "ms", "activos", "pasivos", "corriente", "no corriente", "concepto", "detalle"):
+                    return True
+                if any(h in v_low for h in ["m$", "31-", "30-", "01-", "31.", "30.", "01.", "202"]):
+                    return True
+            return False
 
         ext_codes = cls.get_code_locations(ext_ws)
         target_codes = cls.get_code_locations(target_ws)
@@ -571,6 +589,8 @@ class ExternalNotesManager:
             target_r0 = target_info["row"]
 
             cfg = cls.EXTERNAL_TABLE_REGISTRY.get(code)
+            if cfg is None and ext_info["col"] != target_info["col"]:
+                continue
 
             # Determinar altura de la tabla en ext_ws (permitiendo 1 o 2 filas vacías previas a Totales)
             table_height = 0
@@ -579,8 +599,13 @@ class ExternalNotesManager:
                 r_curr = ext_r0 + off
                 if r_curr > ext_ws.max_row:
                     break
-                v_check = ext_ws.cell(r_curr, ext_info["col"]).value
-                if v_check and isinstance(v_check, str) and re.search(r'#N\d+\.\d+', v_check):
+                hit_next_ext_code = False
+                for c_chk in range(1, min(ext_ws.max_column + 1, 15)):
+                    v_check = ext_ws.cell(r_curr, c_chk).value
+                    if v_check and isinstance(v_check, str) and re.search(r'#N\d+\.\d+', v_check):
+                        hit_next_ext_code = True
+                        break
+                if hit_next_ext_code:
                     break
                 has_content = any(ext_ws.cell(r_curr, c).value is not None for c in range(1, min(ext_ws.max_column + 1, 15)))
                 if has_content:
@@ -594,37 +619,142 @@ class ExternalNotesManager:
             if table_height == 0:
                 continue
 
-            desc_cols = cfg.get("desc_cols", []) if cfg else []
-            ext_data_cols = cfg.get("ext_data_cols", []) if cfg else []
-            target_data_cols = (cfg.get("base_cmp_data_cols", []) if is_comparative else cfg.get("base_act_data_cols", [])) if cfg else []
+            base_desc_cols = cfg.get("desc_cols", []) if cfg else []
+            base_ext_data_cols = cfg.get("ext_data_cols", []) if cfg else []
+            base_target_data_cols = (cfg.get("base_cmp_data_cols", []) if is_comparative else cfg.get("base_act_data_cols", [])) if cfg else []
 
-            if not target_data_cols and cfg is None:
-                target_data_cols = ext_data_cols
+            if cfg and base_desc_cols:
+                base_ref_col = base_desc_cols[0]
+                ext_delta = ext_info["col"] - base_ref_col
+                target_delta = target_info["col"] - base_ref_col
+                ext_desc_cols = [c + ext_delta for c in base_desc_cols if c + ext_delta >= 1]
+                target_desc_cols = [c + target_delta for c in base_desc_cols if c + target_delta >= 1]
+                ext_data_cols = [c + ext_delta for c in base_ext_data_cols if c + ext_delta >= 1]
+                target_data_cols = [c + target_delta for c in base_target_data_cols if c + target_delta >= 1]
+            else:
+                ext_desc_cols = list(base_desc_cols)
+                target_desc_cols = list(base_desc_cols)
+                ext_data_cols = list(base_ext_data_cols)
+                target_data_cols = list(base_target_data_cols) if base_target_data_cols else list(ext_data_cols)
+
+            # Determinar frontera inferior de esta tabla en target_ws
+            target_r_end = min(target_ws.max_row, target_r0 + max(table_height + 4, 30))
+            for r_scan in range(target_r0 + 1, target_r_end + 1):
+                hit_boundary = False
+                for c_chk in range(1, min(target_ws.max_column + 1, 15)):
+                    vt_chk = target_ws.cell(r_scan, c_chk).value
+                    if vt_chk and isinstance(vt_chk, str):
+                        vt_str = vt_chk.strip()
+                        if re.search(r'#N\d+\.\d+', vt_str):
+                            hit_boundary = True
+                            break
+                        if c_chk == target_info["col"] and re.match(r'^(?:\d+|[a-z])[\)\.\-]\s+', vt_str.lower()):
+                            hit_boundary = True
+                            break
+                if hit_boundary:
+                    target_r_end = r_scan - 1
+                    break
+
+            # Si es una tabla de una sola columna de concepto (ej. #N13.1..#N13.5), indexar las filas de destino por concepto
+            target_concept_rows = []
+            if len(target_desc_cols) == 1:
+                c_t_desc = target_desc_cols[0]
+                for r_t in range(target_r0 + 1, target_r_end + 1):
+                    v_t = target_ws.cell(r_t, c_t_desc).value
+                    if isinstance(v_t, str) and v_t.strip() and not v_t.strip().startswith("="):
+                        norm_t = _norm_concept(v_t)
+                        if norm_t and norm_t not in ("concepto", "detalle", "m$"):
+                            target_concept_rows.append((r_t, norm_t))
+
+            used_target_rows = set()
 
             for off in range(1, table_height + 1):
                 r_ext = ext_r0 + off
                 r_target = target_r0 + off
-                if r_target > target_ws.max_row:
-                    break
+
+                # Intentar emparejar por nombre de concepto cuando la tabla tiene conceptos fijos en destino
+                if len(ext_desc_cols) == 1 and target_concept_rows:
+                    v_e_desc = ext_ws.cell(r_ext, ext_desc_cols[0]).value
+                    norm_e = _norm_concept(v_e_desc)
+                    if norm_e:
+                        candidates = [
+                            r_t for (r_t, norm_t) in target_concept_rows
+                            if r_t not in used_target_rows and (
+                                norm_t == norm_e or
+                                (len(norm_e) >= 20 and len(norm_t) >= 20 and (norm_t.startswith(norm_e[:25]) or norm_e.startswith(norm_t[:25])))
+                            )
+                        ]
+                        if candidates:
+                            best_r_t = min(candidates, key=lambda rt: abs((rt - target_r0) - off))
+                            if abs((best_r_t - target_r0) - off) <= 4:
+                                r_target = best_r_t
+                                used_target_rows.add(best_r_t)
+
+                if r_target > target_r_end or r_target > target_ws.max_row:
+                    continue
+
+                # Si la tabla es de filas dinámicas (ej. #N14.1, #N14.3, #N04.2) y alcanzamos la fila Total de destino, detenerse
+                if len(target_desc_cols) > 1:
+                    vt_first = target_ws.cell(r_target, target_info["col"]).value
+                    if isinstance(vt_first, str) and vt_first.strip().lower().startswith("total"):
+                        ve_first = ext_ws.cell(r_ext, ext_info["col"]).value
+                        if not (isinstance(ve_first, str) and ve_first.strip().lower().startswith("total")):
+                            break
+
+                # Detectar si la fila actual en ext_ws o target_ws es una fila de cabecera (fechas, M$, Activos/Pasivos)
+                is_hdr_row = False
+                for c_e in ext_data_cols:
+                    if c_e <= ext_ws.max_column and _is_header_value(ext_ws.cell(r_ext, c_e).value):
+                        is_hdr_row = True
+                        break
+                if not is_hdr_row:
+                    for c_t in target_data_cols:
+                        if c_t <= target_ws.max_column and _is_header_value(target_ws.cell(r_target, c_t).value):
+                            is_hdr_row = True
+                            break
+                if is_hdr_row:
+                    continue
+
+                # Ignorar filas de control/validación huérfanas donde no existe etiqueta descriptiva ni en origen ni en destino
+                if ext_desc_cols or target_desc_cols:
+                    has_ext_desc = any(
+                        c_ed <= ext_ws.max_column and ext_ws.cell(r_ext, c_ed).value is not None and str(ext_ws.cell(r_ext, c_ed).value).strip() != ""
+                        for c_ed in ext_desc_cols
+                    )
+                    has_tgt_desc = any(
+                        c_td <= target_ws.max_column and target_ws.cell(r_target, c_td).value is not None and str(target_ws.cell(r_target, c_td).value).strip() != ""
+                        for c_td in target_desc_cols
+                    )
+                    if not has_ext_desc and not has_tgt_desc:
+                        continue
 
                 # 1. Columnas descriptivas (bancos, monedas, conceptos)
-                for c_desc in desc_cols:
-                    if c_desc <= ext_ws.max_column and c_desc <= target_ws.max_column:
-                        v_ext = ext_ws.cell(r_ext, c_desc).value
-                        if v_ext is not None and not (isinstance(v_ext, str) and v_ext.startswith("=")):
-                            target_cell = target_ws.cell(r_target, c_desc)
+                for idx_d, c_ext_desc in enumerate(ext_desc_cols):
+                    if idx_d >= len(target_desc_cols):
+                        break
+                    c_target_desc = target_desc_cols[idx_d]
+                    if c_ext_desc <= ext_ws.max_column and c_target_desc <= target_ws.max_column:
+                        v_ext = ext_ws.cell(r_ext, c_ext_desc).value
+                        if v_ext is not None and not (isinstance(v_ext, str) and v_ext.startswith("=")) and not _is_header_value(v_ext):
+                            target_cell = target_ws.cell(r_target, c_target_desc)
                             if isinstance(target_cell, MergedCell) or target_cell.__class__.__name__ == 'MergedCell':
                                 continue
                             curr_t_val = target_cell.value
-                            # Rellenar si está vacío, es 0, o es placeholder genérico repetitivo ("fondos mutuos" en c_desc > 1)
+                            # Rellenar si está vacío, es 0, o es placeholder genérico repetitivo ("fondos mutuos" en c_target_desc > 1)
                             if (curr_t_val is None or str(curr_t_val).strip() == "" or curr_t_val == 0 or
-                                (isinstance(curr_t_val, str) and curr_t_val.strip().lower() == "fondos mutuos" and c_desc > 1)):
+                                (isinstance(curr_t_val, str) and curr_t_val.strip().lower() == "fondos mutuos" and c_target_desc > 1)):
                                 if is_en and isinstance(v_ext, str) and v_ext.strip():
                                     target_cell.value = translate_ifrs_term(v_ext.strip(), target_lang="en")
                                 else:
                                     target_cell.value = v_ext
 
                 # 2. Columnas numéricas / datos
+                row_label_norm = _norm_concept(target_ws.cell(r_target, target_desc_cols[0]).value) if target_desc_cols else ""
+                is_total_or_rate_row = any(
+                    kw in row_label_norm
+                    for kw in ("total", "sub total", "subtotal", "saldo final", "tasa efectiva", "gasto por impuesto utilizando la tasa efectiva")
+                )
+
                 for idx, c_ext in enumerate(ext_data_cols):
                     if idx < len(target_data_cols):
                         c_target = target_data_cols[idx]
@@ -635,23 +765,28 @@ class ExternalNotesManager:
                                 continue
                             dest_val = target_cell.value
 
-                            # Preservar fórmulas de totales en destino (=SUM...)
-                            if isinstance(dest_val, str) and dest_val.startswith("="):
+                            if _is_header_value(dest_val) or _is_header_value(val_ext):
                                 continue
 
-                            # No copiar fórmulas del anexo externo directamente
+                            # Preservar fórmulas de totales/subtotales/tasas en destino (=SUM...), pero permitir
+                            # sobrescribir fórmulas de arrastre de saldo inicial (ej. =+D42 en #N13.2) si el anexo trae el dato
+                            if isinstance(dest_val, str) and dest_val.startswith("="):
+                                dest_up = dest_val.upper()
+                                if "SUM" in dest_up or is_total_or_rate_row:
+                                    continue
+
+                            # No copiar fórmulas no evaluadas del anexo externo directamente
                             if isinstance(val_ext, str) and val_ext.startswith("="):
                                 continue
 
-                            # Evitar sobreescribir con textos de cabecera (M$, fechas)
                             if isinstance(val_ext, str):
-                                val_lower = val_ext.strip().lower()
-                                if any(h in val_lower for h in ["m$", "31-", "30-", "01-", "202"]):
-                                    continue
+                                val_stripped = val_ext.strip()
+                                if val_stripped in ("-", "—", "–"):
+                                    val_ext = 0
 
                             if val_ext is not None and str(val_ext).strip() != "":
                                 try:
-                                    target_cell.value = float(val_ext) if isinstance(val_ext, (int, float)) else val_ext
+                                    target_cell.value = float(val_ext) if isinstance(val_ext, (int, float)) else float(str(val_ext).strip())
                                 except Exception:
                                     target_cell.value = val_ext
                             else:
@@ -669,10 +804,6 @@ class ExternalNotesManager:
         """
         ext_act_wb = cls.get_anexo_workbook(empresa, periodo_actual, data_only=True)
         ext_cmp_wb = cls.get_anexo_workbook(empresa, periodo_comp, data_only=True) if periodo_comp else None
-
-        if not ext_act_wb and not ext_cmp_wb:
-            excel_bytes_in.seek(0)
-            return excel_bytes_in
 
         excel_bytes_in.seek(0)
         out_wb = openpyxl.load_workbook(excel_bytes_in, data_only=False)

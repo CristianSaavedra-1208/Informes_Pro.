@@ -64,137 +64,77 @@ class OriGenerator:
                     v24 = matched_row[col_comp_use]
                     pl_24 = float(v24) if pd.notna(v24) and str(v24).strip() != '' else 0.0
         
-        # ------------------ RESOLVER SALDOS DE OTRAS RESERVAS ------------------
-        res_ext_actual = 0.0
-        res_ext_comp = 0.0
+        # ------------------ RESOLVER SALDOS DE OTRAS RESERVAS (ALINEADO 100% CON PATRIMONIO) ------------------
+        from src.reporting.patrimonio_generator import (
+            get_prior_december_period,
+            get_patrimonio_balances_from_db,
+            parse_numeric_value,
+        )
 
-        # Intentar extraer de bal_preview_df
+        res_ext_actual = None
+        res_ext_comp = None
+
+        # Intentar extraer de bal_preview_df soportando cualquier columna de clasificación y formato numérico
         def get_bal_val(name, col):
+            if bal_preview_df is None or bal_preview_df.empty or not col:
+                return None
             try:
-                row = bal_preview_df[bal_preview_df['Clasificación'].astype(str).str.strip().str.lower() == name.lower()]
+                target_col = col if col in bal_preview_df.columns else None
+                if not target_col:
+                    for c in bal_preview_df.columns[1:]:
+                        if str(col) in str(c) or (len(str(col)) >= 4 and str(col)[:4] in str(c)):
+                            target_col = c
+                            break
+                if not target_col:
+                    return None
+                clasif_col = bal_preview_df.columns[0]
+                row = bal_preview_df[bal_preview_df[clasif_col].astype(str).str.strip().str.lower() == name.lower()]
                 if not row.empty:
-                    v = row[col].iloc[0]
-                    return float(v) if pd.notna(v) and str(v).strip() != '' else 0.0
-            except:
+                    v = row[target_col].iloc[0]
+                    return parse_numeric_value(v)
+            except Exception:
                 pass
             return None
 
         if bal_preview_df is not None and not bal_preview_df.empty:
             res_ext_actual = get_bal_val("Otras reservas", col_actual)
             res_ext_comp = get_bal_val("Otras reservas", col_comp)
-            
-        # Si alguno es None, cargamos de la DB
-        # Obtener lista de empresas para consulta a base de datos
-        companies_to_query = []
-        if empresa:
-            if empresa.startswith("[GRUPO]"):
-                from src.models.database import SessionLocal
-                from src.models.consolidacion import ConsolidationGroup
-                grupo_name = empresa.replace("[GRUPO] ", "").strip()
-                db_session = SessionLocal()
-                try:
-                    grupo_obj = db_session.query(ConsolidationGroup).filter_by(nombre_grupo=grupo_name).first()
-                    if grupo_obj:
-                        companies_to_query.append(grupo_obj.empresa_matriz)
-                        if grupo_obj.filial_is_group:
-                            def get_sub_companies(sub_g_id):
-                                sub_g = db_session.query(ConsolidationGroup).filter_by(id=sub_g_id).first()
-                                if sub_g:
-                                    c = [sub_g.empresa_matriz]
-                                    if sub_g.filial_is_group:
-                                        c.extend(get_sub_companies(int(sub_g.empresa_filial)))
-                                    else:
-                                        c.append(sub_g.empresa_filial)
-                                    return c
-                                return []
-                            companies_to_query.extend(get_sub_companies(int(grupo_obj.empresa_filial)))
-                        else:
-                            companies_to_query.append(grupo_obj.empresa_filial)
-                except Exception as e:
-                    print(f"Error resolving group in ORI: {e}")
-                finally:
-                    db_session.close()
+
+        if res_ext_actual is None and empresa and col_actual:
+            _, _, r_act = get_patrimonio_balances_from_db(empresa, str(col_actual))
+            res_ext_actual = r_act
+        if res_ext_comp is None and empresa and col_comp:
+            _, _, r_cmp = get_patrimonio_balances_from_db(empresa, str(col_comp))
+            res_ext_comp = r_cmp
+
+        res_ext_actual = res_ext_actual if res_ext_actual is not None else 0.0
+        res_ext_comp = res_ext_comp if res_ext_comp is not None else 0.0
+
+        # 1. Saldo inicial de reservas para el ejercicio actual (cierre diciembre año anterior)
+        periodo_ini_actual = get_prior_december_period(str(col_actual))
+        res_ini_actual = 0.0
+        if col_comp and periodo_ini_actual and (periodo_ini_actual in str(col_comp) or str(col_comp).startswith(periodo_ini_actual[:4])):
+            res_ini_actual = res_ext_comp
+        elif periodo_ini_actual and empresa:
+            cap_i, gan_i, res_i = get_patrimonio_balances_from_db(empresa, periodo_ini_actual)
+            if cap_i == 0.0 and gan_i == 0.0 and res_i == 0.0:
+                res_ini_actual = res_ext_comp
             else:
-                companies_to_query = [empresa]
+                res_ini_actual = res_i
+        else:
+            res_ini_actual = res_ext_comp
 
-        def get_reserves_from_db(period):
-            if not companies_to_query or not period:
-                return 0.0
-            from src.models.database import SessionLocal
-            from src.models.historical_data import HistoricalDataRecord
-            db_session = SessionLocal()
-            total_val = 0.0
-            found_any = False
-            try:
-                if empresa and empresa.startswith("[GRUPO]"):
-                    rec = db_session.query(HistoricalDataRecord).filter(
-                        HistoricalDataRecord.empresa == empresa,
-                        HistoricalDataRecord.periodo == period,
-                        HistoricalDataRecord.reporte == 'Balance',
-                        HistoricalDataRecord.linea_item.ilike('Otras reservas')
-                    ).first()
-                    if rec is not None:
-                        return float(rec.monto)
+        # 2. Saldo inicial de reservas para el ejercicio comparativo (cierre diciembre año previo al comparativo)
+        periodo_ini_comp = get_prior_december_period(str(col_comp))
+        res_ini_comp = res_ext_comp
+        if periodo_ini_comp and empresa:
+            cap_ic, gan_ic, res_ic = get_patrimonio_balances_from_db(empresa, periodo_ini_comp)
+            if not (cap_ic == 0.0 and gan_ic == 0.0 and res_ic == 0.0):
+                res_ini_comp = res_ic
 
-                for co in companies_to_query:
-                    rec = db_session.query(HistoricalDataRecord).filter(
-                        HistoricalDataRecord.empresa == co,
-                        HistoricalDataRecord.periodo == period,
-                        HistoricalDataRecord.reporte == 'Balance',
-                        HistoricalDataRecord.linea_item.ilike('Otras reservas')
-                    ).first()
-                    if rec is not None:
-                        total_val += float(rec.monto)
-                        found_any = True
-            except Exception as e:
-                print(f"Error querying reserves from DB in ORI for {period}: {e}")
-            finally:
-                db_session.close()
-            return total_val if found_any else None
-
-        if res_ext_actual is None:
-            res_ext_actual = get_reserves_from_db(col_actual) or 0.0
-        if res_ext_comp is None:
-            res_ext_comp = get_reserves_from_db(col_comp) or 0.0
-
-        # Buscar periodo anterior
-        periodo_prev_str = None
-        if col_comp and isinstance(col_comp, str) and '-' in col_comp:
-            parts = col_comp.split('-')
-            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-                y = int(parts[0])
-                m = parts[1]
-                periodo_prev_str = f"{y-1}-{m}"
-
-        res_ext_prev = None
-        if periodo_prev_str:
-            res_ext_prev = get_reserves_from_db(periodo_prev_str)
-
-        # Fallback if not found
-        if res_ext_prev is None and col_comp:
-            comp_year = col_comp.split('-')[0]
-            from src.models.database import SessionLocal
-            from src.models.historical_data import HistoricalDataRecord
-            db_session = SessionLocal()
-            try:
-                earliest_rec = db_session.query(HistoricalDataRecord.periodo).filter(
-                    HistoricalDataRecord.empresa.in_(companies_to_query),
-                    HistoricalDataRecord.periodo.like(f"{comp_year}-%"),
-                    HistoricalDataRecord.reporte == 'Balance'
-                ).order_by(HistoricalDataRecord.periodo.asc()).first()
-                if earliest_rec:
-                    res_ext_prev = get_reserves_from_db(earliest_rec[0])
-            except Exception as e:
-                print(f"Error getting earliest reserve fallback in ORI: {e}")
-            finally:
-                db_session.close()
-
-        if res_ext_prev is None:
-            res_ext_prev = res_ext_comp
-
-        # Calcular variaciones netas de reservas (Net ORI)
-        net_ori_25_raw = res_ext_actual - res_ext_comp
-        net_ori_24_raw = res_ext_comp - res_ext_prev
+        # Calcular variaciones netas de reservas (Net ORI), 100% consistente con Estado de Cambios en el Patrimonio
+        net_ori_25_raw = res_ext_actual - res_ini_actual
+        net_ori_24_raw = res_ext_comp - res_ini_comp
 
         # Calcular efectos brutos e impuestos (Tasa del 27%)
         # Neto = Bruto * 0.73  =>  Bruto = Neto / 0.73
@@ -260,11 +200,11 @@ class OriGenerator:
                     row_ganancia_base = r
                 elif "coberturas de flujo de efectivo" in val_clean or "coberturas" in val_clean:
                     row_coberturas = r
-                elif "antes de impuestos" in val_clean and "otros" in val_clean:
+                elif "antes de impuestos" in val_clean and ("otros" in val_clean or "otro resultado integral" in val_clean):
                     row_ori_pre_imp = r
-                elif "impuesto" in val_clean and ("otros" in val_clean or r > row_ori_pre_imp):
+                elif "impuesto" in val_clean and ("otros" in val_clean or "otro resultado integral" in val_clean or r > row_ori_pre_imp):
                     row_imp_ori = r
-                elif "total de otros resultados integrales" in val_clean or ("neto de impuestos" in val_clean and "otros" in val_clean):
+                elif "total de otros resultados integrales" in val_clean or ("neto de impuestos" in val_clean and "otros" in val_clean) or val_clean in ["otro resultado integral", "otros resultados integrales"]:
                     row_sub_ori = r
                 elif "resultado integral total" in val_clean or "total resultado integral" in val_clean or "total de resultado integral" in val_clean:
                     row_total_integral = r
@@ -287,7 +227,7 @@ class OriGenerator:
                 c24 = ws.cell(row=r, column=val24_col_idx)
                 if c25.value and isinstance(c25.value, str) and ("20" in c25.value or "Actual" in c25.value):
                     c25.value = periodo_actual_str
-                if c24.value and isinstance(c24.value, str) and ("20" in c24.value or "Anterior" in c24.value):
+                if c24.value and isinstance(c24.value, str) and any(k in c24.value for k in ["20", "Anterior", "Comparativo", "comparativo"]):
                     c24.value = periodo_comp_str
         
         if str(target_lang).lower() == 'en':

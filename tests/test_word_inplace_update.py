@@ -233,6 +233,45 @@ class TestWordInplaceUpdate(unittest.TestCase):
         self.assertEqual(table.rows[1].cells[2].text.strip(), "9.999.999", "El valor 2025 preexistente fue alterado indebidamente.")
         self.assertEqual(table.rows[2].cells[2].text.strip(), "88.888.888", "El total 2025 preexistente fue alterado indebidamente.")
 
+    def test_note_14_1_structural_rebuild_with_ninguno(self):
+        """
+        Test 6: Verifica que si una tabla existente en Word (ej. #N14.1 con 5 columnas antiguas)
+        cambia de formato en la Plantilla Maestra Global (ahora 7 columnas con Corriente y No corriente),
+        al emitir con Período Actual='2026-09' y Período Comparativo='Ninguno' se reconstruya a 7 columnas
+        con las cifras de 2026 y 2025 completas.
+        """
+        doc = docx.Document()
+        old_tbl = doc.add_table(rows=5, cols=5)
+        old_tbl.rows[0].cells[0].text = "Nombre entidad"
+        old_tbl.rows[0].cells[1].text = "relación"
+        old_tbl.rows[0].cells[2].text = "Moneda"
+        old_tbl.rows[0].cells[3].text = "M$"
+        old_tbl.rows[0].cells[4].text = "30.06.2026"
+        set_table_metadata(old_tbl, "#N14.1")
+
+        doc_io = io.BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+
+        engine = WordTemplateEngine(doc_io)
+        out_buf = engine.process(
+            empresa_activa="Pacifico Cable SpA",
+            periodo_actual="2026-09",
+            periodo_comp="Ninguno",
+            scale_factor=1000.0,
+            use_ifrs_auto=True,
+            include_headers=False
+        )
+
+        doc_out = docx.Document(out_buf)
+        self.assertEqual(len(doc_out.tables), 1)
+        rebuilt_tbl = doc_out.tables[0]
+        self.assertEqual(len(rebuilt_tbl.columns), 7, "La tabla #N14.1 debe haberse reconstruido con las 7 columnas nuevas.")
+        self.assertEqual(rebuilt_tbl.rows[3].cells[3].text.strip(), "28.797.507")
+        self.assertEqual(rebuilt_tbl.rows[3].cells[4].text.strip(), "22.150.376")
+        self.assertEqual(rebuilt_tbl.rows[3].cells[5].text.strip(), "131.548.096")
+        self.assertEqual(rebuilt_tbl.rows[3].cells[6].text.strip(), "121.965.389")
+
 if __name__ == '__main__':
     unittest.main()
 
