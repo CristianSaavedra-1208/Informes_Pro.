@@ -207,14 +207,15 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
     """
     Calcula los montos netos de ajustes de consolidación por mes YTD (desde Enero hasta periodo)
     para cada cuenta contable (incluyendo cuentas 9999xxx y cuentas operativas).
-    Retorna (ytd_months, month_cols, adjustments_by_account, acc_map).
+    Si report_type == "BOTH", retorna (ytd_months, month_cols, adj_bal, adj_pl, acc_map).
+    De lo contrario retorna (ytd_months, month_cols, adjustments_by_account, acc_map).
     """
     from collections import defaultdict
     from sqlalchemy import or_
     from src.models.database import SessionLocal
     from src.models.consolidacion import ConsolidationJournalEntry
     from src.core.consolidacion_account_mapper import load_consolidation_account_map, find_account_by_rubro_nota
-    from src.core.consolidacion_engine import resolver_montos_asiento, is_pl_account
+    from src.core.consolidacion_engine import resolver_montos_asiento, is_pl_account, obtener_saldos_base
     from src.core.excel_utils import format_periodo
     
     acc_map = load_consolidation_account_map(empresa_ref)
@@ -228,11 +229,15 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
         ytd_months = [periodo] if periodo else []
         
     month_cols = [f"Ajustes {format_periodo(m)}" for m in ytd_months]
-    adjustments_by_account = defaultdict(lambda: defaultdict(float))
+    adj_bal = defaultdict(lambda: defaultdict(float))
+    adj_pl = defaultdict(lambda: defaultdict(float))
     
     if not grupo_id or not ytd_months:
-        return ytd_months, month_cols, adjustments_by_account, acc_map
+        if report_type == "BOTH":
+            return ytd_months, month_cols, adj_bal, adj_pl, acc_map
+        return ytd_months, month_cols, (adj_pl if report_type == "PL" else adj_bal), acc_map
         
+    rubro_lookup_local = {}
     db = SessionLocal()
     try:
         for m_idx, m_str in enumerate(ytd_months):
@@ -252,6 +257,8 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
             if not entries_m:
                 continue
                 
+            base_data_m = obtener_saldos_base(grupo_id, m_str, db=db)
+            col_base_cache = {}
             vouchers_dict = defaultdict(list)
             for e in entries_m:
                 v_key = (
@@ -263,7 +270,16 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
                 
             for (col_val, glosa_val, codigo_val), entries_list in vouchers_dict.items():
                 try:
-                    resolved = resolver_montos_asiento(grupo_id, m_str, entries_list, db=db, columna_destino=col_val)
+                    resolved = resolver_montos_asiento(
+                        grupo_id,
+                        m_str,
+                        entries_list,
+                        db=db,
+                        columna_destino=col_val,
+                        preloaded_base_data=base_data_m,
+                        preloaded_asientos_periodo=entries_m,
+                        col_base_cache=col_base_cache,
+                    )
                 except Exception:
                     resolved = [{
                         "debe_calculado": e.debe or 0.0,
@@ -280,11 +296,18 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
                     
                     cuenta_cod = getattr(e, "cuenta_codigo", None)
                     if not cuenta_cod:
-                        cuenta_cod = find_account_by_rubro_nota(
-                            e.linea_item,
-                            getattr(e, "linea_nota", None),
-                            empresa=empresa_ref
-                        )
+                        l_nota = getattr(e, "linea_nota", None)
+                        rk = (e.linea_item, l_nota)
+                        if rk in rubro_lookup_local:
+                            cuenta_cod = rubro_lookup_local[rk]
+                        else:
+                            cuenta_cod = find_account_by_rubro_nota(
+                                e.linea_item,
+                                l_nota,
+                                empresa=empresa_ref,
+                                account_map=acc_map,
+                            )
+                            rubro_lookup_local[rk] = cuenta_cod
                     if not cuenta_cod:
                         continue
                     cuenta_cod = str(cuenta_cod).strip()
@@ -292,19 +315,24 @@ def _compute_monthly_adjustments(grupo_id: int, periodo: str, empresa_ref: str, 
                     acc_info = acc_map.get(cuenta_cod)
                     is_pl = (acc_info.get("tipo") == "P&L") if acc_info else is_pl_account(e.linea_item)
                     
-                    if report_type == "BALANCE" and is_pl:
-                        continue
-                    if report_type == "PL" and not is_pl:
-                        continue
-                        
-                    adjustments_by_account[cuenta_cod][col_m] += neto
+                    if is_pl:
+                        adj_pl[cuenta_cod][col_m] += neto
+                    else:
+                        adj_bal[cuenta_cod][col_m] += neto
     finally:
         db.close()
         
-    return ytd_months, month_cols, adjustments_by_account, acc_map
+    if report_type == "BOTH":
+        return ytd_months, month_cols, adj_bal, adj_pl, acc_map
+    return ytd_months, month_cols, (adj_pl if report_type == "PL" else adj_bal), acc_map
 
 
-def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance_df: pd.DataFrame = None) -> pd.DataFrame:
+def build_consolidated_balance_sabana(
+    grupo_name: str,
+    periodo: str,
+    map_balance_df: pd.DataFrame = None,
+    precomputed_adjustments: tuple = None,
+) -> pd.DataFrame:
     """
     Construye la sábana de auditoría consolidada para el Balance General.
     Muestra cada filial en una columna independiente, los ajustes mensuales YTD,
@@ -346,10 +374,13 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
                 all_accounts[acct_id][co] = all_accounts[acct_id].get(co, 0.0) + val
 
     # 2. Calcular ajustes mensuales YTD y cargar cuentas de consolidación (serie 9999xxx)
-    empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
-    ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
-        grupo_id, periodo, empresa_ref, report_type="BALANCE"
-    )
+    if precomputed_adjustments is not None:
+        ytd_months, month_cols, adjustments_by_account, acc_map = precomputed_adjustments
+    else:
+        empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
+        ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
+            grupo_id, periodo, empresa_ref, report_type="BALANCE"
+        )
     
     # Inyectar cuentas de consolidación de balance serie 9999xxx
     for cod, info in acc_map.items():
@@ -431,7 +462,12 @@ def build_consolidated_balance_sabana(grupo_name: str, periodo: str, map_balance
     return df_res
 
 
-def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.DataFrame = None) -> pd.DataFrame:
+def build_consolidated_pl_sabana(
+    grupo_name: str,
+    periodo: str,
+    map_pl_df: pd.DataFrame = None,
+    precomputed_adjustments: tuple = None,
+) -> pd.DataFrame:
     """
     Construye la sábana de auditoría consolidada para el Estado de Resultados / P&L.
     Muestra cada filial en una columna independiente, los ajustes mensuales YTD,
@@ -497,10 +533,13 @@ def build_consolidated_pl_sabana(grupo_name: str, periodo: str, map_pl_df: pd.Da
                     all_accounts[acct_id][co] = all_accounts[acct_id].get(co, 0.0) + val
 
     # 2. Calcular ajustes mensuales YTD y cargar cuentas de consolidación (serie 9999xxx)
-    empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
-    ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
-        grupo_id, periodo, empresa_ref, report_type="PL"
-    )
+    if precomputed_adjustments is not None:
+        ytd_months, month_cols, adjustments_by_account, acc_map = precomputed_adjustments
+    else:
+        empresa_ref = empresa_filial or empresa_matriz or (companies[0] if companies else None)
+        ytd_months, month_cols, adjustments_by_account, acc_map = _compute_monthly_adjustments(
+            grupo_id, periodo, empresa_ref, report_type="PL"
+        )
     
     # Inyectar cuentas de consolidación P&L serie 9999xxx
     for cod, info in acc_map.items():

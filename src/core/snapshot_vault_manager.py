@@ -18,6 +18,8 @@ from src.core.excel_utils import format_periodo
 
 # Caché en memoria para comprobación ultra rápida (< 0.1 ms)
 _SNAPSHOT_STATUS_CACHE = {}
+_HYBRID_COMP_CACHE: Dict[Tuple, Tuple[float, Any]] = {}
+_HYBRID_COMP_TTL_SEC = 15.0
 
 class SnapshotVaultManager:
     """
@@ -188,6 +190,8 @@ class SnapshotVaultManager:
             build_pl_sabana,
             build_consolidated_balance_sabana,
             build_consolidated_pl_sabana,
+            get_group_info,
+            _compute_monthly_adjustments,
         )
         from src.core.excel_utils import df_to_excel_bytes
 
@@ -211,9 +215,26 @@ class SnapshotVaultManager:
         sab_bal_df = None
         sab_pl_df = None
 
+        precomp_bal = None
+        precomp_pl = None
+        if is_consolidated:
+            try:
+                g_id, g_companies, emp_mat, emp_fil = get_group_info(empresa_clean)
+                if g_companies:
+                    emp_ref = emp_fil or emp_mat or g_companies[0]
+                    ytd_m, m_cols, adj_b, adj_p, acc_m = _compute_monthly_adjustments(
+                        g_id, periodo_clean, emp_ref, report_type="BOTH"
+                    )
+                    precomp_bal = (ytd_m, m_cols, adj_b, acc_m)
+                    precomp_pl = (ytd_m, m_cols, adj_p, acc_m)
+            except Exception as e_pre:
+                print(f"Advertencia pre-calculando ajustes YTD para {empresa_clean} {periodo_clean}: {e_pre}")
+
         try:
             if is_consolidated:
-                sab_bal_df = build_consolidated_balance_sabana(empresa_clean, periodo_clean, map_balance_df)
+                sab_bal_df = build_consolidated_balance_sabana(
+                    empresa_clean, periodo_clean, map_balance_df, precomputed_adjustments=precomp_bal
+                )
             else:
                 tb_df = TrialBalanceDB.get_trial_balance(empresa_clean, periodo_clean)
                 sab_bal_df = build_balance_sabana(tb_df, map_balance_df)
@@ -230,7 +251,9 @@ class SnapshotVaultManager:
 
         try:
             if is_consolidated:
-                sab_pl_df = build_consolidated_pl_sabana(empresa_clean, periodo_clean, map_pl_df)
+                sab_pl_df = build_consolidated_pl_sabana(
+                    empresa_clean, periodo_clean, map_pl_df, precomputed_adjustments=precomp_pl
+                )
             else:
                 pl_df = PlCuboDB.get_pl_cubo(empresa_clean, periodo_clean)
                 tb_df = TrialBalanceDB.get_trial_balance(empresa_clean, periodo_clean)
@@ -484,8 +507,12 @@ class SnapshotVaultManager:
                 grupo_id = grupo_obj.id if grupo_obj else None
                 db.close()
                 from src.core.consolidacion_engine import generar_hoja_trabajo
-                df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_clean)
-                df_hoja_comp_er, _ = generar_hoja_trabajo(grupo_id, comp_period_pl)
+                if 'df_hoja_act' not in locals() or df_hoja_act is None:
+                    df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_clean)
+                if comp_period_pl == comp_period_bal and 'df_hoja_comp' in locals() and df_hoja_comp is not None:
+                    df_hoja_comp_er = df_hoja_comp
+                else:
+                    df_hoja_comp_er, _ = generar_hoja_trabajo(grupo_id, comp_period_pl)
                 
                 def clean_str(s):
                     if pd.isna(s): return ""
@@ -733,9 +760,21 @@ class SnapshotVaultManager:
                         periodo_actual=periodo_clean,
                         periodo_comp=n_comp if n_comp != "Ninguno" else None
                     )
-                    wb_out = evaluate_formulas_in_workbook(wb_out)
-                    wb_bytes = wb_out.getvalue()
-                    evaluated_wb_cache[n_comp] = (wb_bytes, pd.ExcelFile(BytesIO(wb_bytes)))
+                    from src.core.rounding_reconciler import RoundingReconciler
+                    _, wb_eval_rec = RoundingReconciler.reconcile_and_evaluate_note_workbook(
+                        wb_out,
+                        empresa=empresa_clean,
+                        periodo_actual=periodo_clean,
+                        scale_factor=base_scale,
+                        df_bal=bal_preview if 'bal_preview' in locals() else None,
+                        df_er=er_preview if 'er_preview' in locals() else None,
+                        target_sheets=all_comp_sheets,
+                        return_raw=False,
+                    )
+                    wb_bytes = wb_eval_rec.getvalue()
+                    import openpyxl
+                    wb_openpyxl_eval = openpyxl.load_workbook(BytesIO(wb_bytes), data_only=True)
+                    evaluated_wb_cache[n_comp] = (wb_bytes, pd.ExcelFile(BytesIO(wb_bytes)), wb_openpyxl_eval)
                 except Exception as ex_wb:
                     print(f"Advertencia pre-evaluando libro de notas para {empresa_clean} {periodo_clean} (comp {n_comp}): {ex_wb}")
 
@@ -759,10 +798,9 @@ class SnapshotVaultManager:
                 try:
                     if note_comp not in evaluated_wb_cache:
                         continue
-                    wb_bytes, xl_nota_f = evaluated_wb_cache[note_comp]
-                    excel_nota_out = BytesIO(wb_bytes)
+                    wb_bytes, xl_nota_f, wb_openpyxl_eval = evaluated_wb_cache[note_comp]
 
-                    named_ranges = extract_named_ranges_from_excel(excel_nota_out, code)
+                    named_ranges = extract_named_ranges_from_excel(None, code, wb=wb_openpyxl_eval)
                     if named_ranges:
                         raw_els = []
                         for r_name, df_chunk in named_ranges:
@@ -790,6 +828,16 @@ class SnapshotVaultManager:
                         notes_saved.append(code)
                 except Exception as ex_n:
                     print(f"Advertencia al congelar nota {code} para {empresa_clean} {periodo_clean}: {ex_n}")
+
+            for _, xl_cached, wb_cached in evaluated_wb_cache.values():
+                try:
+                    xl_cached.close()
+                except Exception:
+                    pass
+                try:
+                    wb_cached.close()
+                except Exception:
+                    pass
 
         # =========================================================================
         # 3. METADATOS Y CONTROL RELACIONAL
@@ -848,6 +896,7 @@ class SnapshotVaultManager:
                 db.add(new_rec)
             db.commit()
             _SNAPSHOT_STATUS_CACHE[(empresa_clean, periodo_clean)] = True
+            _HYBRID_COMP_CACHE.clear()
             return True, f"Snapshot congelado con éxito en Bóveda ({len(statements_saved)} estados financieros y {len(notes_saved)} notas explicativas)."
         except Exception as e_db:
             db.rollback()
@@ -856,15 +905,810 @@ class SnapshotVaultManager:
             db.close()
 
     @staticmethod
-    def get_statement_excel(empresa: str, periodo_actual: str, code: str) -> Optional[bytes]:
-        """Recupera el archivo Excel (.xlsx) congelado de un Estado Financiero si existe en la Bóveda."""
+    def _norm_stmt_code(code: str) -> str:
+        norm_code = str(code or "").upper().strip()
+        if not norm_code.startswith("#"):
+            norm_code = "#" + norm_code
+        return norm_code
+
+    @staticmethod
+    def _is_no_comp(comp_period: Optional[str]) -> bool:
+        return comp_period is not None and str(comp_period).strip().lower() in ["ninguno", "none", ""]
+
+    @staticmethod
+    def _get_stmt_native_comp(meta: Dict[str, Any], norm_code: str) -> Optional[str]:
+        if norm_code in ["#BALANCE", "#ESF", "#PATRIMONIO", "#EFE"]:
+            return meta.get("comp_period_bal")
+        return meta.get("comp_period_pl")
+
+    @staticmethod
+    def _get_note_native_comp(meta: Dict[str, Any], note_code: str) -> Optional[str]:
+        norm_note = "#" + str(note_code or "").replace("#", "").strip().upper()
+        full_reg = get_full_note_registry()
+        info = full_reg.get(norm_note, {})
+        cat = info.get("category", "resultados")
+        is_bal_note = cat in [
+            "activos_corrientes",
+            "activos_no_corrientes",
+            "pasivos_corrientes",
+            "pasivos_no_corrientes",
+            "patrimonio",
+        ]
+        return meta.get("comp_period_bal") if is_bal_note else meta.get("comp_period_pl")
+
+    @staticmethod
+    def _splice_comp_into_statement_df(
+        df_actual_frozen: pd.DataFrame,
+        df_comp_source: Optional[pd.DataFrame],
+        comp_period: Optional[str],
+    ) -> pd.DataFrame:
+        """
+        Preserva el 100% de la columna Actual congelada en df_actual_frozen e inyecta en la columna
+        Comparativa los saldos provenientes de df_comp_source (Snapshot cerrado o cálculo al vuelo)
+        o vacía la columna si comp_period es 'Ninguno'.
+        """
+        if df_actual_frozen is None or df_actual_frozen.empty or len(df_actual_frozen.columns) < 2:
+            return df_actual_frozen
+
+        import numpy as np
+        import re as _re
+        import unicodedata as _ud
+
+        out_df = df_actual_frozen.copy()
+        live_date_cols = [
+            c for c in out_df.columns[1:]
+            if _re.search(r'20\d{2}', str(c)) or str(c).strip().lower() not in ["nota", "notas", "note", "notes"]
+        ]
+        if len(live_date_cols) < 2:
+            return out_df
+
+        act_col = live_date_cols[0]
+        comp_col = live_date_cols[1]
+
+        if SnapshotVaultManager._is_no_comp(comp_period):
+            out_df[comp_col] = np.nan
+            if str(comp_col) != "Comp":
+                out_df = out_df.rename(columns={comp_col: "Comp"})
+            return out_df
+
+        def _norm_lbl(v: Any) -> str:
+            if pd.isna(v):
+                return ""
+            s = str(v).strip().lower()
+            s = "".join(ch for ch in _ud.normalize("NFD", s) if _ud.category(ch) != "Mn")
+            return _re.sub(r"\s+", " ", s)
+
+        comp_str = str(comp_period).strip()
+        target_col_name = f"{comp_str} (Comp)" if comp_str == str(act_col) else comp_str
+
+        if df_comp_source is not None and not df_comp_source.empty and len(df_comp_source.columns) >= 2:
+            src_date_cols = [
+                c for c in df_comp_source.columns[1:]
+                if _re.search(r'20\d{2}', str(c)) or str(c).strip().lower() not in ["nota", "notas", "note", "notes"]
+            ]
+            if src_date_cols:
+                src_act_col = src_date_cols[0]
+                if len(out_df) == len(df_comp_source):
+                    out_df[comp_col] = df_comp_source[src_act_col].values
+                else:
+                    src_occ_map: Dict[Tuple[str, int], Any] = {}
+                    src_first_map: Dict[str, Any] = {}
+                    occ_counts_src: Dict[str, int] = {}
+                    for _, r_s in df_comp_source.iterrows():
+                        k = _norm_lbl(r_s.iloc[0])
+                        if k:
+                            occ = occ_counts_src.get(k, 0)
+                            occ_counts_src[k] = occ + 1
+                            src_occ_map[(k, occ)] = r_s[src_act_col]
+                            if k not in src_first_map:
+                                src_first_map[k] = r_s[src_act_col]
+
+                    occ_counts_dst: Dict[str, int] = {}
+                    new_vals = []
+                    for idx_l, r_l in out_df.iterrows():
+                        k_l = _norm_lbl(r_l.iloc[0])
+                        if k_l:
+                            occ_d = occ_counts_dst.get(k_l, 0)
+                            occ_counts_dst[k_l] = occ_d + 1
+                            if (k_l, occ_d) in src_occ_map:
+                                new_vals.append(src_occ_map[(k_l, occ_d)])
+                            elif k_l in src_first_map:
+                                new_vals.append(src_first_map[k_l])
+                            else:
+                                new_vals.append(np.nan)
+                        else:
+                            new_vals.append(np.nan)
+                    out_df[comp_col] = new_vals
+        else:
+            # Período abierto sin datos cargados en BD: limpiar columna (preservando solo N° Acciones si aplica)
+            cleaned_vals = []
+            for _, r_l in out_df.iterrows():
+                k_l = _norm_lbl(r_l.iloc[0])
+                if "acciones" in k_l:
+                    cleaned_vals.append(r_l[act_col])
+                else:
+                    cleaned_vals.append(np.nan)
+            out_df[comp_col] = cleaned_vals
+
+        if str(comp_col) != target_col_name:
+            out_df = out_df.rename(columns={comp_col: target_col_name})
+        return out_df
+
+    @staticmethod
+    def _compute_live_statement_for_period(
+        empresa: str,
+        periodo: str,
+        norm_code: str,
+        scale_factor: float = 1000.0,
+        target_lang: str = "es",
+    ) -> Optional[pd.DataFrame]:
+        """
+        Calcula al vuelo (en memoria viva) el Estado Financiero de un período abierto `periodo`
+        para extraer su columna principal como comparativo híbrido.
+        """
+        import time as _time
+        empresa_clean = str(empresa or "").strip()
+        periodo_clean = str(periodo or "").strip()
+        norm_c = SnapshotVaultManager._norm_stmt_code(norm_code)
+        if norm_c == "#ESF":
+            norm_c = "#BALANCE"
+
+        cache_key = ("stmt_live", empresa_clean, periodo_clean, norm_c, float(scale_factor), str(target_lang))
+        cached = _HYBRID_COMP_CACHE.get(cache_key)
+        if cached and (_time.time() - cached[0]) < _HYBRID_COMP_TTL_SEC:
+            return cached[1].copy() if cached[1] is not None else None
+
+        is_consolidated = empresa_clean.startswith("[GRUPO]")
+        clean_folder_name = empresa_clean.replace("[GRUPO] ", "").strip() if is_consolidated else empresa_clean
+        empresa_path = os.path.join("data", "empresas", clean_folder_name)
+        if not os.path.exists(empresa_path) and os.path.exists(os.path.join("data", "empresas", empresa_clean)):
+            empresa_path = os.path.join("data", "empresas", empresa_clean)
+
+        from src.core.word_template_engine import WordTemplateEngine, load_mappings_for_entity
+        map_balance_df, map_pl_df = load_mappings_for_entity(empresa_clean)
+        wte = WordTemplateEngine(None)
+
+        def _clean_str(s: Any) -> str:
+            if pd.isna(s):
+                return ""
+            return (
+                str(s).strip().lower()
+                .replace("á", "a").replace("é", "e").replace("í", "i")
+                .replace("ó", "o").replace("ú", "u")
+            )
+
+        out_df: Optional[pd.DataFrame] = None
+        try:
+            grupo_id = None
+            df_hoja_act = None
+            if is_consolidated:
+                db = SessionLocal()
+                try:
+                    grupo_obj = db.query(ConsolidationGroup).filter_by(nombre_grupo=clean_folder_name).first()
+                    grupo_id = grupo_obj.id if grupo_obj else None
+                finally:
+                    db.close()
+                if not grupo_id:
+                    _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                    return None
+                from src.core.consolidacion_engine import generar_hoja_trabajo
+                df_hoja_act, _ = generar_hoja_trabajo(grupo_id, periodo_clean)
+                if df_hoja_act is None or df_hoja_act.empty:
+                    _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                    return None
+
+            if norm_c == "#BALANCE":
+                template_bal_path = os.path.join(empresa_path, "Balance clasificado.xlsx")
+                if not os.path.exists(template_bal_path):
+                    template_bal_path = os.path.join("templates", "Balance clasificado.xlsx")
+                if not os.path.exists(template_bal_path):
+                    return None
+
+                from src.reporting.balance_generator import BalanceGenerator
+                gen_bal = BalanceGenerator(template_bal_path)
+                if is_consolidated:
+                    bs_subtotals = {
+                        "activos corrientes", "activos corrientes totales",
+                        "activos no corrientes", "activos no corrientes totales",
+                        "total activos", "patrimonio y pasivos",
+                        "pasivos corrientes", "pasivo corrientes totales",
+                        "pasivos no corrientes", "pasivo no corrientes totales",
+                        "total pasivos", "patrimonio", "patrimonio total",
+                        "total patrimonio y pasivos", "estado de resultados",
+                    }
+                    bs_sub_norm = {_clean_str(x) for x in bs_subtotals}
+                    idx_er = df_hoja_act[df_hoja_act["Balance clasificado"] == "Estado de Resultados"].index
+                    df_sec = df_hoja_act.loc[:idx_er[0] - 1] if not idx_er.empty else df_hoja_act
+                    df_clean = df_sec[df_sec["Balance clasificado"].notna() & (df_sec["Balance clasificado"].astype(str).str.strip() != "")]
+                    df_clean = df_clean[~df_clean["Balance clasificado"].apply(_clean_str).isin(bs_sub_norm)]
+                    tb_df = pd.DataFrame({"cuenta_id": df_clean["Balance clasificado"], "saldo_final": df_clean["CONSOLIDADO"]})
+
+                    def _is_pl_line(li: Any) -> bool:
+                        norm = _clean_str(li)
+                        if any(x in norm for x in ["ingreso", "gasto", "costo", "egreso", "depreciacion", "amortizacion", "diferencia de cambio", "unidad de reajuste", "ganancia", "perdida"]):
+                            if not any(x in norm for x in ["diferido", "diferidos", "anticipado", "anticipados", "por pagar", "por cobrar", "acumulado", "acumulados", "acumulada", "acumuladas", "capital", "reserva", "ejercicio", "periodo"]):
+                                return True
+                        return False
+
+                    tb_df = tb_df[~tb_df["cuenta_id"].apply(_is_pl_line)]
+                    if tb_df.empty or pd.to_numeric(tb_df["saldo_final"], errors="coerce").fillna(0.0).abs().sum() == 0.0:
+                        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                        return None
+                    dummy_map = pd.DataFrame({"N° de Cuenta": tb_df["cuenta_id"], "Clasificación balance": tb_df["cuenta_id"]})
+                    res_bytes = gen_bal.generate(
+                        tb_df, dummy_map, scale_factor=scale_factor, tb_df_comp=None,
+                        periodo_actual_str=periodo_clean, periodo_comp_str=None, target_lang=target_lang
+                    )
+                else:
+                    tb_df = TrialBalanceDB.get_trial_balance(empresa_clean, periodo_clean)
+                    if tb_df is None or tb_df.empty:
+                        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                        return None
+                    res_bytes = gen_bal.generate(
+                        tb_df, map_balance_df, scale_factor=scale_factor, tb_df_comp=None,
+                        periodo_actual_str=periodo_clean, periodo_comp_str=None, target_lang=target_lang
+                    )
+                out_df = wte._extract_balance_preview(res_bytes, periodo_clean, "Comp")
+
+            elif norm_c in ["#ER", "#ORI"]:
+                template_er_path = os.path.join(empresa_path, "Estado de Resultados Clasificados.xlsx")
+                if not os.path.exists(template_er_path):
+                    template_er_path = os.path.join("templates", "Estado de Resultados Clasificados.xlsx")
+                if not os.path.exists(template_er_path):
+                    return None
+
+                if is_consolidated:
+                    pl_subtotals = {
+                        "ganancia bruta", "resultado antes de impuestos",
+                        "ganancias (perdida) del ejercicio", "ganancia (perdida) del ejercicio",
+                        "estado de resultados", "otros rubros no clasificados",
+                    }
+                    pl_sub_norm = {_clean_str(x) for x in pl_subtotals}
+                    idx_er = df_hoja_act[df_hoja_act["Balance clasificado"] == "Estado de Resultados"].index
+                    df_sec = df_hoja_act.loc[idx_er[0] + 1:] if not idx_er.empty else df_hoja_act
+                    df_clean = df_sec[df_sec["Balance clasificado"].notna() & (df_sec["Balance clasificado"].astype(str).str.strip() != "")]
+                    df_clean = df_clean[~df_clean["Balance clasificado"].apply(_clean_str).isin(pl_sub_norm)]
+                    pl_dict = {row["Balance clasificado"]: [row["CONSOLIDADO"]] for _, row in df_clean.iterrows()}
+                    pl_df_wide = pd.DataFrame(pl_dict)
+                    if pl_df_wide.empty or sum(abs(float(v[0] or 0.0)) for v in pl_dict.values() if pd.notna(v[0])) == 0.0:
+                        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                        return None
+                else:
+                    pl_df_wide = PlCuboDB.get_pl_cubo(empresa_clean, periodo_clean)
+                    if pl_df_wide is None or pl_df_wide.empty:
+                        tb_act_fallback = TrialBalanceDB.get_trial_balance(empresa_clean, periodo_clean)
+                        if tb_act_fallback is not None and not tb_act_fallback.empty and map_pl_df is not None:
+                            from src.core.sabana_builder import build_pl_sabana
+                            pl_df_wide = build_pl_sabana(None, map_pl_df, tb_act_fallback)
+                    if pl_df_wide is None or pl_df_wide.empty:
+                        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                        return None
+
+                from src.reporting.er_generator import ERGenerator
+                gen_er = ERGenerator(template_er_path)
+                res_bytes_er, _ = gen_er.generate(
+                    pl_df_wide, scale_factor=scale_factor, pl_df_comp=None,
+                    periodo_actual_str=periodo_clean, periodo_comp_str=None, target_lang=target_lang
+                )
+                er_preview = wte._extract_er_preview(res_bytes_er, periodo_clean, "Comp")
+                if norm_c == "#ER":
+                    out_df = er_preview
+                else:
+                    template_ori_path = os.path.join(empresa_path, "Estado de Resultados Integrales.xlsx")
+                    if not os.path.exists(template_ori_path):
+                        template_ori_path = os.path.join("templates", "Estado de Resultados Integrales.xlsx")
+                    if os.path.exists(template_ori_path):
+                        from src.reporting.ori_generator import OriGenerator
+                        bal_for_ori = SnapshotVaultManager._compute_live_statement_for_period(
+                            empresa_clean, periodo_clean, "#BALANCE", scale_factor=scale_factor, target_lang=target_lang
+                        )
+                        gen_ori = OriGenerator(template_ori_path)
+                        res_bytes_ori = gen_ori.generate(
+                            pl_preview_df=er_preview,
+                            periodo_actual_str=periodo_clean,
+                            periodo_comp_str=None,
+                            bal_preview_df=bal_for_ori,
+                            empresa=empresa_clean,
+                            target_lang=target_lang,
+                        )
+                        out_df = wte._extract_ori_preview(res_bytes_ori, periodo_clean, "Comp")
+
+            elif norm_c == "#EFE":
+                template_cf_path = os.path.join(empresa_path, "Estado de Flujos de Efectivo.xlsx")
+                if not os.path.exists(template_cf_path):
+                    template_cf_path = os.path.join("templates", "Estado de Flujos de Efectivo.xlsx")
+                if not os.path.exists(template_cf_path):
+                    return None
+
+                try:
+                    prior_dec_cf = f"{int(periodo_clean[:4]) - 1}-12"
+                except Exception:
+                    prior_dec_cf = None
+
+                from src.reporting.cash_flow_generator import CashFlowGenerator
+                gen_cf = CashFlowGenerator(template_cf_path)
+                if is_consolidated:
+                    from src.core.consolidacion_engine import generar_hoja_trabajo
+                    df_hoja_prior = None
+                    if prior_dec_cf:
+                        df_hoja_prior, _ = generar_hoja_trabajo(grupo_id, prior_dec_cf)
+                    res_bytes_cf, _ = gen_cf.generate(
+                        empresa=empresa_clean,
+                        periodo_actual_str=periodo_clean,
+                        periodo_comp_str=prior_dec_cf,
+                        map_balance_df=map_balance_df,
+                        map_pl_df=map_pl_df,
+                        method="Directo",
+                        is_consolidado=True,
+                        consolidated_hoja_trabajo_df=df_hoja_act,
+                        consolidated_hoja_trabajo_comp_df=df_hoja_prior,
+                        scale_factor=scale_factor,
+                        target_lang=target_lang,
+                    )
+                else:
+                    tb_check = TrialBalanceDB.get_trial_balance(empresa_clean, periodo_clean)
+                    if tb_check is None or tb_check.empty:
+                        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), None)
+                        return None
+                    res_bytes_cf, _ = gen_cf.generate(
+                        empresa=empresa_clean,
+                        periodo_actual_str=periodo_clean,
+                        periodo_comp_str=prior_dec_cf,
+                        map_balance_df=map_balance_df,
+                        map_pl_df=map_pl_df,
+                        method="Directo",
+                        is_consolidado=False,
+                        scale_factor=scale_factor,
+                        target_lang=target_lang,
+                    )
+                out_df = wte._extract_cf_preview(res_bytes_cf, periodo_clean, prior_dec_cf or "Comp")
+        except Exception as e:
+            print(f"Advertencia calculando comparativo al vuelo ({norm_c}) para {empresa_clean} {periodo_clean}: {e}")
+            out_df = None
+
+        _HYBRID_COMP_CACHE[cache_key] = (_time.time(), out_df.copy() if out_df is not None else None)
+        return out_df
+
+    @staticmethod
+    def _build_hybrid_patrimonio(
+        empresa: str,
+        periodo_actual: str,
+        comp_period: Optional[str],
+        scale_factor: float = 1000.0,
+        target_lang: str = "es",
+    ) -> Optional[Tuple[pd.DataFrame, bytes]]:
+        """
+        Reconstruye #PATRIMONIO preservando el Bloque 1 congelado de periodo_actual
+        y combinándolo con el Bloque 2 de comp_period (Snapshot cerrado o al vuelo).
+        """
+        import time as _time
+        empresa_clean = str(empresa or "").strip()
+        periodo_act_clean = str(periodo_actual or "").strip()
+        comp_key = "Ninguno" if SnapshotVaultManager._is_no_comp(comp_period) else str(comp_period or "").strip()
+        cache_key = ("pat_hybrid", empresa_clean, periodo_act_clean, comp_key, float(scale_factor), str(target_lang))
+        cached = _HYBRID_COMP_CACHE.get(cache_key)
+        if cached and (_time.time() - cached[0]) < _HYBRID_COMP_TTL_SEC:
+            val = cached[1]
+            return (val[0].copy(), val[1]) if val is not None else None
+
+        is_consolidated = empresa_clean.startswith("[GRUPO]")
+        clean_folder_name = empresa_clean.replace("[GRUPO] ", "").strip() if is_consolidated else empresa_clean
+        empresa_path = os.path.join("data", "empresas", clean_folder_name)
+        if not os.path.exists(empresa_path) and os.path.exists(os.path.join("data", "empresas", empresa_clean)):
+            empresa_path = os.path.join("data", "empresas", empresa_clean)
+
+        template_pat_path = os.path.join(empresa_path, "Estado de Cambios en el Patrimonio.xlsx")
+        if not os.path.exists(template_pat_path):
+            template_pat_path = os.path.join("templates", "Estado de Cambios en el Patrimonio.xlsx")
+        if not os.path.exists(template_pat_path):
+            return None
+
+        try:
+            is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+            if is_no_comp:
+                try:
+                    pat_comp_bal = f"{int(periodo_act_clean[:4]) - 1}-12"
+                except Exception:
+                    pat_comp_bal = "Ninguno"
+            else:
+                pat_comp_bal = comp_key
+
+            bal_res = SnapshotVaultManager.get_statement(
+                empresa_clean, periodo_act_clean, "#BALANCE", comp_period=pat_comp_bal, scale_factor=scale_factor
+            )
+            er_res = SnapshotVaultManager.get_statement(
+                empresa_clean, periodo_act_clean, "#ER", comp_period=("Ninguno" if is_no_comp else comp_key), scale_factor=scale_factor
+            )
+            bal_df_pat = bal_res[0] if bal_res else None
+            pl_df_pat = er_res[0] if er_res else None
+
+            from src.reporting.patrimonio_generator import PatrimonioGenerator
+            from src.core.excel_utils import detect_patrimonio_skiprows, clean_patrimonio_preview_df
+
+            pat_engine = PatrimonioGenerator(template_pat_path)
+            res_bytes_pat = pat_engine.generate(
+                bal_preview_df=bal_df_pat,
+                pl_preview_df=pl_df_pat,
+                periodo_actual_str=periodo_act_clean,
+                periodo_comp_str=None if is_no_comp else comp_key,
+                empresa=empresa_clean,
+                target_lang=target_lang,
+            )
+            raw_bytes = res_bytes_pat.getvalue()
+            buf = BytesIO(raw_bytes)
+            pat_skip = detect_patrimonio_skiprows(buf)
+            buf.seek(0)
+            pat_preview = pd.read_excel(buf, skiprows=pat_skip)
+            pat_preview = clean_patrimonio_preview_df(pat_preview)
+            _HYBRID_COMP_CACHE[cache_key] = (_time.time(), (pat_preview.copy(), raw_bytes))
+            return pat_preview, raw_bytes
+        except Exception as e:
+            print(f"Advertencia reconstruyendo Patrimonio híbrido para {empresa_clean} {periodo_act_clean} vs {comp_key}: {e}")
+            return None
+
+    @staticmethod
+    def _patch_frozen_statement_excel(
+        raw_xlsx_bytes: bytes,
+        norm_code: str,
+        df_override: pd.DataFrame,
+        periodo_actual: str,
+        comp_period: Optional[str],
+        target_lang: str = "es",
+    ) -> bytes:
+        """
+        Actualiza en memoria únicamente el encabezado y la columna comparativa del Excel congelado (.xlsx),
+        preservando intactos al 100% los estilos corporativos, bordes, negritas y los saldos de periodo_actual.
+        """
+        if not raw_xlsx_bytes or df_override is None or df_override.empty:
+            return raw_xlsx_bytes
+
+        try:
+            import openpyxl
+            import re as _re
+            import unicodedata as _ud
+            from src.reporting.er_generator import format_period_date
+
+            wb = openpyxl.load_workbook(BytesIO(raw_xlsx_bytes))
+            ws = wb.active
+
+            def _norm_lbl(v: Any) -> str:
+                if v is None or pd.isna(v):
+                    return ""
+                s = str(v).strip().lower()
+                s = "".join(ch for ch in _ud.normalize("NFD", s) if _ud.category(ch) != "Mn")
+                return _re.sub(r"\s+", " ", s)
+
+            df_labels_set = {_norm_lbl(v) for v in df_override.iloc[:, 0] if _norm_lbl(v)}
+
+            # 1. Detectar columna de etiquetas y columnas de fecha/valores
+            name_col_idx = 1
+            best_matches = -1
+            for c_cand in range(1, min(5, ws.max_column + 1)):
+                m_cnt = sum(
+                    1 for r_i in range(1, ws.max_row + 1)
+                    if _norm_lbl(ws.cell(row=r_i, column=c_cand).value) in df_labels_set
+                )
+                if m_cnt > best_matches:
+                    best_matches = m_cnt
+                    name_col_idx = c_cand
+
+            first_data_row = ws.max_row + 1
+            for r_i in range(1, ws.max_row + 1):
+                if _norm_lbl(ws.cell(row=r_i, column=name_col_idx).value) in df_labels_set:
+                    first_data_row = r_i
+                    break
+            header_max_row = max(1, first_data_row - 1)
+
+            if norm_code in ["#BALANCE", "#ESF"]:
+                from src.core.excel_utils import detect_balance_columns, read_template_config
+                cfg = read_template_config(wb)
+                if cfg:
+                    act_col_idx = int(cfg.get("val_actual_col", 4))
+                    comp_col_idx = int(cfg.get("val_comp_col", 5))
+                else:
+                    _, _, act_col_idx, comp_col_idx = detect_balance_columns(ws, wb)
+            else:
+                nota_col_idx = None
+                for c_i in range(name_col_idx + 1, ws.max_column + 1):
+                    for r_i in range(1, header_max_row + 1):
+                        v = ws.cell(row=r_i, column=c_i).value
+                        if v is not None and str(v).strip().lower() in ["nota", "notas", "note", "notes"]:
+                            nota_col_idx = c_i
+                            break
+                    if nota_col_idx is not None:
+                        break
+
+                cand_val_cols = []
+                for c_i in range(name_col_idx + 1, ws.max_column + 1):
+                    if c_i == nota_col_idx:
+                        continue
+                    has_hdr_or_num = False
+                    for r_i in range(1, ws.max_row + 1):
+                        v = ws.cell(row=r_i, column=c_i).value
+                        if v is not None and str(v).strip() != "":
+                            has_hdr_or_num = True
+                            break
+                    if has_hdr_or_num:
+                        cand_val_cols.append(c_i)
+
+                if len(cand_val_cols) < 2:
+                    return raw_xlsx_bytes
+                act_col_idx, comp_col_idx = cand_val_cols[0], cand_val_cols[1]
+
+            # 2. Actualizar encabezado de fecha comparativa (y corregir fecha actual si era datetime de plantilla)
+            is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+            fmt_act = format_period_date(periodo_actual, lang=target_lang) or str(periodo_actual)
+            fmt_comp = "" if is_no_comp else (format_period_date(str(comp_period).strip(), lang=target_lang) or str(comp_period).strip())
+
+            updated_comp_hdr = False
+            for r_h in range(1, header_max_row + 1):
+                c_act = ws.cell(row=r_h, column=act_col_idx)
+                c_cmp = ws.cell(row=r_h, column=comp_col_idx)
+                v_act = c_act.value
+                v_cmp = c_cmp.value
+
+                if isinstance(v_act, (datetime.datetime, datetime.date)):
+                    c_act.value = fmt_act
+
+                is_date_hdr = (
+                    isinstance(v_cmp, (datetime.datetime, datetime.date))
+                    or (isinstance(v_cmp, str) and (_re.search(r"20\d{2}", v_cmp) or any(w in v_cmp.lower() for w in ["anterior", "comparat", "comp"])))
+                    or (isinstance(v_cmp, (int, float)) and 2000 <= v_cmp <= 2100)
+                )
+                if is_date_hdr:
+                    c_cmp.value = fmt_comp
+                    updated_comp_hdr = True
+
+            if not updated_comp_hdr:
+                for r_h in range(1, header_max_row + 1):
+                    v_act = ws.cell(row=r_h, column=act_col_idx).value
+                    if v_act is not None and _re.search(r"20\d{2}", str(v_act)):
+                        ws.cell(row=r_h, column=comp_col_idx).value = fmt_comp
+                        break
+
+            # 3. Extraer valores de la columna comparativa de df_override por (etiqueta_norm, ocurrencia)
+            df_date_cols = [
+                c for c in df_override.columns[1:]
+                if _re.search(r"20\d{2}", str(c)) or str(c).strip().lower() not in ["nota", "notas", "note", "notes"]
+            ]
+            if len(df_date_cols) < 2:
+                return raw_xlsx_bytes
+            df_comp_col = df_date_cols[1]
+
+            occ_src: Dict[str, int] = {}
+            val_by_occ: Dict[Tuple[str, int], Any] = {}
+            val_first: Dict[str, Any] = {}
+            for _, row_df in df_override.iterrows():
+                k = _norm_lbl(row_df.iloc[0])
+                if k:
+                    occ_i = occ_src.get(k, 0)
+                    occ_src[k] = occ_i + 1
+                    val_by_occ[(k, occ_i)] = row_df[df_comp_col]
+                    if k not in val_first:
+                        val_first[k] = row_df[df_comp_col]
+
+            occ_ws: Dict[str, int] = {}
+            for r_w in range(first_data_row, ws.max_row + 1):
+                lbl_w = _norm_lbl(ws.cell(row=r_w, column=name_col_idx).value)
+                if not lbl_w:
+                    continue
+                occ_i = occ_ws.get(lbl_w, 0)
+                occ_ws[lbl_w] = occ_i + 1
+                matched = False
+                raw_v = None
+                if (lbl_w, occ_i) in val_by_occ:
+                    raw_v = val_by_occ[(lbl_w, occ_i)]
+                    matched = True
+                elif lbl_w in val_first:
+                    raw_v = val_first[lbl_w]
+                    matched = True
+
+                if matched:
+                    cell_cmp = ws.cell(row=r_w, column=comp_col_idx)
+                    if is_no_comp or raw_v is None or pd.isna(raw_v) or str(raw_v).strip() == "":
+                        cell_cmp.value = None
+                    else:
+                        try:
+                            fv = float(raw_v)
+                            cell_cmp.value = int(round(fv)) if abs(fv - round(fv)) < 1e-6 else fv
+                        except Exception:
+                            cell_cmp.value = raw_v
+
+            out_buf = BytesIO()
+            wb.save(out_buf)
+            return out_buf.getvalue()
+        except Exception as e:
+            print(f"Advertencia parcheando Excel congelado {norm_code}: {e}")
+            return raw_xlsx_bytes
+
+    @staticmethod
+    def _build_hybrid_note_for_comp(
+        empresa: str,
+        periodo_actual: str,
+        note_code: str,
+        comp_period: Optional[str],
+        scale_factor: float = 1000.0,
+        target_lang: str = "es",
+    ) -> Optional[Tuple[List[Tuple[str, Any]], bytes]]:
+        """
+        Genera una Nota explicativa híbrida cuando periodo_actual está Cerrado pero se solicita un
+        comp_period distinto al nativo del Snapshot (ya sea Cerrado en Bóveda o Abierto al vuelo).
+        - periodo_actual usa su contexto/mapeo congelado e inmutable de Bóveda.
+        - comp_period usa su Snapshot congelado (si está cerrado) o se calcula al vuelo (si está abierto).
+        - Reconcilia cuadraturas contra los EEFF híbridos y preserva exactitud de celdas actuales congeladas.
+        """
+        import time as _time
+        empresa_clean = str(empresa or "").strip()
+        periodo_act_clean = str(periodo_actual or "").strip()
+        norm_note_code = "#" + str(note_code or "").replace("#", "").strip().upper()
+        comp_clean = "Ninguno" if SnapshotVaultManager._is_no_comp(comp_period) else str(comp_period or "").strip()
+
+        cache_key = ("note_hybrid", empresa_clean, periodo_act_clean, norm_note_code, comp_clean, float(scale_factor), str(target_lang))
+        cached = _HYBRID_COMP_CACHE.get(cache_key)
+        if cached and (_time.time() - cached[0]) < _HYBRID_COMP_TTL_SEC:
+            c_els, c_bytes = cached[1]
+            copied_els = [
+                (it[0], it[1].copy() if isinstance(it[1], pd.DataFrame) else it[1], *it[2:])
+                for it in c_els
+            ]
+            return copied_els, c_bytes
+
+        template_nota = "Plantilla de notas_v1.xlsx"
+        if not os.path.exists(template_nota):
+            return None
+
+        full_reg = get_full_note_registry()
+        info = full_reg.get(norm_note_code)
+        if not info or not info.get("sheets"):
+            return None
+        target_sheets = info["sheets"]
+        is_consolidated = empresa_clean.startswith("[GRUPO]")
+
+        try:
+            from src.core.word_template_engine import load_mappings_for_entity
+            from src.core.sabana_manager import SabanaManager
+            from src.reporting.note_generator import NoteGenerator
+            from src.core.external_notes_manager import ExternalNotesManager
+            from src.core.rounding_reconciler import RoundingReconciler
+            from src.core.excel_utils import extract_named_ranges_from_excel
+            from src.ui_pages.informes_y_notas import split_sheet_into_elements
+            from src.reporting.formatting import ensure_subtable_separator_rows
+
+            map_balance_df, map_pl_df = load_mappings_for_entity(empresa_clean)
+            bundle = SabanaManager.build_sabana_bundle(
+                active_entity=empresa_clean,
+                periodo_actual=periodo_act_clean,
+                periodo_comp=comp_clean,
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+            )
+            entity_contexts = bundle["contexts"]
+
+            engine_notes = NoteGenerator(template_nota)
+            wb_out = engine_notes.generate(
+                sheet_names=target_sheets,
+                entity_contexts=entity_contexts,
+                active_entity_name=empresa_clean,
+                is_consolidated=is_consolidated,
+                scale_factor=scale_factor,
+                periodo_actual_str=periodo_act_clean,
+                periodo_comp_str=comp_clean,
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+                target_lang=target_lang,
+                evaluate_formulas=False,
+            )
+            wb_out = ExternalNotesManager.inject_external_data(
+                wb_out,
+                empresa=empresa_clean,
+                periodo_actual=periodo_act_clean,
+                periodo_comp=comp_clean if comp_clean != "Ninguno" else None,
+                target_lang=target_lang,
+            )
+
+            bal_stmt = SnapshotVaultManager.get_statement(
+                empresa_clean, periodo_act_clean, "#BALANCE", comp_period=comp_clean, scale_factor=scale_factor
+            )
+            er_stmt = SnapshotVaultManager.get_statement(
+                empresa_clean, periodo_act_clean, "#ER", comp_period=comp_clean, scale_factor=scale_factor
+            )
+            df_bal_hyb = bal_stmt[0] if bal_stmt else None
+            df_er_hyb = er_stmt[0] if er_stmt else None
+
+            _, wb_eval_rec = RoundingReconciler.reconcile_and_evaluate_note_workbook(
+                wb_out,
+                empresa=empresa_clean,
+                periodo_actual=periodo_act_clean,
+                scale_factor=scale_factor,
+                df_bal=df_bal_hyb,
+                df_er=df_er_hyb,
+                target_sheets=target_sheets,
+                return_raw=False,
+            )
+            wb_bytes = wb_eval_rec.getvalue()
+
+            import openpyxl
+            wb_openpyxl_eval = openpyxl.load_workbook(BytesIO(wb_bytes), data_only=True)
+            named_ranges = extract_named_ranges_from_excel(None, norm_note_code, wb=wb_openpyxl_eval)
+            raw_els: List[Tuple] = []
+            if named_ranges:
+                for _, df_chunk in named_ranges:
+                    raw_els.append(("table", ensure_subtable_separator_rows(df_chunk), target_sheets[0], None))
+            else:
+                xl_nota_f = pd.ExcelFile(BytesIO(wb_bytes))
+                try:
+                    for s_name in target_sheets:
+                        if s_name in xl_nota_f.sheet_names:
+                            preview_nota_df = xl_nota_f.parse(sheet_name=s_name, header=None)
+                            sheet_els = split_sheet_into_elements(preview_nota_df, sheet_name=s_name)
+                            for s_item in sheet_els:
+                                el_t = s_item[0]
+                                el_v = ensure_subtable_separator_rows(s_item[1]) if (el_t == "table" and isinstance(s_item[1], pd.DataFrame)) else s_item[1]
+                                sh_n = s_item[2] if len(s_item) > 2 else s_name
+                                exp_c = s_item[3] if len(s_item) > 3 else None
+                                raw_els.append((el_t, el_v, sh_n, exp_c))
+                finally:
+                    xl_nota_f.close()
+            wb_openpyxl_eval.close()
+
+            # Garantizar inmutabilidad exacta de la columna Actual desde el Snapshot congelado de periodo_actual
+            # en tablas estándar de 3 columnas (y de comp_period si comp_period también está cerrado)
+            frozen_act_els = SnapshotVaultManager.get_note_elements(
+                empresa_clean, periodo_act_clean, norm_note_code, scale_factor=scale_factor, comp_period=None
+            )
+            if frozen_act_els:
+                import re as _re
+                frozen_act_tables = [el[1] for el in frozen_act_els if el[0] == "table" and isinstance(el[1], pd.DataFrame)]
+                tbl_i = 0
+                for idx_el, item in enumerate(raw_els):
+                    if item[0] == "table" and isinstance(item[1], pd.DataFrame):
+                        df_h = item[1].copy()
+                        if tbl_i < len(frozen_act_tables):
+                            df_fa = frozen_act_tables[tbl_i]
+                            if len(df_h.columns) == 3 and len(df_fa.columns) == 3 and len(df_h) == len(df_fa):
+                                has_dates = any(
+                                    _re.search(r"20\d{2}", str(df_fa.iloc[r_k, 1] or ""))
+                                    for r_k in range(min(3, len(df_fa)))
+                                )
+                                if has_dates:
+                                    df_h.iloc[:, 1] = df_fa.iloc[:, 1].values
+                                    raw_els[idx_el] = (item[0], df_h, *item[2:])
+                        tbl_i += 1
+
+            if comp_clean != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_clean, comp_clean):
+                raw_els = SnapshotVaultManager.apply_closed_comp_to_note_elements(
+                    raw_els, empresa_clean, norm_note_code, periodo_act_clean, comp_clean, scale_factor=scale_factor
+                )
+
+            _HYBRID_COMP_CACHE[cache_key] = (_time.time(), (raw_els, wb_bytes))
+            return [
+                (it[0], it[1].copy() if isinstance(it[1], pd.DataFrame) else it[1], *it[2:])
+                for it in raw_els
+            ], wb_bytes
+        except Exception as e:
+            print(f"Advertencia generando nota híbrida {norm_note_code} ({empresa_clean} {periodo_act_clean} vs {comp_clean}): {e}")
+            return None
+
+    @staticmethod
+    def get_statement_excel(
+        empresa: str,
+        periodo_actual: str,
+        code: str,
+        comp_period: Optional[str] = None,
+        scale_factor: float = 1000.0,
+        df_override: Optional[pd.DataFrame] = None,
+        target_lang: str = "es",
+    ) -> Optional[bytes]:
+        """
+        Recupera el archivo Excel (.xlsx) congelado de un Estado Financiero desde la Bóveda.
+        Si se especifica un `comp_period` distinto al nativo del Snapshot (o cerrado con posterioridad),
+        parchea únicamente la columna comparativa en memoria preservando intactos los estilos y saldos actuales.
+        """
         if not SnapshotVaultManager.has_active_snapshot(empresa, periodo_actual):
             return None
         snap_dir = SnapshotVaultManager.get_snapshot_dir(empresa, periodo_actual)
         stmt_dir = os.path.join(snap_dir, "statements")
-        norm_code = code.upper().strip()
-        if not norm_code.startswith("#"):
-            norm_code = "#" + norm_code
+        norm_code = SnapshotVaultManager._norm_stmt_code(code)
         filename_map = {
             "#BALANCE": "balance.xlsx",
             "#ESF": "balance.xlsx",
@@ -877,19 +1721,74 @@ class SnapshotVaultManager:
         if not fname:
             return None
         file_path = os.path.join(stmt_dir, fname)
+        raw_bytes = None
         if os.path.exists(file_path):
             try:
                 with open(file_path, "rb") as f:
-                    return f.read()
+                    raw_bytes = f.read()
             except Exception:
-                pass
-        return None
+                raw_bytes = None
+
+        if comp_period is None or abs(float(scale_factor) - 1000.0) >= 0.01:
+            return raw_bytes
+
+        meta = SnapshotVaultManager._get_snapshot_meta(empresa, periodo_actual)
+        native_comp = SnapshotVaultManager._get_stmt_native_comp(meta, norm_code)
+        is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+        comp_str = str(comp_period).strip()
+        comp_differs = is_no_comp or (not native_comp) or (comp_str != str(native_comp).strip())
+        comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+
+        if comp_differs or comp_is_closed:
+            if norm_code == "#PATRIMONIO":
+                pat_hyb = SnapshotVaultManager._build_hybrid_patrimonio(
+                    empresa, periodo_actual, comp_period, scale_factor=scale_factor, target_lang=target_lang
+                )
+                if pat_hyb is not None:
+                    return pat_hyb[1]
+            elif raw_bytes is not None:
+                df_use = df_override
+                if df_use is None:
+                    stmt_res = SnapshotVaultManager.get_statement(
+                        empresa, periodo_actual, norm_code, comp_period=comp_period, scale_factor=scale_factor
+                    )
+                    df_use = stmt_res[0] if stmt_res else None
+                if df_use is not None:
+                    return SnapshotVaultManager._patch_frozen_statement_excel(
+                        raw_bytes, norm_code, df_use, periodo_actual, comp_period, target_lang=target_lang
+                    )
+
+        return raw_bytes
 
     @staticmethod
-    def get_note_excel(empresa: str, periodo_actual: str, note_code: str) -> Optional[bytes]:
-        """Recupera el archivo Excel (.xlsx) evaluado y congelado de una Nota explicativa."""
+    def get_note_excel(
+        empresa: str,
+        periodo_actual: str,
+        note_code: str,
+        comp_period: Optional[str] = None,
+        scale_factor: float = 1000.0,
+        target_lang: str = "es",
+    ) -> Optional[bytes]:
+        """
+        Recupera el archivo Excel (.xlsx) evaluado de una Nota explicativa desde la Bóveda,
+        o construye el libro híbrido si `comp_period` difiere del comparativo nativo congelado.
+        """
         if not SnapshotVaultManager.has_active_snapshot(empresa, periodo_actual):
             return None
+
+        if comp_period is not None:
+            meta = SnapshotVaultManager._get_snapshot_meta(empresa, periodo_actual)
+            note_native_comp = SnapshotVaultManager._get_note_native_comp(meta, note_code)
+            is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+            comp_str = str(comp_period).strip()
+            comp_differs = is_no_comp or (not note_native_comp) or (comp_str != str(note_native_comp).strip())
+            if comp_differs or abs(float(scale_factor) - 1000.0) >= 0.01:
+                hyb = SnapshotVaultManager._build_hybrid_note_for_comp(
+                    empresa, periodo_actual, note_code, comp_period, scale_factor=scale_factor, target_lang=target_lang
+                )
+                if hyb is not None:
+                    return hyb[1]
+
         snap_dir = SnapshotVaultManager.get_snapshot_dir(empresa, periodo_actual)
         clean_code = note_code.replace("#", "").strip()
         file_path = os.path.join(snap_dir, "notes", f"{clean_code}.xlsx")
@@ -914,68 +1813,30 @@ class SnapshotVaultManager:
         Cuando el período comparativo está cerrado en Bóveda, sobreescribe la columna comparativa
         del Estado Financiero con los valores congelados del Snapshot de periodo_comp.
         """
-        if df_live is None or df_live.empty or not periodo_comp or str(periodo_comp).strip().lower() in ["ninguno", "none", ""]:
+        if df_live is None or df_live.empty or not periodo_comp or SnapshotVaultManager._is_no_comp(periodo_comp):
             return df_live
         if not SnapshotVaultManager.has_active_snapshot(empresa, periodo_comp):
             return df_live
 
-        norm_code = code.upper().strip()
-        if not norm_code.startswith("#"):
-            norm_code = "#" + norm_code
-        if norm_code not in ["#BALANCE", "#ESF", "#ER", "#ORI"]:
+        norm_code = SnapshotVaultManager._norm_stmt_code(code)
+        if norm_code not in ["#BALANCE", "#ESF", "#ER", "#ORI", "#EFE"]:
             return df_live
 
         snap_comp_res = SnapshotVaultManager.get_statement(
             empresa=empresa,
             periodo_actual=periodo_comp,
             code=norm_code,
+            comp_period=None,
             scale_factor=scale_factor
         )
         if not snap_comp_res or snap_comp_res[0] is None:
             return df_live
 
-        df_snap_comp = snap_comp_res[0]
-        if len(df_live.columns) < 2 or len(df_snap_comp.columns) < 2:
-            return df_live
-
-        out_df = df_live.copy()
-        # Identificar la columna Actual de df_snap_comp y la columna Comparativa de out_df
-        import re as _re
-        snap_date_cols = [
-            c for c in df_snap_comp.columns[1:]
-            if _re.search(r'20\d{2}', str(c)) or str(c).strip().lower() not in ["nota", "notas"]
-        ]
-        live_date_cols = [
-            c for c in out_df.columns[1:]
-            if _re.search(r'20\d{2}', str(c)) or str(c).strip().lower() not in ["nota", "notas"]
-        ]
-        if not snap_date_cols or len(live_date_cols) < 2:
-            return out_df
-
-        snap_act_col = snap_date_cols[0]
-        live_comp_col = live_date_cols[1]
-
-        if len(out_df) == len(df_snap_comp):
-            out_df[live_comp_col] = df_snap_comp[snap_act_col].values
-        else:
-            # Emparejar por etiqueta de fila normalizada
-            def _norm_lbl(v):
-                return "" if pd.isna(v) else str(v).strip().lower()
-            snap_map = {}
-            for _, r_s in df_snap_comp.iterrows():
-                k = _norm_lbl(r_s.iloc[0])
-                if k and k not in snap_map:
-                    snap_map[k] = r_s[snap_act_col]
-            for idx_l, r_l in out_df.iterrows():
-                k_l = _norm_lbl(r_l.iloc[0])
-                if k_l in snap_map:
-                    out_df.at[idx_l, live_comp_col] = snap_map[k_l]
-
-        # Si el nombre de la columna comparativa era distinto, renombrar a periodo_comp si procede
-        if str(live_comp_col) != str(periodo_comp) and _re.match(r'^20\d{2}-\d{2}$', str(live_comp_col)):
-            out_df = out_df.rename(columns={live_comp_col: str(periodo_comp)})
-
-        return out_df
+        return SnapshotVaultManager._splice_comp_into_statement_df(
+            df_actual_frozen=df_live,
+            df_comp_source=snap_comp_res[0],
+            comp_period=periodo_comp,
+        )
 
     @staticmethod
     def apply_closed_comp_to_note_elements(
@@ -1091,13 +1952,39 @@ class SnapshotVaultManager:
                 # Escalar los valores numéricos desde base_scale a scale_factor
                 df_scaled = SnapshotVaultManager._scale_dataframe_cells(df, scale_factor, base_scale=base_scale)
                 
-                # Si se especificó un comp_period distinto al nativo del snapshot y comp_period está cerrado, inyectarlo
-                if comp_period and str(comp_period).strip().lower() not in ["ninguno", "none", ""]:
-                    native_comp = meta.get("comp_period_bal") if norm_code in ["#BALANCE", "#ESF", "#PATRIMONIO", "#EFE"] else meta.get("comp_period_pl")
-                    if native_comp and str(comp_period).strip() != str(native_comp).strip():
-                        if SnapshotVaultManager.has_active_snapshot(empresa, comp_period):
+                # Resolver columna comparativa cuando comp_period fue especificado explícitamente:
+                # 1) comp_period == 'Ninguno' -> vaciar columna comparativa
+                # 2) comp_period Cerrado (Snapshot activo) -> inyectar desde su propio Snapshot certificado
+                # 3) comp_period Abierto y distinto al nativo congelado -> calcular al vuelo e inyectar
+                if comp_period is not None:
+                    native_comp = SnapshotVaultManager._get_stmt_native_comp(meta, norm_code)
+                    is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+                    comp_str = str(comp_period).strip()
+                    comp_differs = is_no_comp or (not native_comp) or (comp_str != str(native_comp).strip())
+                    comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+
+                    if norm_code == "#PATRIMONIO":
+                        if comp_differs or comp_is_closed:
+                            pat_hyb = SnapshotVaultManager._build_hybrid_patrimonio(
+                                empresa, periodo_actual, comp_period, scale_factor=scale_factor
+                            )
+                            if pat_hyb is not None:
+                                df_scaled = pat_hyb[0]
+                    elif norm_code in ["#BALANCE", "#ESF", "#ER", "#ORI", "#EFE"]:
+                        if is_no_comp:
+                            df_scaled = SnapshotVaultManager._splice_comp_into_statement_df(
+                                df_scaled, None, "Ninguno"
+                            )
+                        elif comp_is_closed:
                             df_scaled = SnapshotVaultManager.apply_closed_comp_to_statement(
-                                df_scaled, empresa, norm_code, periodo_actual, comp_period, scale_factor=scale_factor
+                                df_scaled, empresa, norm_code, periodo_actual, comp_str, scale_factor=scale_factor
+                            )
+                        elif comp_differs:
+                            df_comp_live = SnapshotVaultManager._compute_live_statement_for_period(
+                                empresa, comp_str, norm_code, scale_factor=scale_factor
+                            )
+                            df_scaled = SnapshotVaultManager._splice_comp_into_statement_df(
+                                df_scaled, df_comp_live, comp_str
                             )
                 return df_scaled, rep_name
         except Exception as e:
@@ -1145,14 +2032,23 @@ class SnapshotVaultManager:
                 else:
                     scaled_els.append(item)
 
-            if comp_period and str(comp_period).strip().lower() not in ["ninguno", "none", ""]:
-                native_bal = meta.get("comp_period_bal")
-                native_pl = meta.get("comp_period_pl")
-                if str(comp_period).strip() not in [str(native_bal).strip(), str(native_pl).strip()]:
-                    if SnapshotVaultManager.has_active_snapshot(empresa, comp_period):
-                        scaled_els = SnapshotVaultManager.apply_closed_comp_to_note_elements(
-                            scaled_els, empresa, note_code, periodo_actual, comp_period, scale_factor=scale_factor
-                        )
+            if comp_period is not None:
+                note_native_comp = SnapshotVaultManager._get_note_native_comp(meta, note_code)
+                is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+                comp_str = str(comp_period).strip()
+                comp_differs = is_no_comp or (not note_native_comp) or (comp_str != str(note_native_comp).strip())
+                comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+
+                if comp_differs:
+                    hyb_note = SnapshotVaultManager._build_hybrid_note_for_comp(
+                        empresa, periodo_actual, note_code, comp_period, scale_factor=scale_factor
+                    )
+                    if hyb_note is not None and hyb_note[0]:
+                        return hyb_note[0]
+                elif comp_is_closed:
+                    scaled_els = SnapshotVaultManager.apply_closed_comp_to_note_elements(
+                        scaled_els, empresa, note_code, periodo_actual, comp_str, scale_factor=scale_factor
+                    )
             return scaled_els
         except Exception as e:
             print(f"Error cargando nota {note_code} desde snapshot: {e}")
@@ -1190,6 +2086,7 @@ class SnapshotVaultManager:
                 rec.reabierto_por = user
                 db.commit()
             _SNAPSHOT_STATUS_CACHE[(empresa_clean, periodo_clean)] = False
+            _HYBRID_COMP_CACHE.clear()
             return True, f"Snapshot de {periodo_clean} archivado con éxito. El período ha vuelto a memoria activa viva."
         except Exception as e:
             db.rollback()

@@ -206,15 +206,19 @@ def format_periodo(periodo_str: str) -> str:
     return f"{year}-{months_map.get(month, month)}"
 
 
-def extract_named_ranges_from_excel(excel_bytes_io, note_code):
+def extract_named_ranges_from_excel(excel_bytes_io, note_code, wb=None):
     """
     Busca en el libro Excel rangos nombrados que contengan el note_code (ej. 'N04').
     Retorna una lista de tuplas (nombre_rango, df) con los contenidos de dichos rangos.
     Si no encuentra ninguno, retorna una lista vacía.
     """
     import openpyxl
-    excel_bytes_io.seek(0)
-    wb = openpyxl.load_workbook(excel_bytes_io, data_only=True)
+    if wb is None:
+        if isinstance(excel_bytes_io, openpyxl.Workbook):
+            wb = excel_bytes_io
+        else:
+            excel_bytes_io.seek(0)
+            wb = openpyxl.load_workbook(excel_bytes_io, data_only=True)
     
     # Normalizar note_code (ej: '#N04' -> 'n04')
     code_clean = str(note_code).replace("#", "").strip().lower()

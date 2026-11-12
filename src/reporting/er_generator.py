@@ -156,7 +156,7 @@ class ERGenerator:
             clean_str = re.sub(r'\s+', ' ', clean_str)
             return clean_str
 
-        def extraer_saldos(df_target):
+        def extraer_saldos_pesos(df_target):
             res = {}
             if df_target is None or df_target.empty:
                 return res
@@ -171,7 +171,7 @@ class ERGenerator:
                 col_clean = sanitize(col)
                 if col_clean not in ignorar_bases:
                     temp_series = pd.to_numeric(df_target[col], errors='coerce').fillna(0)
-                    res[col_clean] = (temp_series.sum() * -1) / scale_factor
+                    res[col_clean] = float(temp_series.sum() * -1)
             return res
 
         # Collect all template classifications to avoid synonym collisions
@@ -181,42 +181,97 @@ class ERGenerator:
             if val:
                 template_classifications.add(sanitize(val))
 
-        resultados_2025 = extraer_saldos(pl_df)
-        resultados_comp = extraer_saldos(pl_df_comp)
+        resultados_2025_pesos = extraer_saldos_pesos(pl_df)
+        resultados_comp_pesos = extraer_saldos_pesos(pl_df_comp)
 
         synonyms = {
-            "depreciacion operacional": "depreciacion y amortizacion operacional",
-            "costos de uso fibra optica": "acceso a infraestructura fibra optica",
-            "resultado por unidad de reajuste": "resultados por unidades de reajuste",
-            "resultados por unidad de reajuste": "resultado por unidad de reajuste",
-            "resultados por unidades de reajuste": "resultado por unidad de reajuste",
-            "ganancia (perdida) por impuesto a las ganancias": "resultado por impuestos a las ganancias",
-            "resultado por impuestos a las ganancias": "ganancia (perdida) por impuesto a las ganancias",
-            "ingresos financieros ic": "ingresos financieros",
-            "ingresos financieros con empresas relacionadas": "ingresos financieros",
-            "costos financieros ic": "costos financieros",
-            "costos financieros con empresas relacionadas": "costos financieros"
+            "ingresos de arriendo fibra optica": ["ingresos de actividades ordinarias"],
+            "ingresos de arriendo fibra óptica": ["ingresos de actividades ordinarias"],
+            "depreciacion operacional": ["depreciacion y amortizacion operacional"],
+            "costos de uso fibra optica": ["acceso a infraestructura fibra optica"],
+            "resultado por unidad de reajuste": ["resultados por unidades de reajuste"],
+            "resultados por unidad de reajuste": ["resultado por unidad de reajuste"],
+            "resultados por unidades de reajuste": ["resultado por unidad de reajuste"],
+            "ganancia (perdida) por impuesto a las ganancias": ["resultado por impuestos a las ganancias"],
+            "resultado por impuestos a las ganancias": ["ganancia (perdida) por impuesto a las ganancias"],
+            "ingresos financieros ic": ["ingresos financieros con empresas relacionadas", "ingresos financieros"],
+            "intereses con empresas relacionadas": ["ingresos financieros con empresas relacionadas", "ingresos financieros ic", "ingresos financieros"],
+            "ingresos financieros con empresas relacionadas": ["ingresos financieros ic", "ingresos financieros"],
+            "costos financieros ic": ["costos financieros con empresas relacionadas", "costos financieros"],
+            "costos financieros con empresas relacionadas": ["costos financieros ic", "costos financieros"]
         }
 
         def apply_synonyms(d, template_classifications):
             new_d = d.copy()
             for key, val in d.items():
                 if key in synonyms:
-                    syn_target = synonyms[key]
                     if key in template_classifications:
                         continue
-                    elif syn_target in template_classifications:
-                        new_d[syn_target] = new_d.get(syn_target, 0.0) + val
-                        if key in new_d:
-                            del new_d[key]
+                    candidates = synonyms[key]
+                    if isinstance(candidates, str):
+                        candidates = [candidates]
+                    for syn_target in candidates:
+                        if syn_target in template_classifications:
+                            new_d[syn_target] = new_d.get(syn_target, 0.0) + val
+                            if key in new_d:
+                                del new_d[key]
+                            break
             return new_d
 
-        resultados_2025 = apply_synonyms(resultados_2025, template_classifications)
-        resultados_comp = apply_synonyms(resultados_comp, template_classifications)
+        resultados_2025_pesos = apply_synonyms(resultados_2025_pesos, template_classifications)
+        resultados_comp_pesos = apply_synonyms(resultados_comp_pesos, template_classifications)
+
+        # Pre-escanear claves transaccionales activas presentes en la plantilla
+        active_template_keys = []
+        seen_tpl_keys = set()
+        for row in range(1, ws.max_row + 1):
+            c_name = ws.cell(row=row, column=clasif_col_idx).value
+            if c_name and isinstance(c_name, str):
+                c_sec = sanitize(c_name)
+                if (c_sec in resultados_2025_pesos) or (resultados_comp_pesos and c_sec in resultados_comp_pesos):
+                    if c_sec not in seen_tpl_keys:
+                        seen_tpl_keys.add(c_sec)
+                        active_template_keys.append(c_sec)
+
+        from src.core.rounding_reconciler import largest_remainder_round, MAX_TOLERANCE_PESOS
+
+        if abs(float(scale_factor) - 1000.0) < 0.01 and active_template_keys:
+            active_pesos_25 = {k: float(resultados_2025_pesos.get(k, 0.0) or 0.0) for k in active_template_keys}
+            target_net_25_m = int(round(sum(resultados_2025_pesos.values()) / 1000.0))
+            resultados_2025, _ = largest_remainder_round(
+                active_pesos_25,
+                target_total_m=target_net_25_m,
+                scale_factor=1000.0,
+                max_tol_pesos=MAX_TOLERANCE_PESOS,
+            )
+            if has_comp and resultados_comp_pesos:
+                active_pesos_24 = {k: float(resultados_comp_pesos.get(k, 0.0) or 0.0) for k in active_template_keys}
+                target_net_24_m = int(round(sum(resultados_comp_pesos.values()) / 1000.0))
+                resultados_comp, _ = largest_remainder_round(
+                    active_pesos_24,
+                    target_total_m=target_net_24_m,
+                    scale_factor=1000.0,
+                    max_tol_pesos=MAX_TOLERANCE_PESOS,
+                )
+            else:
+                resultados_comp = {}
+        else:
+            resultados_2025 = {
+                k: int(round((resultados_2025_pesos.get(k, 0.0) or 0.0) / scale_factor))
+                for k in active_template_keys
+            }
+            resultados_comp = (
+                {
+                    k: int(round((resultados_comp_pesos.get(k, 0.0) or 0.0) / scale_factor))
+                    for k in active_template_keys
+                }
+                if (has_comp and resultados_comp_pesos)
+                else {}
+            )
 
         # 5. Inyección en Cascada (Waterfall) preservando formatos
-        rolling_sum_25 = 0.0
-        rolling_sum_24 = 0.0
+        rolling_sum_25 = 0
+        rolling_sum_24 = 0
 
         for row in range(1, ws.max_row + 1):
             cell_name = ws.cell(row=row, column=clasif_col_idx).value
@@ -225,19 +280,13 @@ class ERGenerator:
                 clasif_secreta = sanitize(cell_name)
 
                 # A) Cuenta transaccional
-                if (clasif_secreta in resultados_2025) or (resultados_comp and clasif_secreta in resultados_comp):
-                    val_25 = resultados_2025.get(clasif_secreta, 0.0)
-                    if pd.isna(val_25) or val_25 is None:
-                        val_25 = 0.0
-                    val_25 = round(val_25)
+                if clasif_secreta in seen_tpl_keys:
+                    val_25 = int(resultados_2025.get(clasif_secreta, 0))
                     ws.cell(row=row, column=val25_col_idx).value = val_25
                     rolling_sum_25 += val_25
 
                     if has_comp and resultados_comp:
-                        val_24 = resultados_comp.get(clasif_secreta, 0.0)
-                        if pd.isna(val_24) or val_24 is None:
-                            val_24 = 0.0
-                        val_24 = round(val_24)
+                        val_24 = int(resultados_comp.get(clasif_secreta, 0))
                         ws.cell(row=row, column=val24_col_idx).value = val_24
                         rolling_sum_24 += val_24
 

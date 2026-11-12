@@ -209,7 +209,15 @@ def render(empresa_seleccionada, empresa_path):
                         preview_df = snap_df_cons.copy()
                         if report_type == "Balance Clasificado" and "Clasificación" in preview_df.columns:
                             preview_df = preview_df.rename(columns={"Clasificación": "Balance clasificado"})
-                        snap_ex_bytes = SnapshotVaultManager.get_statement_excel(ent_grp_name, periodo_act_g, stmt_code)
+                        snap_ex_bytes = SnapshotVaultManager.get_statement_excel(
+                            ent_grp_name,
+                            periodo_act_g,
+                            stmt_code,
+                            comp_period=periodo_comp_g,
+                            scale_factor=scale_factor,
+                            df_override=snap_df_cons,
+                            target_lang=target_lang,
+                        )
                         if not snap_ex_bytes or abs(scale_factor - 1000.0) >= 0.01:
                             from src.reporting.excel_export import generate_excel_report
                             snap_ex_bytes = generate_excel_report(preview_df, title=f"{report_type} Consolidado", subtitle=f"Expresado en {unidad}")
@@ -832,10 +840,18 @@ def render(empresa_seleccionada, empresa_path):
                                 first_col = preview_df.columns[0]
                                 preview_df = preview_df.dropna(how='all', subset=[first_col]).reset_index(drop=True)
                             
-                        if periodo_comp_g != "Ninguno" and SnapshotVaultManager.has_active_snapshot(ent_grp_name, periodo_comp_g) and report_type in ["Balance Clasificado", "Estado de Resultados", "Estado de Resultados Integrales"]:
+                        if periodo_comp_g != "Ninguno" and SnapshotVaultManager.has_active_snapshot(ent_grp_name, periodo_comp_g) and (
+                            report_type in ["Balance Clasificado", "Estado de Resultados", "Estado de Resultados Integrales"]
+                            or (report_type == "Estado de Flujos de Efectivo" and metodo_flujo == "Directo")
+                        ):
                             preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
                                 preview_df, ent_grp_name, stmt_code, periodo_act_g, periodo_comp_g, scale_factor=scale_factor
                             )
+                            if abs(scale_factor - 1000.0) < 0.01:
+                                patched_ex = SnapshotVaultManager._patch_frozen_statement_excel(
+                                    result_bytes.getvalue(), stmt_code, preview_df, periodo_act_g, periodo_comp_g, target_lang=target_lang
+                                )
+                                result_bytes = BytesIO(patched_ex)
 
                         # Generar versión Word
                         try:

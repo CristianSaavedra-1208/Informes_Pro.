@@ -1,4 +1,4 @@
-# Streamlit hot-reload trigger - force reload 3
+# Streamlit hot-reload trigger - force reload 4
 import streamlit as st
 import pandas as pd
 import os
@@ -446,7 +446,11 @@ def main():
         import src.ui_pages.ajustes_manuales as pg_ajustes
         importlib.reload(pg_ajustes)
         pg_ajustes.render(empresa_seleccionada, empresa_path)
-    def run_cons(): pg_cons.render(empresa_seleccionada, empresa_path)
+    def run_cons():
+        import importlib
+        import src.ui_pages.consolidacion as pg_cons
+        importlib.reload(pg_cons)
+        pg_cons.render(empresa_seleccionada, empresa_path)
     def run_estados():
         import importlib
         import src.core.excel_utils as ex_mod
@@ -455,6 +459,8 @@ def main():
         importlib.reload(fmt_mod)
         import src.reporting.word_export as wexp_mod
         importlib.reload(wexp_mod)
+        import src.core.rounding_reconciler as rr_mod
+        importlib.reload(rr_mod)
         import src.reporting.balance_generator as bg_mod
         importlib.reload(bg_mod)
         import src.reporting.er_generator as erg_mod
@@ -471,6 +477,10 @@ def main():
         importlib.reload(tb_db_mod)
         import src.core.audit_adjustments_engine as aju_mod
         importlib.reload(aju_mod)
+        import src.core.sabana_manager as sm_mod
+        importlib.reload(sm_mod)
+        import src.core.snapshot_vault_manager as svm_mod
+        importlib.reload(svm_mod)
         import src.ui_pages.estados_financieros as pg_estados
         importlib.reload(pg_estados)
         pg_estados.render(empresa_seleccionada, empresa_path)
@@ -486,12 +496,60 @@ def main():
         importlib.reload(ng_mod)
         import src.core.external_notes_manager as ext_mgr
         importlib.reload(ext_mgr)
+        import src.core.sabana_manager as sm_mod
+        importlib.reload(sm_mod)
+        import src.core.snapshot_vault_manager as svm_mod
+        importlib.reload(svm_mod)
         import src.ui_pages.informes_y_notas as pg_informes
         importlib.reload(pg_informes)
         pg_informes.render(empresa_seleccionada, empresa_path)
-    def run_val(): pg_val.render(empresa_seleccionada, empresa_path)
-    def run_cierre(): pg_cierre.render(empresa_seleccionada, empresa_path)
-    def run_audit(): pg_audit.render(empresa_seleccionada, empresa_path)
+    def run_val():
+        import importlib
+        import src.core.excel_utils as ex_mod
+        importlib.reload(ex_mod)
+        import src.core.rounding_reconciler as rr_mod
+        importlib.reload(rr_mod)
+        import src.reporting.balance_generator as bg_mod
+        importlib.reload(bg_mod)
+        import src.reporting.er_generator as erg_mod
+        importlib.reload(erg_mod)
+        import src.reporting.patrimonio_generator as pat_mod
+        importlib.reload(pat_mod)
+        import src.core.validation_tie_out as vto_mod
+        importlib.reload(vto_mod)
+        import src.ui_pages.validacion_saldos as pg_val
+        importlib.reload(pg_val)
+        pg_val.render(empresa_seleccionada, empresa_path)
+    def run_cierre():
+        import importlib
+        import src.core.consolidacion_account_mapper as cam_mod
+        importlib.reload(cam_mod)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
+        import src.core.sabana_builder as sb_mod
+        importlib.reload(sb_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
+        import src.core.rounding_reconciler as rr_mod
+        importlib.reload(rr_mod)
+        import src.core.snapshot_vault_manager as svm_mod
+        importlib.reload(svm_mod)
+        import src.core.consolidacion_lock_manager as clm_mod
+        importlib.reload(clm_mod)
+        import src.ui_pages.cierre_y_memoria_historica as pg_cierre
+        importlib.reload(pg_cierre)
+        pg_cierre.render(empresa_seleccionada, empresa_path)
+    def run_audit():
+        import importlib
+        import src.core.consolidacion_account_mapper as cam_mod
+        importlib.reload(cam_mod)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
+        import src.core.sabana_builder as sb_mod
+        importlib.reload(sb_mod)
+        import src.ui_pages.auditoria_diccionario as pg_audit
+        importlib.reload(pg_audit)
+        pg_audit.render(empresa_seleccionada, empresa_path)
     def run_param(): pg_param.render(empresa_seleccionada, empresa_path)
     def run_conf(): pg_conf.render(empresa_seleccionada, empresa_path)
     def run_reportes_cons():
@@ -502,8 +560,18 @@ def main():
         importlib.reload(fmt_mod)
         import src.reporting.word_export as wexp_mod
         importlib.reload(wexp_mod)
+        import src.core.rounding_reconciler as rr_mod
+        importlib.reload(rr_mod)
+        import src.reporting.balance_generator as bg_mod
+        importlib.reload(bg_mod)
+        import src.reporting.er_generator as erg_mod
+        importlib.reload(erg_mod)
         import src.reporting.patrimonio_generator as pat_mod
         importlib.reload(pat_mod)
+        import src.core.sabana_manager as sm_mod
+        importlib.reload(sm_mod)
+        import src.core.snapshot_vault_manager as svm_mod
+        importlib.reload(svm_mod)
         import src.ui_pages.reportes_consolidados as pg_reportes_cons
         importlib.reload(pg_reportes_cons)
         pg_reportes_cons.render(empresa_seleccionada, empresa_path)
@@ -515,6 +583,16 @@ def main():
         importlib.reload(fmt_mod)
         import src.reporting.word_export as wexp_mod
         importlib.reload(wexp_mod)
+        import src.core.rounding_reconciler as rr_mod
+        importlib.reload(rr_mod)
+        import src.reporting.balance_generator as bg_mod
+        importlib.reload(bg_mod)
+        import src.reporting.er_generator as erg_mod
+        importlib.reload(erg_mod)
+        import src.core.sabana_manager as sm_mod
+        importlib.reload(sm_mod)
+        import src.core.snapshot_vault_manager as svm_mod
+        importlib.reload(svm_mod)
         import src.core.word_template_engine as wte_mod
         importlib.reload(wte_mod)
         import src.ui_pages.reporte_corporativo as pg_reporte_corp

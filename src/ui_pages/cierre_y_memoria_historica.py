@@ -1,11 +1,70 @@
 import streamlit as st
 import pandas as pd
 import os
+import time
+from datetime import datetime
 from src.core.excel_utils import df_to_excel_bytes, format_periodo
 from src.models.database import SessionLocal
 from src.models.consolidacion import ConsolidationGroup
 from src.core.company_resolver import CompanyResolver
 from src.core.consolidacion_lock_manager import ConsolidationLockManager
+
+
+def _format_execution_time(elapsed_sec: float) -> str:
+    if elapsed_sec < 60.0:
+        return f"{elapsed_sec:.2f} s"
+    mins = int(elapsed_sec // 60)
+    rem = elapsed_sec % 60.0
+    return f"{mins} min {rem:.2f} s ({elapsed_sec:.2f} s)"
+
+
+def _store_close_notice(empresa: str, level: str, title: str, detail: str, elapsed_sec: float, periodo_lbl: str = ""):
+    st.session_state["hist_flash_notice"] = {
+        "empresa": empresa,
+        "level": level,
+        "title": title,
+        "detail": detail,
+        "elapsed_str": _format_execution_time(elapsed_sec),
+        "periodo_lbl": periodo_lbl,
+        "finished_at": datetime.now().strftime("%H:%M:%S"),
+        "toast_shown": False,
+    }
+
+
+def _render_close_notice(empresa_actual: str):
+    notice = st.session_state.get("hist_flash_notice")
+    if not notice:
+        return
+    if notice.get("empresa") not in (empresa_actual, "__ALL__"):
+        return
+
+    if not notice.get("toast_shown"):
+        icon_t = "✅" if notice.get("level") == "success" else "❌"
+        try:
+            st.toast(f"{notice['title']} — ⏱️ {notice['elapsed_str']}", icon=icon_t)
+        except Exception:
+            pass
+        notice["toast_shown"] = True
+
+    with st.container(border=True):
+        c_msg, c_time, c_btn = st.columns([4.2, 1.5, 0.5])
+        with c_msg:
+            if notice.get("level") == "success":
+                st.success(f"**{notice['title']}**\n\n{notice['detail']}")
+            else:
+                st.error(f"**{notice['title']}**\n\n{notice['detail']}")
+        with c_time:
+            st.metric(
+                label=f"⏱️ Tiempo de Ejecución ({notice.get('finished_at', '')})",
+                value=notice["elapsed_str"],
+                delta=notice.get("periodo_lbl") or None,
+            )
+        with c_btn:
+            st.write("")
+            if st.button("✖", key="btn_dismiss_hist_notice", help="Cerrar aviso"):
+                st.session_state.pop("hist_flash_notice", None)
+                st.rerun()
+
 
 def render(empresa_seleccionada, empresa_path):
     if empresa_seleccionada == "[GLOBAL] Configuración General" or "GLOBAL" in empresa_seleccionada:
@@ -13,6 +72,9 @@ def render(empresa_seleccionada, empresa_path):
         st.stop()
         
     st.title("Históricos")
+
+    # Mostrar aviso persistente de cierre / reapertura / sincronización junto al marcador de tiempo
+    _render_close_notice(empresa_seleccionada)
     
     # -------------------------------------------------------------
     # BÓVEDA DE SNAPSHOTS: SINCRONIZACIÓN AUTOMÁTICA
@@ -26,18 +88,28 @@ def render(empresa_seleccionada, empresa_path):
         )
         if st.button("⚡ Sincronizar Bóveda para Todos los Períodos Cerrados", key="btn_sync_all_snaps", type="secondary"):
             from src.core.snapshot_vault_manager import SnapshotVaultManager
+            t0_sync = time.perf_counter()
             prog_bar = st.progress(0.0)
             status = st.empty()
             def on_s_prog(cur, tot, msg):
-                prog_bar.progress(cur / max(1, tot))
-                status.info(f"⏳ {msg} ({cur}/{tot})...")
+                prog_bar.progress(min(1.0, cur / max(1, tot)))
+                el = time.perf_counter() - t0_sync
+                status.info(f"⏳ {msg} ({cur}/{tot}) — ⏱️ Tiempo transcurrido: {_format_execution_time(el)}")
             succ, errs, logs = SnapshotVaultManager.sync_all_existing_historical_periods(
                 progress_callback=on_s_prog,
                 force_rebuild=force_rebuild
             )
+            elapsed_sync = time.perf_counter() - t0_sync
             prog_bar.progress(1.0)
             status.empty()
-            st.success(f"✅ ¡Sincronización de Bóveda finalizada! {succ} períodos listos en Bóveda ({errs} errores).")
+            _store_close_notice(
+                empresa="__ALL__",
+                level="success" if errs == 0 else "error",
+                title="✅ ¡Sincronización de Bóveda finalizada con éxito!" if errs == 0 else "⚠️ Sincronización de Bóveda finalizada con observaciones",
+                detail=f"{succ} períodos listos en Bóveda ({errs} errores).",
+                elapsed_sec=elapsed_sync,
+                periodo_lbl=f"{succ} períodos",
+            )
             st.rerun()
 
     # -------------------------------------------------------------
@@ -98,23 +170,61 @@ def render(empresa_seleccionada, empresa_path):
                     st.write(f"#### 🔒 Bloquear Período {format_periodo(sel_per)}")
                     st.write("Al aplicar el candado, los asientos y hojas de trabajo de este período quedarán protegidos como **versión oficial auditada**.")
                     if st.button(f"🔒 Cerrar y Bloquear Período {format_periodo(sel_per)}", type="primary", key="btn_lock_grp_per"):
-                        success, msg = ConsolidationLockManager.lock_period(grupo_id, sel_per, user=user_curr)
+                        per_fmt_grp = format_periodo(sel_per)
+                        t0_grp = time.perf_counter()
+                        prog_grp = st.progress(0.0)
+                        status_grp = st.empty()
+                        status_grp.info(f"⏳ Iniciando cierre consolidado de {per_fmt_grp}... — ⏱️ Tiempo transcurrido: 0.00 s")
+
+                        def _on_grp_prog(cur, tot, msg_step):
+                            prog_grp.progress(min(1.0, cur / max(1, tot)))
+                            el = time.perf_counter() - t0_grp
+                            status_grp.info(f"⏳ {msg_step} ({cur}/{tot}) — ⏱️ Tiempo transcurrido: {_format_execution_time(el)}")
+
+                        success, msg = ConsolidationLockManager.lock_period(
+                            grupo_id,
+                            sel_per,
+                            user=user_curr,
+                            progress_callback=_on_grp_prog
+                        )
+                        elapsed_grp = time.perf_counter() - t0_grp
+                        prog_grp.progress(1.0)
+                        status_grp.empty()
+
                         if success:
-                            st.success(f"✅ {msg}")
+                            _store_close_notice(
+                                empresa=empresa_seleccionada,
+                                level="success",
+                                title=f"✅ ¡Cierre Histórico Consolidado exitoso ({per_fmt_grp})!",
+                                detail=msg,
+                                elapsed_sec=elapsed_grp,
+                                periodo_lbl=per_fmt_grp,
+                            )
                             st.rerun()
                         else:
-                            st.error(f"❌ {msg}")
+                            st.error(f"❌ {msg} (⏱️ Tiempo de ejecución: {_format_execution_time(elapsed_grp)})")
                 else:
                     st.write(f"#### 🔓 Reapertura de Período {format_periodo(sel_per)}")
                     st.warning("Este período se encuentra actualmente cerrado. Si necesitas agregar o corregir asientos directamente en este período, confirma y ejecuta la reapertura.")
                     chk_reabrir = st.checkbox("Confirmo que deseo reabrir este período para realizar ajustes.", key="chk_confirm_unlock")
                     if st.button(f"🔓 Reabrir Período {format_periodo(sel_per)}", disabled=not chk_reabrir, key="btn_unlock_grp_per"):
-                        success, msg = ConsolidationLockManager.unlock_period(grupo_id, sel_per, user=user_curr)
+                        per_fmt_un = format_periodo(sel_per)
+                        t0_un = time.perf_counter()
+                        with st.spinner(f"Reabriendo período consolidado {per_fmt_un}..."):
+                            success, msg = ConsolidationLockManager.unlock_period(grupo_id, sel_per, user=user_curr)
+                        elapsed_un = time.perf_counter() - t0_un
                         if success:
-                            st.success(f"✅ {msg}")
+                            _store_close_notice(
+                                empresa=empresa_seleccionada,
+                                level="success",
+                                title=f"🔓 ¡Período Consolidado {per_fmt_un} reabierto con éxito!",
+                                detail=msg,
+                                elapsed_sec=elapsed_un,
+                                periodo_lbl=per_fmt_un,
+                            )
                             st.rerun()
                         else:
-                            st.error(f"❌ {msg}")
+                            st.error(f"❌ {msg} (⏱️ Tiempo de ejecución: {_format_execution_time(elapsed_un)})")
                             
             st.divider()
             st.write("### 📋 Registro Histórico de Períodos Bloqueados")
@@ -183,17 +293,42 @@ def render(empresa_seleccionada, empresa_path):
         else:
             periodo_cierre = st.selectbox("Selecciona el periodo activo a congelar:", active_periods, format_func=format_periodo, key="sel_act_per_close")
             if st.button(f"🔒 Ejecutar Cierre y Congelar {format_periodo(periodo_cierre)}", type="primary", key="btn_close_act_per"):
-                with st.spinner("Procesando cierre de periodo... esto puede tomar unos segundos."):
-                    import time
-                    start_time = time.time()
-                    from src.core.cierre_engine import ejecutar_cierre_periodo
-                    success, msg = ejecutar_cierre_periodo(empresa_seleccionada, periodo_cierre, empresa_path)
-                    elapsed_time = time.time() - start_time
-                    if success:
-                        st.success(f"✅ ¡Proceso finalizado! {msg} (Tiempo de ejecución: {elapsed_time:.2f} segundos)")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error durante el cierre: {msg} (Tiempo de ejecución: {elapsed_time:.2f} segundos)")
+                per_fmt_ind = format_periodo(periodo_cierre)
+                user_ind = st.session_state.get('user_name', 'Usuario Cierre')
+                t0_ind = time.perf_counter()
+                prog_ind = st.progress(0.0)
+                status_ind = st.empty()
+                status_ind.info(f"⏳ Iniciando cierre histórico de {per_fmt_ind}... — ⏱️ Tiempo transcurrido: 0.00 s")
+
+                def _on_ind_prog(cur, tot, msg_step):
+                    prog_ind.progress(min(1.0, cur / max(1, tot)))
+                    el = time.perf_counter() - t0_ind
+                    status_ind.info(f"⏳ {msg_step} ({cur}/{tot}) — ⏱️ Tiempo transcurrido: {_format_execution_time(el)}")
+
+                from src.core.cierre_engine import ejecutar_cierre_periodo
+                success, msg = ejecutar_cierre_periodo(
+                    empresa_seleccionada,
+                    periodo_cierre,
+                    empresa_path,
+                    progress_callback=_on_ind_prog,
+                    user=user_ind,
+                )
+                elapsed_time = time.perf_counter() - t0_ind
+                prog_ind.progress(1.0)
+                status_ind.empty()
+
+                if success:
+                    _store_close_notice(
+                        empresa=empresa_seleccionada,
+                        level="success",
+                        title=f"✅ ¡Cierre Histórico ejecutado con éxito ({per_fmt_ind})!",
+                        detail=msg,
+                        elapsed_sec=elapsed_time,
+                        periodo_lbl=per_fmt_ind,
+                    )
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error durante el cierre: {msg} (⏱️ Tiempo de ejecución: {_format_execution_time(elapsed_time)})")
 
         st.divider()
         st.subheader("🔓 Reapertura de Períodos Históricos a Memoria Activa")
@@ -220,17 +355,24 @@ def render(empresa_seleccionada, empresa_path):
                 chk_reopen_ind = st.checkbox("Confirmo que deseo reabrir este período.", key="chk_reopen_ind")
                 
             if st.button(f"🔓 Reabrir {format_periodo(periodo_reabrir)} a Memoria Activa", type="primary", disabled=not chk_reopen_ind, key="btn_reopen_ind_per"):
-                with st.spinner("Restaurando período a la memoria activa..."):
-                    import time
-                    start_time = time.time()
+                per_fmt_reab = format_periodo(periodo_reabrir)
+                t0_reab = time.perf_counter()
+                with st.spinner(f"Restaurando período {per_fmt_reab} a la memoria activa..."):
                     from src.core.cierre_engine import reversar_cierre_periodo
                     success, msg = reversar_cierre_periodo(empresa_seleccionada, periodo_reabrir)
-                    elapsed_time = time.time() - start_time
-                    if success:
-                        st.success(f"✅ ¡Período restaurado! {msg} (Tiempo: {elapsed_time:.2f}s)")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error al reabrir período: {msg}")
+                elapsed_time = time.perf_counter() - t0_reab
+                if success:
+                    _store_close_notice(
+                        empresa=empresa_seleccionada,
+                        level="success",
+                        title=f"🔓 ¡Período {per_fmt_reab} restaurado a Memoria Activa!",
+                        detail=msg,
+                        elapsed_sec=elapsed_time,
+                        periodo_lbl=per_fmt_reab,
+                    )
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error al reabrir período: {msg} (⏱️ Tiempo de ejecución: {_format_execution_time(elapsed_time)})")
 
     with tab_consulta:
         st.subheader("Consulta de Papeles de Trabajo Históricos")

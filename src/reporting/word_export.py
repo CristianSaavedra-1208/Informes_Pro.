@@ -68,7 +68,11 @@ def _is_total_or_subtotal_label(text_str: str) -> bool:
         "resultado por inversion", "resultado por inversión",
         "resultado por impuesto", "ganancia (perdida) por impuesto", "ganancia (pérdida) por impuesto",
         "ganancias acumuladas", "pérdidas acumuladas", "perdidas acumuladas", "resultados acumulados",
-        "ganancia (pérdida) acumulada", "ganancias (pérdidas) acumuladas"
+        "ganancia (pérdida) acumulada", "ganancias (pérdidas) acumuladas",
+        "componentes de otro resultado integral",
+        "coberturas de flujos de efectivo",
+        "otro resultado integral, antes de impuestos",
+        "impuesto a las ganancias relativos a componentes"
     ]):
         return False
     if s in ["ganancia (pérdida)", "ganancia (perdida)", "ganancias (pérdidas)", "ganancias (perdidas)", "profit (loss)"]:

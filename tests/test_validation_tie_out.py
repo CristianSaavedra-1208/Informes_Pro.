@@ -43,13 +43,10 @@ class TestValidationTieOut(unittest.TestCase):
         self.assertIn("total_descuadres", health, "Debe incluir el conteo de descuadres.")
 
         if not df_matrix.empty:
-            self.assertIn("N° Nota", df_matrix.columns)
-            self.assertEqual(df_matrix.columns[0], "N° Nota", "La columna N° Nota debe ser la primera a la izquierda.")
-            self.assertIn("Reporte", df_matrix.columns)
-            self.assertIn("Rubro Estado Financiero", df_matrix.columns)
-            self.assertIn("Saldo EEFF ($)", df_matrix.columns)
-            self.assertIn("Suma Nota ($)", df_matrix.columns)
-            self.assertIn("Estado", df_matrix.columns)
+            self.assertEqual(
+                list(df_matrix.columns),
+                ["Código", "Rubro EEFF", "Nota", "Saldo EEFF (M$)", "Saldo Nota (M$)", "Diferencia (M$)", "Estado", "Reporte", "Nivel"],
+            )
 
             excel_bytes = ValidationTieOutEngine.generar_excel_tie_out(df_matrix, health, grp_name, periodo)
             self.assertGreater(len(excel_bytes), 0, "Debe generar los bytes del archivo Excel de Tie-Out.")
@@ -58,8 +55,8 @@ class TestValidationTieOut(unittest.TestCase):
         """
         Verifica que la matriz de validación Tie-Out funcione para empresas individuales.
         """
-        empresa_test = "Pacifico SpA"
-        periodo = "2026-05"
+        empresa_test = "Pacifico Cable SpA"
+        periodo = "2026-08"
 
         df_matrix, health = ValidationTieOutEngine.obtener_matriz_tie_out(
             empresa_o_grupo=empresa_test,
@@ -70,8 +67,8 @@ class TestValidationTieOut(unittest.TestCase):
         self.assertIsInstance(df_matrix, pd.DataFrame, "La matriz Tie-Out individual debe ser un DataFrame.")
         self.assertIn("is_valid", health, "Debe incluir el estado global is_valid.")
         if not df_matrix.empty:
-            self.assertIn("N° Nota", df_matrix.columns)
-            self.assertEqual(df_matrix.columns[0], "N° Nota", "La columna N° Nota debe ser la primera a la izquierda.")
+            self.assertEqual(df_matrix.columns[0], "Código", "La columna Código debe ser la primera a la izquierda.")
+            self.assertIn("Nota", df_matrix.columns)
 
 print("[OK] Test de validación Tie-Out cargado correctamente.")
 

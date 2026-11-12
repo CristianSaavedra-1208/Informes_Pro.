@@ -5,8 +5,8 @@
   "comp_period_pl": "2025-09",
   "base_scale": 1000.0,
   "is_consolidated": false,
-  "fecha_cierre": "2026-11-05T12:35:45.768939",
-  "cerrado_por": "Administrador",
+  "fecha_cierre": "2026-11-11T19:27:17.432161",
+  "cerrado_por": "Sistema (Fix IC ER)",
   "statements_count": 6,
   "notes_count": 22,
   "statements": [
@@ -41,6 +41,6 @@
     "#N25",
     "#N27"
   ],
-  "checksum": "53bfa256df0954f0611b945dd943361d48be966eaff4814e505fa7f0ce26bca3",
+  "checksum": "98b0176e32fc8d3ac5c58119f4fb94a2fdedf89a826efe90c8da539940171d62",
   "is_active": true
 }

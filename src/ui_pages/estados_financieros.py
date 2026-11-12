@@ -58,7 +58,7 @@ def render(empresa_seleccionada, empresa_path):
         st.session_state['_loaded_data_sig'] = _data_sig
 
     # Detectar cambio de periodo, empresa o versión del generador para invalidar previews desactualizados
-    _BAL_GEN_VERSION = "20261022_audit_v5"
+    _BAL_GEN_VERSION = "20261112_hybrid_comp_v8"
     cur_period_sig = f"{empresa_seleccionada}_{periodo_actual}_{periodo_comp}_{_BAL_GEN_VERSION}"
     if st.session_state.get('last_selected_period_sig') != cur_period_sig:
         st.session_state['last_selected_period_sig'] = cur_period_sig
@@ -149,7 +149,15 @@ def render(empresa_seleccionada, empresa_path):
 
                         if snap_df is not None:
                             preview_df = snap_df.copy()
-                            snap_ex = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "BALANCE")
+                            snap_ex = SnapshotVaultManager.get_statement_excel(
+                                empresa_seleccionada,
+                                periodo_actual,
+                                "BALANCE",
+                                comp_period=periodo_comp,
+                                scale_factor=scale_factor,
+                                df_override=preview_df,
+                                target_lang=target_lang,
+                            )
                             if not snap_ex or abs(scale_factor - 1000.0) >= 0.01:
                                 from src.reporting.excel_export import generate_excel_report
                                 snap_ex = generate_excel_report(preview_df, title="Estado de Situación Financiera Clasificado", subtitle=f"Expresado en {unidad}")
@@ -394,7 +402,9 @@ def render(empresa_seleccionada, empresa_path):
                     pl_df_comp = build_pl_sabana(None, map_pl_df, tb_comp)
             st.session_state['pl_df_comp'] = pl_df_comp
 
-            if pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty):
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            has_snap_er = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+            if (pl_df is None or (isinstance(pl_df, pd.DataFrame) and pl_df.empty)) and not has_snap_er:
                 st.warning(f"⚠️ No se ha encontrado el P&L ni el Trial Balance para el periodo {periodo_actual}. Sube el archivo correspondiente en 'Cargas de datos'.")
             else:
                 with st.spinner("Mapeando columnas y calculando sumatorias y subtotales del Estado de Resultados..."):
@@ -414,7 +424,15 @@ def render(empresa_seleccionada, empresa_path):
 
                         if snap_er is not None:
                             preview_df = snap_er.copy()
-                            snap_ex = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "ER")
+                            snap_ex = SnapshotVaultManager.get_statement_excel(
+                                empresa_seleccionada,
+                                periodo_actual,
+                                "ER",
+                                comp_period=periodo_comp,
+                                scale_factor=scale_factor,
+                                df_override=preview_df,
+                                target_lang=target_lang,
+                            )
                             if not snap_ex or abs(scale_factor - 1000.0) >= 0.01:
                                 from src.reporting.excel_export import generate_excel_report
                                 snap_ex = generate_excel_report(preview_df, title="Estado de Resultados Clasificados", subtitle=f"Expresado en {unidad_medida}")
@@ -746,7 +764,15 @@ def render(empresa_seleccionada, empresa_path):
 
                         if snap_cf is not None:
                             preview_cf = snap_cf.copy()
-                            snap_ex_cf = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "EFE")
+                            snap_ex_cf = SnapshotVaultManager.get_statement_excel(
+                                empresa_seleccionada,
+                                periodo_actual,
+                                "EFE",
+                                comp_period=periodo_comp,
+                                scale_factor=scale_factor_cf,
+                                df_override=preview_cf,
+                                target_lang=target_lang,
+                            )
                             if not snap_ex_cf or abs(scale_factor_cf - 1000.0) >= 0.01:
                                 from src.reporting.excel_export import generate_excel_report
                                 snap_ex_cf = generate_excel_report(preview_cf, title="Estado de Flujos de Efectivo", subtitle=f"Expresado en {unidad_medida_cf}")
@@ -1026,7 +1052,15 @@ def render(empresa_seleccionada, empresa_path):
 
             if snap_pat is not None:
                 prev = clean_patrimonio_preview_df(snap_pat.copy())
-                snap_ex_pat = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "PATRIMONIO")
+                snap_ex_pat = SnapshotVaultManager.get_statement_excel(
+                    empresa_seleccionada,
+                    periodo_actual,
+                    "PATRIMONIO",
+                    comp_period=periodo_comp,
+                    scale_factor=scale_factor,
+                    df_override=prev,
+                    target_lang=st.session_state.get('idioma_reporte', 'es'),
+                )
                 if not snap_ex_pat or abs(scale_factor - 1000.0) >= 0.01:
                     from src.reporting.excel_export import generate_excel_report
                     snap_ex_pat = generate_excel_report(prev, title="Estado de Cambios en el Patrimonio", subtitle=f"Expresado en {st.session_state.get('um_bal', 'M$')}")
@@ -1219,7 +1253,15 @@ def render(empresa_seleccionada, empresa_path):
 
             if snap_ori is not None:
                 prev = snap_ori.copy()
-                snap_ex_ori = SnapshotVaultManager.get_statement_excel(empresa_seleccionada, periodo_actual, "ORI")
+                snap_ex_ori = SnapshotVaultManager.get_statement_excel(
+                    empresa_seleccionada,
+                    periodo_actual,
+                    "ORI",
+                    comp_period=periodo_comp,
+                    scale_factor=scale_factor,
+                    df_override=prev,
+                    target_lang=st.session_state.get('idioma_reporte', 'es'),
+                )
                 if not snap_ex_ori or abs(scale_factor - 1000.0) >= 0.01:
                     from src.reporting.excel_export import generate_excel_report
                     snap_ex_ori = generate_excel_report(prev, title="Estado de Resultados Integrales", subtitle=f"Expresado en {st.session_state.get('um_er', 'M$')}")

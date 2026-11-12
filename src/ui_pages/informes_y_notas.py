@@ -543,7 +543,14 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                 if snap_note_elements is not None:
                     try:
                         target_sheets = sheet_name_map[selected_id]
-                        snap_excel_bytes = SnapshotVaultManager.get_note_excel(empresa_seleccionada, periodo_actual, selected_id) or b""
+                        snap_excel_bytes = SnapshotVaultManager.get_note_excel(
+                            empresa_seleccionada,
+                            periodo_actual,
+                            selected_id,
+                            comp_period=periodo_comp,
+                            scale_factor=scale_factor_nota,
+                            target_lang=target_lang,
+                        ) or b""
                         import importlib
                         import src.reporting.formatting as _fmt_mod
                         import src.reporting.word_export as _we_mod
@@ -564,6 +571,16 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         else:
                             word_bytes_val = word_nota_out
 
+                        _meta_n = SnapshotVaultManager._get_snapshot_meta(empresa_seleccionada, periodo_actual)
+                        _nat_n = SnapshotVaultManager._get_note_native_comp(_meta_n, selected_id)
+                        _is_comp_closed = bool(periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp))
+                        if periodo_comp and periodo_comp != "Ninguno" and str(periodo_comp).strip() != str(_nat_n).strip() and not _is_comp_closed:
+                            _tie_msg = f"🔒 **[Snapshot Híbrido]** Período **{periodo_actual}** cargado desde cierre certificado + comparativo **{periodo_comp}** calculado al vuelo."
+                        elif _is_comp_closed and str(periodo_comp).strip() != str(_nat_n).strip():
+                            _tie_msg = f"🔒 **[Snapshots Certificados]** Período **{periodo_actual}** y comparativo **{periodo_comp}** cargados desde sus cierres en Bóveda."
+                        else:
+                            _tie_msg = f"🔒 **[Snapshot Inmutable]** Nota cargada directamente desde el cierre certificado de **{periodo_actual}**."
+
                         st.session_state[cache_key] = {
                             "selected_label": selected_label,
                             "unidad_nota": unidad_nota,
@@ -574,7 +591,7 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                             "elements": snap_note_elements,
                             "target_sheets": target_sheets,
                             "tie_out_type": "success",
-                            "tie_out_text": f"🔒 **[Snapshot Inmutable]** Nota cargada directamente desde el cierre certificado de **{periodo_actual}**."
+                            "tie_out_text": _tie_msg
                         }
                     except Exception as e:
                         st.error(f"❌ Error al cargar nota desde Snapshot: {e}")
@@ -641,7 +658,16 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                             periodo_comp=periodo_comp if periodo_comp != "Ninguno" else None,
                             target_lang=target_lang
                         )
-                        excel_eval_out = evaluate_formulas_in_workbook(excel_nota_out)
+                        import src.core.rounding_reconciler as _rr_mod
+                        importlib.reload(_rr_mod)
+                        _rr_mod.RoundingReconciler.clear_cache()
+                        excel_nota_out, excel_eval_out = _rr_mod.RoundingReconciler.reconcile_and_evaluate_note_workbook(
+                            excel_nota_out,
+                            empresa=empresa_seleccionada,
+                            periodo_actual=periodo_actual,
+                            scale_factor=scale_factor_nota,
+                            target_sheets=target_sheets,
+                        )
                         preview_nota_df = pd.read_excel(excel_eval_out, sheet_name=target_sheets[0], header=None)
                         
                         # --- SEMÁFORO FINANCIERO DE CUADRATURA (TIE-OUT) ---
@@ -777,7 +803,7 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         
                         # Intentar extraer usando rangos nombrados
                         from src.core.excel_utils import extract_named_ranges_from_excel
-                        named_ranges = extract_named_ranges_from_excel(excel_nota_out, selected_id)
+                        named_ranges = extract_named_ranges_from_excel(excel_eval_out, selected_id)
                         
                         elements = []
                         if named_ranges:
@@ -1008,7 +1034,9 @@ def render(empresa_seleccionada, empresa_path):
             if ext_info["exists"]:
                 st.caption(f"🕒 **Última modificación:** {ext_info['last_modified']} | 📦 **Tamaño:** {ext_info['size_kb']}")
                 if ext_info["sheets"]:
-                    st.caption(f"📑 **{len(ext_info['sheets'])} Hojas disponibles:** {', '.join(ext_info['sheets'][:6])}{'...' if len(ext_info['sheets']) > 6 else ''}")
+                    st.caption(f"📑 **{len(ext_info['sheets'])} Hojas disponibles:** {', '.join(ext_info['sheets'][:8])}{'...' if len(ext_info['sheets']) > 8 else ''}")
+                if ext_info.get("detected_codes"):
+                    st.caption(f"🔍 **{len(ext_info['detected_codes'])} Cuadros dinámicos detectados:** {', '.join(ext_info['detected_codes'][:12])}{'...' if len(ext_info['detected_codes']) > 12 else ''}")
 
                 with open(ext_info["path"], "rb") as mf:
                     fresh_bytes_ext = mf.read()
@@ -1034,6 +1062,8 @@ def render(empresa_seleccionada, empresa_path):
                 if st.button("💾 Guardar y Actualizar Plantilla Base de Anexos Global", type="primary", use_container_width=True, key="save_global_master_anexo_btn"):
                     try:
                         ExternalNotesManager.save_master_template(up_master_anexo.getbuffer())
+                        from src.reporting.notes import _DYNAMIC_NOTES_CACHE
+                        _DYNAMIC_NOTES_CACHE.clear()
                         # Limpiar caché de notas
                         for k in list(st.session_state.keys()):
                             if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):
@@ -1230,6 +1260,12 @@ def render(empresa_seleccionada, empresa_path):
                     if more_count > 0:
                         sheets_preview += f" (+{more_count} más)"
                     st.caption(f"📑 **{len(master_info['sheets'])} Hojas disponibles:** {sheets_preview}")
+                if master_info.get("detected_codes"):
+                    codes_preview = ", ".join(master_info["detected_codes"][:10])
+                    more_codes = len(master_info["detected_codes"]) - 10
+                    if more_codes > 0:
+                        codes_preview += f" (+{more_codes} más)"
+                    st.caption(f"🔍 **{len(master_info['detected_codes'])} Cuadros dinámicos detectados:** {codes_preview}")
 
                 try:
                     with open(master_info["path"], "rb") as mf:
@@ -1247,7 +1283,28 @@ def render(empresa_seleccionada, empresa_path):
             else:
                 st.warning("⚠️ No se encontró la plantilla base de anexos en el sistema.")
 
-            st.caption("💡 *Nota: Para modificar o agregar nuevas hojas a la plantilla base del sistema, dirígete a `[GLOBAL] Configuración General` en la barra lateral izquierda.*")
+            with st.expander("🔄 Actualizar Formato Oficial del Sistema (`Plantilla EXTERNA_de_notas_v1.xlsx`)", expanded=False):
+                st.caption("Si agregaste o modificaste hojas/cuadros en la plantilla base externa, súbela aquí (o en `[GLOBAL] Configuración General`) para actualizar el formato oficial del sistema:")
+                up_inline_master = st.file_uploader(
+                    "Subir nueva Plantilla Base Oficial (.xlsx):",
+                    type=["xlsx"],
+                    key="inline_master_anexo_uploader"
+                )
+                if up_inline_master is not None:
+                    if st.button("💾 Actualizar Plantilla Base Oficial", type="primary", use_container_width=True, key="save_inline_master_anexo_btn"):
+                        try:
+                            ExternalNotesManager.save_master_template(up_inline_master.getbuffer())
+                            from src.reporting.notes import _DYNAMIC_NOTES_CACHE
+                            _DYNAMIC_NOTES_CACHE.clear()
+                            for k in list(st.session_state.keys()):
+                                if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):
+                                    del st.session_state[k]
+                            st.session_state['anexo_feedback'] = ("success", "✅ ¡Plantilla Base Oficial de Anexos actualizada con éxito! El sistema ya reconoció su nueva estructura dinámica.")
+                            st.rerun()
+                        except PermissionError:
+                            st.error("❌ El archivo 'Plantilla EXTERNA_de_notas_v1.xlsx' está abierto en Excel. Ciérralo y vuelve a presionar Guardar.")
+                        except Exception as e:
+                            st.error(f"❌ Error al actualizar la plantilla base: {e}")
 
 
         with c_dn2:
@@ -1262,6 +1319,8 @@ def render(empresa_seleccionada, empresa_path):
                 if st.button("💾 Guardar Anexo de la Empresa para este Período", type="primary", use_container_width=True, key="save_anexo_btn"):
                     try:
                         saved_path = ExternalNotesManager.save_anexo(empresa_seleccionada, anexo_periodo, uploaded_anexo.getbuffer())
+                        from src.reporting.notes import _DYNAMIC_NOTES_CACHE
+                        _DYNAMIC_NOTES_CACHE.clear()
                         # Limpiar caché de notas para forzar recarga inmediata con los nuevos datos
                         for k in list(st.session_state.keys()):
                             if k.startswith("_note_result__") or k.startswith("_entity_ctx__"):

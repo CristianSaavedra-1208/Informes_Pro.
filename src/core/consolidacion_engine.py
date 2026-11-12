@@ -211,7 +211,16 @@ def obtener_saldos_base(grupo_id: int, periodo: str, db=None):
         if is_local_db:
             db.close()
 
-def resolver_montos_asiento(grupo_id: int, periodo: str, lineas_asiento: list, db=None, columna_destino: str = None):
+def resolver_montos_asiento(
+    grupo_id: int,
+    periodo: str,
+    lineas_asiento: list,
+    db=None,
+    columna_destino: str = None,
+    preloaded_base_data: dict = None,
+    preloaded_asientos_periodo: list = None,
+    col_base_cache: dict = None,
+):
     """
     Resuelve los montos reales (Debe / Haber) para una lista de líneas de un asiento contable.
     Cada línea en `lineas_asiento` es un dict o un objeto con:
@@ -232,98 +241,107 @@ def resolver_montos_asiento(grupo_id: int, periodo: str, lineas_asiento: list, d
         db = SessionLocal()
         is_local_db = True
     try:
-        base_data = obtener_saldos_base(grupo_id, periodo, db)
+        base_data = preloaded_base_data if preloaded_base_data is not None else obtener_saldos_base(grupo_id, periodo, db)
         
         if columna_destino:
-            # 1. Obtener asientos guardados que ocurran antes de la columna_destino cronológicamente
-            asientos = db.query(ConsolidationJournalEntry).filter(
-                ConsolidationJournalEntry.grupo_id == grupo_id,
-                or_(
-                    ConsolidationJournalEntry.periodo == periodo,
-                    (ConsolidationJournalEntry.periodo < periodo) & (ConsolidationJournalEntry.es_recurrente == True)
-                )
-            ).all()
+            if col_base_cache is not None and columna_destino in col_base_cache:
+                base_data = col_base_cache[columna_destino]
+            else:
+                # 1. Obtener asientos guardados que ocurran antes de la columna_destino cronológicamente
+                if preloaded_asientos_periodo is not None:
+                    asientos = preloaded_asientos_periodo
+                else:
+                    asientos = db.query(ConsolidationJournalEntry).filter(
+                        ConsolidationJournalEntry.grupo_id == grupo_id,
+                        or_(
+                            ConsolidationJournalEntry.periodo == periodo,
+                            (ConsolidationJournalEntry.periodo < periodo) & (ConsolidationJournalEntry.es_recurrente == True)
+                        )
+                    ).all()
 
-            # Ordenar columnas a procesar que sean estrictamente anteriores a columna_destino
-            target_idx = get_columna_index(columna_destino)
-            asientos_previos = [
-                a for a in asientos 
-                if get_columna_index(a.columna_ajuste) < target_idx
-            ]
+                # Ordenar columnas a procesar que sean estrictamente anteriores a columna_destino
+                target_idx = get_columna_index(columna_destino)
+                asientos_previos = [
+                    a for a in asientos 
+                    if get_columna_index(a.columna_ajuste) < target_idx
+                ]
 
-            # Si hay asientos previos, agrupamos y procesamos de forma similar a generar_hoja_trabajo
-            if asientos_previos:
-                from collections import defaultdict
-                import copy
-                
-                col_to_vouchers = defaultdict(lambda: defaultdict(list))
-                for a in asientos_previos:
-                    code = getattr(a, 'asiento_codigo', None)
-                    voucher_key = code if code else (a.periodo, a.glosa)
-                    col_to_vouchers[a.columna_ajuste][voucher_key].append(a)
-                
-                todas_columnas_con_datos = set(a.columna_ajuste for a in asientos_previos)
-                columnas_a_procesar = [col for col in COLUMNAS_ORDENADAS if col in todas_columnas_con_datos]
-                for col in todas_columnas_con_datos:
-                    if col not in columnas_a_procesar:
-                        columnas_a_procesar.append(col)
+                # Si hay asientos previos, agrupamos y procesamos de forma similar a generar_hoja_trabajo
+                if asientos_previos:
+                    from collections import defaultdict
+                    import copy
+                    
+                    col_to_vouchers = defaultdict(lambda: defaultdict(list))
+                    for a in asientos_previos:
+                        code = getattr(a, 'asiento_codigo', None)
+                        voucher_key = code if code else (a.periodo, a.glosa)
+                        col_to_vouchers[a.columna_ajuste][voucher_key].append(a)
+                    
+                    todas_columnas_con_datos = set(a.columna_ajuste for a in asientos_previos)
+                    columnas_a_procesar = [col for col in COLUMNAS_ORDENADAS if col in todas_columnas_con_datos]
+                    for col in todas_columnas_con_datos:
+                        if col not in columnas_a_procesar:
+                            columnas_a_procesar.append(col)
 
-                base_data_acumulado = copy.deepcopy(base_data)
+                    base_data_acumulado = copy.deepcopy(base_data)
 
-                for col in columnas_a_procesar:
-                    vouchers_in_col = col_to_vouchers[col]
-                    for v_key, lines in vouchers_in_col.items():
-                        netos_comprobante = {}
-                        sum_total = 0.0
-                        static_lines_zero = []
-                        static_lines_other = []
-                        dynamic_lines = []
-                        dynamic_processed_lines = set()
+                    for col in columnas_a_procesar:
+                        vouchers_in_col = col_to_vouchers[col]
+                        for v_key, lines in vouchers_in_col.items():
+                            netos_comprobante = {}
+                            sum_total = 0.0
+                            static_lines_zero = []
+                            static_lines_other = []
+                            dynamic_lines = []
+                            dynamic_processed_lines = set()
 
-                        for a in lines:
-                            li = a.linea_item
-                            if getattr(a, 'elimina_saldo_total', False):
-                                if li in dynamic_processed_lines:
-                                    neto = 0.0
+                            for a in lines:
+                                li = a.linea_item
+                                if getattr(a, 'elimina_saldo_total', False):
+                                    if li in dynamic_processed_lines:
+                                        neto = 0.0
+                                    else:
+                                        monto_matriz = base_data_acumulado.get(li, {}).get('Matriz', 0.0)
+                                        monto_filial = base_data_acumulado.get(li, {}).get('Filial', 0.0)
+                                        neto = -(monto_matriz + monto_filial)
+                                        dynamic_processed_lines.add(li)
+                                    netos_comprobante[a.id] = neto
+                                    sum_total += neto
+                                    dynamic_lines.append(a)
                                 else:
-                                    monto_matriz = base_data_acumulado.get(li, {}).get('Matriz', 0.0)
-                                    monto_filial = base_data_acumulado.get(li, {}).get('Filial', 0.0)
-                                    neto = -(monto_matriz + monto_filial)
-                                    dynamic_processed_lines.add(li)
-                                netos_comprobante[a.id] = neto
-                                sum_total += neto
-                                dynamic_lines.append(a)
-                            else:
-                                debe_val = float(a.debe) if a.debe is not None else 0.0
-                                haber_val = float(a.haber) if a.haber is not None else 0.0
-                                neto = debe_val - haber_val
-                                netos_comprobante[a.id] = neto
-                                sum_total += neto
-                                if debe_val == 0.0 and haber_val == 0.0:
-                                    static_lines_zero.append(a)
+                                    debe_val = float(a.debe) if a.debe is not None else 0.0
+                                    haber_val = float(a.haber) if a.haber is not None else 0.0
+                                    neto = debe_val - haber_val
+                                    netos_comprobante[a.id] = neto
+                                    sum_total += neto
+                                    if debe_val == 0.0 and haber_val == 0.0:
+                                        static_lines_zero.append(a)
+                                    else:
+                                        static_lines_other.append(a)
+
+                            if abs(sum_total) > 0.001:
+                                if dynamic_lines and static_lines_zero:
+                                    balancer_entry = static_lines_zero[0]
+                                    netos_comprobante[balancer_entry.id] -= sum_total
+
+                            for a in lines:
+                                li = a.linea_item
+                                neto = netos_comprobante.get(a.id, 0.0)
+                                es_prior_year_static_pl = (a.periodo[:4] < periodo[:4]) and (not getattr(a, 'elimina_saldo_total', False)) and is_pl_account(li)
+                                if es_prior_year_static_pl:
+                                    target_eq = get_target_equity_line(base_data_acumulado.keys())
+                                    if target_eq not in base_data_acumulado:
+                                        base_data_acumulado[target_eq] = {'Matriz': 0.0, 'Filial': 0.0}
+                                    base_data_acumulado[target_eq]['Filial'] += neto
                                 else:
-                                    static_lines_other.append(a)
+                                    if li not in base_data_acumulado:
+                                        base_data_acumulado[li] = {'Matriz': 0.0, 'Filial': 0.0}
+                                    base_data_acumulado[li]['Filial'] += neto
 
-                        if abs(sum_total) > 0.001:
-                            if dynamic_lines and static_lines_zero:
-                                balancer_entry = static_lines_zero[0]
-                                netos_comprobante[balancer_entry.id] -= sum_total
+                    base_data = base_data_acumulado
 
-                        for a in lines:
-                            li = a.linea_item
-                            neto = netos_comprobante.get(a.id, 0.0)
-                            es_prior_year_static_pl = (a.periodo[:4] < periodo[:4]) and (not getattr(a, 'elimina_saldo_total', False)) and is_pl_account(li)
-                            if es_prior_year_static_pl:
-                                target_eq = get_target_equity_line(base_data_acumulado.keys())
-                                if target_eq not in base_data_acumulado:
-                                    base_data_acumulado[target_eq] = {'Matriz': 0.0, 'Filial': 0.0}
-                                base_data_acumulado[target_eq]['Filial'] += neto
-                            else:
-                                if li not in base_data_acumulado:
-                                    base_data_acumulado[li] = {'Matriz': 0.0, 'Filial': 0.0}
-                                base_data_acumulado[li]['Filial'] += neto
-
-                base_data = base_data_acumulado
+                if col_base_cache is not None:
+                    col_base_cache[columna_destino] = base_data
 
         netos_comprobante = {} # index -> neto
         sum_total = 0.0

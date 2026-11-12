@@ -7,7 +7,7 @@ from src.models.audit_adjustment import AuditAdjustmentRecord
 from src.models.historical_data import HistoricalDataRecord, HistoricalDetailRecord
 from src.models.trial_balance_db import TrialBalanceDB
 
-def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
+def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str, progress_callback=None, user: str = "Usuario Cierre"):
     """
     Ejecuta el cierre de un periodo:
     1. Lee el Trial Balance activo.
@@ -138,6 +138,9 @@ def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
                     key = ('P&L', str(adj.linea_item).strip())
                     summaries[key] = summaries.get(key, 0.0) + monto_pl
                 
+        if progress_callback:
+            progress_callback(1, 30, f"Guardando {len(details)} registros contables en Bóveda Histórica")
+
         # 6. Guardar registros de detalle en bloque
         db.bulk_save_objects(details)
         
@@ -161,7 +164,12 @@ def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str):
         # 9. Generar Snapshot inmutable en Bóveda de Cierre Histórico
         try:
             from src.core.snapshot_vault_manager import SnapshotVaultManager
-            snap_ok, snap_msg = SnapshotVaultManager.create_snapshot(empresa, periodo, user="Usuario Cierre")
+            snap_ok, snap_msg = SnapshotVaultManager.create_snapshot(
+                empresa,
+                periodo,
+                user=user,
+                progress_callback=progress_callback
+            )
             if not snap_ok:
                 print(f"Aviso al crear Snapshot en Bóveda para {empresa} {periodo}: {snap_msg}")
         except Exception as e_snap:

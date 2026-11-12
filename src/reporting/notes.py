@@ -182,12 +182,17 @@ def discover_dynamic_notes(template_path: str = "Plantilla de notas_v1.xlsx") ->
         else:
             return {}
 
+    ext_master_path = "Plantilla EXTERNA_de_notas_v1.xlsx"
     try:
         mtime = os.path.getmtime(template_path)
     except OSError:
         mtime = 0
+    try:
+        ext_mtime = os.path.getmtime(ext_master_path) if os.path.exists(ext_master_path) else 0
+    except OSError:
+        ext_mtime = 0
 
-    cache_key = (os.path.abspath(template_path), mtime)
+    cache_key = (os.path.abspath(template_path), mtime, ext_mtime)
     if cache_key in _DYNAMIC_NOTES_CACHE:
         return _DYNAMIC_NOTES_CACHE[cache_key]
 
@@ -208,6 +213,16 @@ def discover_dynamic_notes(template_path: str = "Plantilla de notas_v1.xlsx") ->
         wb.close()
     except Exception:
         return {}
+
+    if os.path.exists(ext_master_path):
+        try:
+            wb_ext = openpyxl.load_workbook(ext_master_path, data_only=True, read_only=True)
+            for sh_e in wb_ext.sheetnames:
+                if sh_e not in sheet_names:
+                    sheet_names.append(sh_e)
+            wb_ext.close()
+        except Exception:
+            pass
 
     candidate_sheets = [
         s for s in sheet_names 

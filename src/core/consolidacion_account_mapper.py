@@ -45,14 +45,31 @@ def _resolve_empresa_dir(empresa: Optional[str] = None) -> Optional[str]:
                 
     return None
 
+import copy
+
+_ACCOUNT_MAP_CACHE: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+_RUBRO_LOOKUP_CACHE: Dict[tuple, Optional[str]] = {}
+
+def _get_mapping_cache_key(empresa_dir: str) -> tuple:
+    path_balance = os.path.join(empresa_dir, 'map_balance.xlsx')
+    path_pl = os.path.join(empresa_dir, 'map_pl.xlsx')
+    mtime_b = os.path.getmtime(path_balance) if os.path.exists(path_balance) else 0.0
+    mtime_p = os.path.getmtime(path_pl) if os.path.exists(path_pl) else 0.0
+    return (empresa_dir, mtime_b, mtime_p)
+
 def load_consolidation_account_map(empresa: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """
     Carga todas las cuentas de consolidación (serie 99...) desde map_balance.xlsx y map_pl.xlsx.
     Retorna un diccionario indexado por código de cuenta (ej. '9999050').
+    Usa caché en memoria invalidado automáticamente por mtime de los archivos Excel.
     """
     empresa_dir = _resolve_empresa_dir(empresa)
     if not empresa_dir:
         return {}
+
+    cache_key = _get_mapping_cache_key(empresa_dir)
+    if cache_key in _ACCOUNT_MAP_CACHE:
+        return copy.deepcopy(_ACCOUNT_MAP_CACHE[cache_key])
 
     account_map: Dict[str, Dict[str, Any]] = {}
 
@@ -136,7 +153,8 @@ def load_consolidation_account_map(empresa: Optional[str] = None) -> Dict[str, D
         except Exception as e:
             print(f"Error cargando map_pl.xlsx en {empresa_dir}: {e}")
 
-    return account_map
+    _ACCOUNT_MAP_CACHE[cache_key] = account_map
+    return copy.deepcopy(account_map)
 
 def get_consolidation_accounts_list(empresa: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -165,7 +183,12 @@ def _stem_tokens(text: str) -> set:
             tokens.add(re.sub(r's$', '', w) if len(w) > 3 else w)
     return tokens
 
-def find_account_by_rubro_nota(linea_item: str, linea_nota: Optional[str] = None, empresa: Optional[str] = None) -> Optional[str]:
+def find_account_by_rubro_nota(
+    linea_item: str,
+    linea_nota: Optional[str] = None,
+    empresa: Optional[str] = None,
+    account_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[str]:
     """
     Búsqueda inversa: dado un linea_item y opcionalmente linea_nota, busca el código 9999xxx correspondiente.
     """
@@ -175,7 +198,18 @@ def find_account_by_rubro_nota(linea_item: str, linea_nota: Optional[str] = None
     norm_item = normalize_text(linea_item)
     norm_nota = normalize_text(linea_nota) if linea_nota else None
 
-    account_map = load_consolidation_account_map(empresa)
+    cache_lookup_key = None
+    if account_map is None:
+        empresa_dir = _resolve_empresa_dir(empresa)
+        if not empresa_dir:
+            return None
+        map_key = _get_mapping_cache_key(empresa_dir)
+        cache_lookup_key = (map_key, norm_item, norm_nota)
+        if cache_lookup_key in _RUBRO_LOOKUP_CACHE:
+            return _RUBRO_LOOKUP_CACHE[cache_lookup_key]
+        if map_key not in _ACCOUNT_MAP_CACHE:
+            load_consolidation_account_map(empresa)
+        account_map = _ACCOUNT_MAP_CACHE.get(map_key, {})
     
     # 1. Búsqueda exacta normalizada
     candidates = []
@@ -184,16 +218,23 @@ def find_account_by_rubro_nota(linea_item: str, linea_nota: Optional[str] = None
         if cand_item == norm_item:
             cand_nota = normalize_text(info.get('linea_nota')) if info.get('linea_nota') else None
             if norm_nota and cand_nota == norm_nota:
+                if cache_lookup_key is not None:
+                    _RUBRO_LOOKUP_CACHE[cache_lookup_key] = cod
                 return cod
             candidates.append((cod, cand_nota))
 
     if candidates:
         candidates.sort(key=lambda x: (0 if (norm_nota and x[1] == norm_nota) else (1 if x[1] is None else 2), x[0]))
-        return candidates[0][0]
+        res_cod = candidates[0][0]
+        if cache_lookup_key is not None:
+            _RUBRO_LOOKUP_CACHE[cache_lookup_key] = res_cod
+        return res_cod
 
     # 2. Búsqueda por similitud de tokens (manejando singular/plural y stopwords)
     target_tokens = _stem_tokens(linea_item)
     if not target_tokens:
+        if cache_lookup_key is not None:
+            _RUBRO_LOOKUP_CACHE[cache_lookup_key] = None
         return None
 
     scored_cands = []
@@ -213,7 +254,12 @@ def find_account_by_rubro_nota(linea_item: str, linea_nota: Optional[str] = None
 
     if scored_cands:
         scored_cands.sort(key=lambda x: (-x[0], x[1]))
-        return scored_cands[0][1]
+        res_cod = scored_cands[0][1]
+        if cache_lookup_key is not None:
+            _RUBRO_LOOKUP_CACHE[cache_lookup_key] = res_cod
+        return res_cod
 
+    if cache_lookup_key is not None:
+        _RUBRO_LOOKUP_CACHE[cache_lookup_key] = None
     return None
 

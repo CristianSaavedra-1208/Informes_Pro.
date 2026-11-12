@@ -51,11 +51,13 @@ class SabanaManager:
 
         # 1. Determinar empresas involucradas
         companies = []
+        grupo_id_val = None
         if is_consolidated:
             db = SessionLocal()
             try:
                 grupo_obj = db.query(ConsolidationGroup).filter_by(nombre_grupo=clean_entity_name).first()
                 if grupo_obj:
+                    grupo_id_val = grupo_obj.id
                     companies.append(grupo_obj.empresa_matriz)
                     if grupo_obj.filial_is_group:
                         def get_sub_companies(sub_g_id):
@@ -87,6 +89,65 @@ class SabanaManager:
         _tb_cache_comp = {}
 
         from src.core.snapshot_vault_manager import SnapshotVaultManager
+        from src.core.excel_utils import read_excel_cached
+
+        def _load_company_mappings(co_name, fallback_mb, fallback_mp):
+            co_mb, co_mp = fallback_mb, fallback_mp
+            mb_path = os.path.join("data", "empresas", co_name, "map_balance.xlsx")
+            mp_path = os.path.join("data", "empresas", co_name, "map_pl.xlsx")
+            try:
+                if os.path.exists(mb_path):
+                    co_mb = read_excel_cached(mb_path, mtime=os.path.getmtime(mb_path), dtype=str).fillna("")
+            except Exception:
+                pass
+            try:
+                if os.path.exists(mp_path):
+                    co_mp = read_excel_cached(mp_path, mtime=os.path.getmtime(mp_path), dtype=str).fillna("")
+            except Exception:
+                pass
+            return co_mb, co_mp
+
+        def _merge_entity_contexts(ctx_list):
+            merged_n1 = {}
+            merged_n2 = {}
+            merged_pl = {}
+            for ctx in ctx_list:
+                if not ctx:
+                    continue
+                for n_key, target_dict in (('nota1', merged_n1), ('nota2', merged_n2)):
+                    for ck, v in (ctx.get(n_key) or {}).items():
+                        if ck not in target_dict:
+                            target_dict[ck] = {
+                                'val': 0.0, 'inicial': 0.0, 'debitos': 0.0, 'creditos': 0.0,
+                                'accts': [], 'acct_names': [], 'acct_details': []
+                            }
+                        target_dict[ck]['val'] += float(v.get('val', 0.0) or 0.0)
+                        target_dict[ck]['inicial'] += float(v.get('inicial', 0.0) or 0.0)
+                        target_dict[ck]['debitos'] += float(v.get('debitos', 0.0) or 0.0)
+                        target_dict[ck]['creditos'] += float(v.get('creditos', 0.0) or 0.0)
+                        target_dict[ck]['accts'].extend(list(v.get('accts') or []))
+                        target_dict[ck]['acct_names'].extend(list(v.get('acct_names') or []))
+                        target_dict[ck]['acct_details'].extend([dict(d) for d in (v.get('acct_details') or [])])
+                for rubro_col, rubro_items in (ctx.get('pl') or {}).items():
+                    if rubro_col not in merged_pl:
+                        merged_pl[rubro_col] = {}
+                    for ck, v in (rubro_items or {}).items():
+                        if ck not in merged_pl[rubro_col]:
+                            merged_pl[rubro_col][ck] = {
+                                'val': 0.0, 'inicial': 0.0, 'debitos': 0.0, 'creditos': 0.0,
+                                'accts': [], 'acct_names': []
+                            }
+                        merged_pl[rubro_col][ck]['val'] += float(v.get('val', 0.0) or 0.0)
+                        merged_pl[rubro_col][ck]['inicial'] += float(v.get('inicial', 0.0) or 0.0)
+                        merged_pl[rubro_col][ck]['debitos'] += float(v.get('debitos', 0.0) or 0.0)
+                        merged_pl[rubro_col][ck]['creditos'] += float(v.get('creditos', 0.0) or 0.0)
+                        merged_pl[rubro_col][ck]['accts'].extend(list(v.get('accts') or []))
+                        merged_pl[rubro_col][ck]['acct_names'].extend(list(v.get('acct_names') or []))
+            return {
+                'nota1': merged_n1,
+                'nota2': merged_n2,
+                'pl': merged_pl
+            }
 
         for co in companies:
             tb_act = TrialBalanceDB.get_trial_balance(co, periodo_actual)
@@ -95,34 +156,34 @@ class SabanaManager:
             _tb_cache_act[co] = tb_act
             _tb_cache_comp[co] = tb_comp
 
-            # Resolver mapeos/contexto de periodo_actual (Congelado si está Cerrado)
-            mb_act, mp_act = map_balance_df, map_pl_df
+            co_default_mb, co_default_mp = _load_company_mappings(co, map_balance_df, map_pl_df)
+
+            # Resolver mapeos/contexto de periodo_actual (Congelado si la empresa o el grupo está Cerrado)
+            mb_act, mp_act = co_default_mb, co_default_mp
             frozen_ctx_act = None
-            if periodo_actual and (SnapshotVaultManager.has_active_snapshot(co, periodo_actual) or SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual)):
-                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(co, periodo_actual)
-                if f_mb is None:
-                    f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_actual)
-                if f_mb is not None:
-                    mb_act = f_mb
-                if f_mp is not None:
-                    mp_act = f_mp
-                frozen_ctx_act = SnapshotVaultManager.get_frozen_entity_context(co, periodo_actual, target_company=co)
-                if frozen_ctx_act is None:
+            if periodo_actual:
+                if SnapshotVaultManager.has_active_snapshot(co, periodo_actual):
+                    f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(co, periodo_actual)
+                    if f_mb is not None:
+                        mb_act = f_mb
+                    if f_mp is not None:
+                        mp_act = f_mp
+                    frozen_ctx_act = SnapshotVaultManager.get_frozen_entity_context(co, periodo_actual, target_company=co)
+                if frozen_ctx_act is None and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual):
                     frozen_ctx_act = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_actual, target_company=co)
 
-            # Resolver mapeos/contexto de periodo_comp (Congelado si está Cerrado)
-            mb_comp, mp_comp = map_balance_df, map_pl_df
+            # Resolver mapeos/contexto de periodo_comp (Congelado si la empresa o el grupo está Cerrado)
+            mb_comp, mp_comp = co_default_mb, co_default_mp
             frozen_ctx_comp = None
-            if periodo_comp and periodo_comp != "Ninguno" and (SnapshotVaultManager.has_active_snapshot(co, periodo_comp) or SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp)):
-                f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(co, periodo_comp)
-                if f_mb_c is None:
-                    f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_comp)
-                if f_mb_c is not None:
-                    mb_comp = f_mb_c
-                if f_mp_c is not None:
-                    mp_comp = f_mp_c
-                frozen_ctx_comp = SnapshotVaultManager.get_frozen_entity_context(co, periodo_comp, target_company=co)
-                if frozen_ctx_comp is None:
+            if periodo_comp and periodo_comp != "Ninguno":
+                if SnapshotVaultManager.has_active_snapshot(co, periodo_comp):
+                    f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(co, periodo_comp)
+                    if f_mb_c is not None:
+                        mb_comp = f_mb_c
+                    if f_mp_c is not None:
+                        mp_comp = f_mp_c
+                    frozen_ctx_comp = SnapshotVaultManager.get_frozen_entity_context(co, periodo_comp, target_company=co)
+                if frozen_ctx_comp is None and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp):
                     frozen_ctx_comp = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_comp, target_company=co)
 
             sab_bal_act = build_balance_sabana(tb_act, mb_act)
@@ -149,46 +210,93 @@ class SabanaManager:
                 'pl_comp': sab_pl_comp
             }
 
-        # 3. Si es Consolidado, compilar Sábana Consolidada Combinada
+        # 3. Si es Consolidado, compilar Sábana Consolidada Combinada por agregación aditiva de contextos individuales
         if is_consolidated:
-            tb_act_list = [df for df in _tb_cache_act.values() if df is not None and not df.empty]
             tb_comp_list = [df for df in _tb_cache_comp.values() if df is not None and not df.empty]
-
-            tb_act_comb = pd.concat(tb_act_list, ignore_index=True) if tb_act_list else None
-            tb_comp_comb = pd.concat(tb_comp_list, ignore_index=True) if tb_comp_list else None
 
             frozen_comb_act = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_actual, target_company=active_entity) if SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual) else None
             frozen_comb_comp = SnapshotVaultManager.get_frozen_entity_context(active_entity, periodo_comp, target_company=active_entity) if (periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp)) else None
 
-            mb_comb_act, mp_comb_act = map_balance_df, map_pl_df
-            if SnapshotVaultManager.has_active_snapshot(active_entity, periodo_actual):
-                f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_actual)
-                if f_mb is not None: mb_comb_act = f_mb
-                if f_mp is not None: mp_comb_act = f_mp
-
-            mb_comb_comp, mp_comb_comp = map_balance_df, map_pl_df
-            if periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(active_entity, periodo_comp):
-                f_mb_c, f_mp_c = SnapshotVaultManager.get_frozen_mappings(active_entity, periodo_comp)
-                if f_mb_c is not None: mb_comb_comp = f_mb_c
-                if f_mp_c is not None: mp_comb_comp = f_mp_c
-
-            ctx_act_comb = frozen_comb_act if frozen_comb_act is not None else build_entity_context(tb_act_comb, mb_comb_act, mp_comb_act, empresa_name=companies, periodo_str=periodo_actual)
-            if tb_comp_comb is not None:
-                ctx_comp_comb = frozen_comb_comp if frozen_comb_comp is not None else build_entity_context(tb_comp_comb, mb_comb_comp, mp_comb_comp, empresa_name=companies, periodo_str=periodo_comp)
+            import copy
+            ctx_act_comb = copy.deepcopy(frozen_comb_act) if frozen_comb_act is not None else _merge_entity_contexts([contexts[co]['actual'] for co in companies if co in contexts])
+            if frozen_comb_comp is not None:
+                ctx_comp_comb = copy.deepcopy(frozen_comb_comp)
+            elif tb_comp_list or any((contexts.get(co, {}).get('comp') or {}).get('nota1') or (contexts.get(co, {}).get('comp') or {}).get('pl') for co in companies):
+                ctx_comp_comb = _merge_entity_contexts([contexts[co]['comp'] for co in companies if co in contexts])
             else:
                 ctx_comp_comb = {'nota1': {}, 'nota2': {}, 'pl': {}}
 
             # Aplicar eliminaciones intercompañía
-            def apply_intercompany_eliminations(ctx):
-                if not ctx: return ctx
-                for rubro, items in ctx.get('pl', {}).items():
+            def _norm_pl_key(s):
+                if not s:
+                    return ""
+                return (
+                    str(s).strip().lower()
+                    .replace('á', 'a').replace('é', 'e').replace('í', 'i')
+                    .replace('ó', 'o').replace('ú', 'u')
+                )
+
+            def apply_intercompany_eliminations(ctx, per_str=None):
+                if not ctx:
+                    return ctx
+                pl_dict = ctx.get('pl', {})
+                for rubro, items in pl_dict.items():
                     for k in list(items.keys()):
-                        if 'intercompany' in k.lower() or 'intercompa' in k.lower():
+                        k_low = _norm_pl_key(k)
+                        if (
+                            'intercompany' in k_low
+                            or 'intercompa' in k_low
+                            or 'intereses prestamos empresas relacionadas' in k_low
+                        ):
                             items[k]['val'] = 0.0
+
+                # Sincronizar eliminaciones adicionales registradas en Hoja de Trabajo (ej. costos arriendos IC con asiento activo)
+                if grupo_id_val and per_str and per_str != "Ninguno":
+                    try:
+                        from src.core.consolidacion_engine import generar_hoja_trabajo
+                        df_h, _ = generar_hoja_trabajo(grupo_id_val, per_str)
+                        if df_h is not None and not df_h.empty:
+                            idx_er_h = df_h[df_h['Balance clasificado'] == 'Estado de Resultados'].index
+                            df_pl_h = df_h.loc[idx_er_h[0] + 1:] if not idx_er_h.empty else df_h
+                            hoja_cons_map = {}
+                            for _, r_h in df_pl_h.iterrows():
+                                li_h = _norm_pl_key(r_h.get('Balance clasificado'))
+                                val_c = r_h.get('CONSOLIDADO')
+                                if li_h and isinstance(val_c, (int, float)) and not pd.isna(val_c):
+                                    hoja_cons_map[li_h] = abs(float(val_c))
+
+                            for rubro, items in pl_dict.items():
+                                r_norm = _norm_pl_key(rubro)
+                                if r_norm not in hoja_cons_map:
+                                    continue
+                                target_abs = hoja_cons_map[r_norm]
+                                cur_sum = sum(float(v.get('val', 0.0) or 0.0) for v in items.values())
+                                diff = cur_sum - target_abs
+                                if abs(diff) <= 1.0:
+                                    continue
+                                ic_keys = [
+                                    k for k in items.keys()
+                                    if any(w in _norm_pl_key(k) for w in ('intercompa', 'intercompany', 'relacionad'))
+                                    or _norm_pl_key(k).endswith(' ic')
+                                    or ' ic ' in _norm_pl_key(k)
+                                ]
+                                if target_abs == 0.0 and ic_keys:
+                                    for ik in ic_keys:
+                                        items[ik]['val'] = 0.0
+                                elif diff > 1.0 and ic_keys:
+                                    for ik in ic_keys:
+                                        ik_val = float(items[ik].get('val', 0.0) or 0.0)
+                                        if abs(ik_val - diff) <= 10.0:
+                                            items[ik]['val'] = 0.0
+                                            break
+                    except Exception:
+                        pass
                 return ctx
 
-            ctx_act_comb = apply_intercompany_eliminations(ctx_act_comb)
-            ctx_comp_comb = apply_intercompany_eliminations(ctx_comp_comb)
+            if frozen_comb_act is None:
+                ctx_act_comb = apply_intercompany_eliminations(ctx_act_comb, periodo_actual)
+            if frozen_comb_comp is None:
+                ctx_comp_comb = apply_intercompany_eliminations(ctx_comp_comb, periodo_comp)
 
             contexts[active_entity] = {
                 'actual': ctx_act_comb,

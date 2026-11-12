@@ -567,12 +567,22 @@ class PatrimonioGenerator:
             gan_ini_actual = gan_acu_24_full
             res_ini_actual = res_ext_24
 
+        cap_25 = round(cap_25)
+        gan_acu_25_full = round(gan_acu_25_full)
+        res_ext_25 = round(res_ext_25)
+        cap_24 = round(cap_24)
+        gan_acu_24_full = round(gan_acu_24_full)
+        res_ext_24 = round(res_ext_24)
+        cap_ini_actual = round(cap_ini_actual)
+        gan_ini_actual = round(gan_ini_actual)
+        res_ini_actual = round(res_ini_actual)
+
         variation_capital_actual = cap_25 - cap_ini_actual
         variation_ganancias_actual = gan_acu_25_full - gan_ini_actual
         variation_reservas_actual = res_ext_25 - res_ini_actual
         
         # Usar el valor directo del P&L si está disponible para mayor exactitud
-        gan_ejercicio_actual = pl_val_actual if pl_val_actual is not None else variation_ganancias_actual
+        gan_ejercicio_actual = round(pl_val_actual) if pl_val_actual is not None else variation_ganancias_actual
 
         inyectar(row_ini_25, cap_ini_actual, gan_ini_actual, res_ini_actual)
         inyectar(row_gan_25, 0, gan_ejercicio_actual, 0)

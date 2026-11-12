@@ -32,7 +32,7 @@ class ConsolidationLockManager:
             db.close()
 
     @staticmethod
-    def lock_period(grupo_id: int, periodo: str, user: str = "Administrador") -> tuple:
+    def lock_period(grupo_id: int, periodo: str, user: str = "Administrador", progress_callback=None) -> tuple:
         """Cierra y bloquea un período de consolidación."""
         if not grupo_id or not periodo:
             return False, "Grupo o período inválido."
@@ -66,7 +66,12 @@ class ConsolidationLockManager:
                 if grupo_obj:
                     group_entity = f"[GRUPO] {grupo_obj.nombre_grupo}"
                     from src.core.snapshot_vault_manager import SnapshotVaultManager
-                    SnapshotVaultManager.create_snapshot(group_entity, periodo_clean, user=user)
+                    SnapshotVaultManager.create_snapshot(
+                        group_entity,
+                        periodo_clean,
+                        user=user,
+                        progress_callback=progress_callback
+                    )
             except Exception as e_snap:
                 print(f"Aviso al crear Snapshot consolidado en Bóveda: {e_snap}")
 

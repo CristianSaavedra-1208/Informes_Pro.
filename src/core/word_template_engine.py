@@ -364,13 +364,80 @@ def populate_notes_docx_table(table, chunk_df):
                         
     apply_table_formatting_and_widths(table, chunk_df, classifications=col_classes, total_width_inches=total_width_inches, is_compact=False, is_landscape=is_landscape)
 
+def _find_vertical_comp_block_start_texts(row_texts_matrix):
+    """
+    Detecta estructuralmente la fila donde comienza el 2° bloque vertical (Período Comparativo)
+    en tablas apiladas verticalmente (ej. #PATRIMONIO, #N08.1, #N09.2, #N14.2, #N15.4, #N16.2, #N16.3).
+    Retorna el índice de fila de inicio del 2° bloque (o de su fila separadora), o None si es de 1 solo bloque.
+    """
+    num_r = len(row_texts_matrix)
+    if num_r < 6:
+        return None
+
+    import re as _re
+    seen_data_or_open = False
+    seen_block1_total_or_close = False
+    first_block_year = None
+
+    for r_idx, cells_txt in enumerate(row_texts_matrix):
+        c0 = (cells_txt[0] if cells_txt else "").strip()
+        c0_low = c0.lower()
+        all_empty = all(not (t or "").strip() for t in cells_txt)
+
+        # Detectar año solitario en col 0 al inicio del bloque 1 (ej. '2026' o '31-06-2026')
+        if r_idx <= 2 and c0 and _re.match(r'^(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2})?$', c0):
+            yrs0 = _re.findall(r'20\d{2}', c0)
+            if yrs0:
+                first_block_year = yrs0[0]
+
+        if r_idx >= 2 and not all_empty:
+            if any(k in c0_low for k in ("saldo inicial", "saldo al 1", "saldo al 01", "opening balance", "detalle al")):
+                if seen_block1_total_or_close or (seen_data_or_open and r_idx >= 5):
+                    return r_idx
+                seen_data_or_open = True
+            elif any(
+                _re.search(r'\d', (t or "")) and not _re.search(r'20\d{2}', (t or ""))
+                for t in cells_txt[1:]
+            ):
+                seen_data_or_open = True
+
+        # Caso A: Fila separadora completamente vacía después de filas de datos del Bloque 1
+        if r_idx >= 4 and all_empty and seen_data_or_open:
+            has_non_empty_after = any(
+                any((t or "").strip() for t in row_texts_matrix[r_nxt])
+                for r_nxt in range(r_idx + 1, num_r)
+            )
+            if has_non_empty_after:
+                return r_idx
+
+        # Detectar cierre del Bloque 1
+        if r_idx >= 3 and any(k in c0_low for k in ("saldo final", "saldo al 31", "saldo al 30", "patrimonio total", "total", "totales", "ending balance")):
+            if "1 de enero" not in c0_low and "01/01" not in c0_low and "01.01" not in c0_low and "inicial" not in c0_low:
+                seen_block1_total_or_close = True
+                continue
+
+        # Caso B: Después del cierre del Bloque 1, comienza un nuevo encabezado o un nuevo año/bloque
+        if seen_block1_total_or_close and r_idx >= 4 and not all_empty:
+            return r_idx
+
+        # Caso C: Segundo encabezado de año solitario en col 0 (ej. #N08.1, #N09.2, #N14.2)
+        if r_idx >= 5 and first_block_year and c0 and _re.match(r'^(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2})?$', c0):
+            return r_idx
+
+    return None
+
+
 def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=None, periodo_comp="Ninguno"):
     """
     Actualiza los valores numéricos y fechas de una tabla de Word existente sin alterar
     sus anchos de columnas (w:tcW), márgenes (w:tcMar), bordes (w:tcBorders) ni tipografía.
     Soporta mapeo semántico por concepto (columna 0) y mapeo posicional 1 a 1.
-    Si periodo_comp == 'Ninguno', BLINDA completamente cualquier columna o bloque correspondiente
-    a períodos anteriores (ej. 2025, 2024), preservando 100% intactos sus valores y formatos preexistentes.
+    Si periodo_comp == 'Ninguno':
+      - Propuesta 1: Identifica columnas y bloques comparativos por POSICIÓN ESTRUCTURAL FIJA
+        (nunca por coincidencia de año), evitando colisiones cuando el año del período actual
+        coincide con el año escrito en la columna comparativa de la plantilla Word.
+      - Propuesta 2: Toma un Snapshot pre-inyección de todas las celdas comparativas (columnas y
+        bloques protegidos) y garantiza su restauración 100% íntegra al finalizar.
     """
     if table is None or df is None:
         return
@@ -408,6 +475,7 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
 
     def set_cell_value(cell, text_val, align_right=False):
         first_p = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+        orig_alignment = first_p.alignment
         
         # Eliminar párrafos adicionales en la celda si los hubiera
         for extra_p in list(cell.paragraphs[1:]):
@@ -425,64 +493,182 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
         else:
             first_p.add_run(str(text_val))
             
-        if align_right:
+        if orig_alignment is not None:
+            first_p.alignment = orig_alignment
+        elif align_right:
             first_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+    def format_period_into_matched_date(matched_str, target_period_iso, target_dot_date):
+        """Reemplaza una fecha detectada conservando el formato exacto de la celda original."""
+        if not target_period_iso:
+            return matched_str
+        t_yr = str(target_period_iso)[:4]
+        if len(matched_str) == 4 and re.match(r'^20\d{2}$', matched_str):
+            return t_yr
+        if re.match(r'^20\d{2}[\.\-\/]\d{2}$', matched_str):
+            sep = matched_str[4]
+            return str(target_period_iso).replace("-", sep)
+        if re.match(r'^20\d{2}-\d{2}-\d{2}', matched_str):
+            parts_d = target_dot_date.split(".")
+            if len(parts_d) == 3:
+                return f"{parts_d[2]}-{parts_d[1]}-{parts_d[0]}"
+            return str(target_period_iso)
+        if "-" in matched_str and len(matched_str) >= 8:
+            return target_dot_date.replace(".", "-")
+        if "." in matched_str and len(matched_str) >= 8:
+            return target_dot_date
+        if "/" in matched_str and len(matched_str) >= 8:
+            return target_dot_date.replace(".", "/")
+        return str(target_period_iso)
 
     num_rows_tbl = len(table.rows)
     num_cols_tbl = len(table.columns)
     df_cols = list(clean_df.columns)
-    
-    # 1. Detectar años presentes en las cabeceras de Word (primeras filas, excluyendo col 0 de conceptos)
+
+    # Identificar columnas cuyos encabezados son atributos de contrato o saldos inicial/final de un mismo período
+    contract_col_keywords = ("inicio", "termino", "término", "vencimiento", "emisión", "emision", "issue date", "maturity date")
+    movement_col_keywords = ("saldo inicial", "saldo final", "opening balance", "closing balance")
+    non_period_cols = set()
+    movement_date_cols = set()
+
+    for r_chk in range(min(4, num_rows_tbl)):
+        row_c = table.rows[r_chk].cells
+        for c_idx in range(1, len(row_c)):
+            t_low = row_c[c_idx].text.strip().lower()
+            if any(k in t_low for k in contract_col_keywords):
+                non_period_cols.add(c_idx)
+            elif any(k in t_low for k in movement_col_keywords):
+                non_period_cols.add(c_idx)
+                movement_date_cols.add(c_idx)
+
+    # 1. Detectar columnas de fecha de período en las cabeceras de Word (primeras filas, excluyendo col 0 y non_period_cols)
     tbl_col_years = {}
-    for r_idx in range(min(4, num_rows_tbl)):
+    for r_idx in range(min(3, num_rows_tbl)):
         row = table.rows[r_idx]
+        c0_txt_low = row.cells[0].text.strip().lower() if len(row.cells) > 0 else ""
+        # Evitar tomar como cabecera una fila de datos que tenga montos formateados en otras celdas
         for c_idx in range(1, len(row.cells)):
+            if c_idx in non_period_cols:
+                continue
             txt = row.cells[c_idx].text.strip()
             years = re.findall(r'20\d{2}', txt)
             if years and c_idx not in tbl_col_years:
-                tbl_col_years[c_idx] = years[0]
+                # Validar que el texto sea un encabezado de fecha/período y no un monto largo
+                txt_clean_chk = re.sub(r'[\d\.\-\/\s\:\(\)mchth\$us%a-zA-ZáéíóúñÁÉÍÓÚÑ]', '', txt)
+                if len(txt) <= 35:
+                    tbl_col_years[c_idx] = years[0]
 
-    # Columnas que pertenecen a períodos comparativos (ej. 2025, 2024)
+    hdr_date_cols = sorted(tbl_col_years.keys())
+
+    # Detectar si es una tabla apilada verticalmente por bloques de período (ej. #PATRIMONIO, #N08.1, #N09.2, #N15.4, #N16.2, #N16.3)
+    protected_tbl_rows = set()
+    comp_block_start_row = None
+    df_comp_block_start = None
+    if not hdr_date_cols:
+        tbl_texts_matrix = [[c.text for c in r.cells] for r in table.rows]
+        comp_block_start_row = _find_vertical_comp_block_start_texts(tbl_texts_matrix)
+        df_texts_matrix = [["" if pd.isna(v) else str(v) for v in r_vals] for _, r_vals in clean_df.iterrows()]
+        df_comp_block_start = _find_vertical_comp_block_start_texts(df_texts_matrix)
+        if is_no_comp and comp_block_start_row is not None:
+            protected_tbl_rows = set(range(comp_block_start_row, num_rows_tbl))
+
+    # 2. Determinar columnas Actuales (act_tbl_cols) y Comparativas Protegidas (protected_tbl_cols) por POSICIÓN ESTRUCTURAL
     protected_tbl_cols = set()
-    if is_no_comp and act_year:
-        for c_idx, yr in tbl_col_years.items():
-            if yr != act_year:
-                protected_tbl_cols.add(c_idx)
+    act_tbl_cols = []
 
-    # 2. Mapeo de columnas de clean_df a columnas de table (df_col_idx -> tbl_col_idx)
+    if is_no_comp and hdr_date_cols:
+        r0_joined_low = " ".join(c.text.strip().lower() for c in table.rows[0].cells[1:]) if num_rows_tbl > 0 else ""
+        is_interleaved_corr_nocorr = (
+            len(hdr_date_cols) == 4 and
+            "corriente" in r0_joined_low and
+            "no corriente" in r0_joined_low and
+            not any(re.search(r'20\d{2}', c.text) for c in table.rows[0].cells[1:])
+        )
+        if is_interleaved_corr_nocorr:
+            # Caso #N14.1: Pares intercalados (Corriente: [Actual, Comp], No corriente: [Actual, Comp])
+            act_tbl_cols = [hdr_date_cols[0], hdr_date_cols[2]]
+            protected_tbl_cols = {hdr_date_cols[1], hdr_date_cols[3]}
+        elif len(hdr_date_cols) == 2:
+            group_width = hdr_date_cols[1] - hdr_date_cols[0]
+            if group_width <= 1:
+                # Caso estándar de 2 columnas de período: 1ª = Actual, 2ª = Comparativo Protegido
+                act_tbl_cols = [hdr_date_cols[0]]
+                protected_tbl_cols = set(range(hdr_date_cols[1], num_cols_tbl))
+            else:
+                # Caso de bloques multicolumna bajo cada fecha (#N09.1, #N10.1, #N13.1, #N15.1, #N15.2, #N15.5, #N15.6, #N15.8, #N20.1, #N26.1)
+                start_p_col = max(1, min(hdr_date_cols[0], num_cols_tbl - 2 * group_width))
+                act_tbl_cols = list(range(start_p_col, start_p_col + group_width))
+                protected_tbl_cols = set(range(start_p_col + group_width, num_cols_tbl))
+        elif len(hdr_date_cols) > 2:
+            # Celdas combinadas que repiten la fecha en cada subcolumna (ej. #N16.1 con 4 celdas de fecha):
+            # Primera mitad = Actual, Segunda mitad = Comparativo Protegido
+            half_len = len(hdr_date_cols) // 2
+            act_tbl_cols = hdr_date_cols[:half_len]
+            protected_tbl_cols = set(hdr_date_cols[half_len:])
+        elif len(hdr_date_cols) == 1:
+            # Solo 1 columna tiene fecha explícita; la primera columna de datos es Actual y las posteriores tras ella se protegen si hay >=3 cols
+            c_only = hdr_date_cols[0]
+            if c_only == 1 and num_cols_tbl >= 3:
+                act_tbl_cols = [1]
+                protected_tbl_cols = set(range(2, num_cols_tbl))
+            elif c_only == 2 and num_cols_tbl == 3 and "nota" not in (table.rows[0].cells[1].text.lower() if num_rows_tbl > 0 else ""):
+                # El template tenía año solo en col 2 o col 1 sin año: por posición col 1 es Actual y col 2 es Comparativo
+                act_tbl_cols = [1]
+                protected_tbl_cols = {2}
+            else:
+                act_tbl_cols = [c_only]
+                if c_only + 1 < num_cols_tbl:
+                    protected_tbl_cols = set(range(c_only + 1, num_cols_tbl))
+    elif (
+        is_no_comp
+        and not hdr_date_cols
+        and comp_block_start_row is None
+        and not non_period_cols
+        and num_cols_tbl == 3
+        and len(df_cols) == 3
+        and num_rows_tbl >= 2
+        and table.rows[0].cells[1].text.strip() == ""
+        and table.rows[0].cells[2].text.strip() == ""
+    ):
+        # Sub-tabla comparativa de 3 columnas sin fila de fechas repetida (ej. #N21.3 'ARRIENDO DE FIBRA IC')
+        act_tbl_cols = [1]
+        protected_tbl_cols = {2}
+
+    # PROPUESTA 2: Capturar Snapshot inmutable de todas las celdas comparativas (columnas y filas protegidas) antes de modificar la tabla
+    protected_cells_snapshot = {}
+    if is_no_comp:
+        for r_i in range(num_rows_tbl):
+            row_cells_snap = table.rows[r_i].cells
+            for c_i in range(len(row_cells_snap)):
+                if (r_i in protected_tbl_rows) or (c_i in protected_tbl_cols):
+                    protected_cells_snapshot[(r_i, c_i)] = row_cells_snap[c_i].text
+
+    def _enforce_protected_snapshot():
+        """Verifica y restaura cualquier celda comparativa protegida a su valor exacto original."""
+        if is_no_comp and protected_cells_snapshot:
+            for (r_i, c_i), orig_txt in protected_cells_snapshot.items():
+                if r_i < len(table.rows) and c_i < len(table.rows[r_i].cells):
+                    cur_cell = table.rows[r_i].cells[c_i]
+                    if cur_cell.text != orig_txt:
+                        set_cell_value(cur_cell, orig_txt, align_right=(c_i > 0))
+
+    # 3. Mapeo de columnas de clean_df a columnas de table (df_col_idx -> tbl_col_idx)
     col_mapping = {}
     
-    if not tbl_col_years:
-        # La tabla no tiene columnas por fecha (ej. Patrimonio), sino componentes en columnas
+    if not hdr_date_cols and not protected_tbl_cols:
+        # La tabla no tiene columnas por fecha (ej. Patrimonio, cuadros de movimientos), sino componentes en columnas
         for j in range(min(num_cols_tbl, len(df_cols))):
             col_mapping[j] = j
+        act_tbl_cols = [j for j in range(1, num_cols_tbl) if j not in non_period_cols or j in movement_date_cols]
     elif is_no_comp:
-        # Modo estricto sin comparativo: SOLO mapear columna de concepto y columnas del período actual
+        # Modo estricto sin comparativo: SOLO mapear columna de concepto, columnas descriptivas y columnas del período actual
         col_mapping[0] = 0
-        
-        if num_cols_tbl == len(df_cols) and len(tbl_col_years) >= 2:
-            # Si la estructura de columnas coincide (ej. tabla con múltiples pares Actual/Comparativo como #N14.1),
-            # mapear todas las columnas no protegidas posicionalmente
+        if num_cols_tbl == len(df_cols):
             for c_idx in range(1, num_cols_tbl):
                 if c_idx not in protected_tbl_cols:
                     col_mapping[c_idx] = c_idx
-            act_tbl_cols = [c_idx for c_idx, yr in tbl_col_years.items() if yr == act_year and c_idx not in protected_tbl_cols]
         else:
-            # Buscar columna en Word del año actual que no esté protegida
-            act_tbl_col = None
-            if act_year:
-                for c_idx, yr in tbl_col_years.items():
-                    if yr == act_year:
-                        act_tbl_col = c_idx
-                        break
-            if act_tbl_col is None:
-                for c_idx in range(1, num_cols_tbl):
-                    if c_idx not in protected_tbl_cols:
-                        act_tbl_col = c_idx
-                        break
-
-            # Buscar en df la columna del período actual
-            df_act_idx = 1
+            # Mapear columna 'Nota' si existe en ambos
             for j, col_name in enumerate(df_cols):
                 if j == 0:
                     continue
@@ -491,38 +677,14 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                         if tj not in protected_tbl_cols and "nota" in table.rows[0].cells[tj].text.lower():
                             col_mapping[j] = tj
                             break
-                    continue
-                if act_year and act_year in str(col_name):
-                    df_act_idx = j
-                    break
-            
-            act_tbl_cols = []
-            if act_tbl_col is not None and act_tbl_col not in protected_tbl_cols:
-                col_mapping[df_act_idx] = act_tbl_col
-                act_tbl_cols = [act_tbl_col]
-
-        # Actualizar fecha en cabecera de las columnas actuales en Word si corresponde
-        if periodo_actual and act_tbl_cols:
-            from src.reporting.note_generator import format_date_dots
-            dot_date = format_date_dots(periodo_actual)
-            for act_c in act_tbl_cols:
-                for hr_idx in range(min(4, num_rows_tbl)):
-                    hdr_cell = table.rows[hr_idx].cells[act_c]
-                    hdr_txt = hdr_cell.text
-                    if act_year and act_year in hdr_txt:
-                        m_date = re.search(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2})?', hdr_txt)
-                        if m_date:
-                            matched_str = m_date.group(0)
-                            if "-" in matched_str and len(matched_str) >= 8:
-                                new_date_str = dot_date.replace(".", "-")
-                            elif "." in matched_str and len(matched_str) >= 8:
-                                new_date_str = dot_date
-                            elif "/" in matched_str and len(matched_str) >= 8:
-                                new_date_str = dot_date.replace(".", "/")
-                            else:
-                                new_date_str = str(periodo_actual)
-                            updated_hdr = hdr_txt.replace(matched_str, new_date_str)
-                            set_cell_value(hdr_cell, updated_hdr, align_right=True)
+            # Identificar las columnas de datos del período actual en clean_df (por posición: primeras columnas no-Nota)
+            df_data_cols = [
+                j for j, col_name in enumerate(df_cols)
+                if j > 0 and str(col_name).strip().lower() not in ['nota', 'notas', 'comp']
+            ]
+            for d_c, t_c in zip(df_data_cols, act_tbl_cols):
+                if t_c not in protected_tbl_cols:
+                    col_mapping[d_c] = t_c
     else:
         # Modo con comparativo normal
         if num_cols_tbl == len(df_cols):
@@ -549,38 +711,163 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                     if df_idx < num_cols_tbl:
                         col_mapping[df_idx] = df_idx
 
+    has_header_row = (num_rows_tbl == len(clean_df) + 1)
+
+    def _update_actual_header_dates():
+        """Actualiza las fechas en las cabeceras de las columnas del período actual y de movimientos no protegidos."""
+        if not periodo_actual:
+            return
+        from src.reporting.note_generator import format_date_dots
+        dot_date = format_date_dots(periodo_actual)
+        open_dot = f"01.01.{act_year}" if act_year else dot_date
+        date_regex = re.compile(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2}([\.\-\/]\d{2})?)?')
+
+        if is_no_comp and act_tbl_cols:
+            for act_c in act_tbl_cols:
+                if act_c in protected_tbl_cols:
+                    continue
+                for hr_idx in range(min(4, num_rows_tbl)):
+                    if (has_header_row and hr_idx == 0) or hr_idx in protected_tbl_rows or act_c >= len(table.rows[hr_idx].cells):
+                        continue
+                    hdr_cell = table.rows[hr_idx].cells[act_c]
+                    hdr_txt = hdr_cell.text
+                    m_date = date_regex.search(hdr_txt)
+                    if m_date:
+                        matched_str = m_date.group(0)
+                        new_date_str = format_period_into_matched_date(matched_str, periodo_actual, dot_date)
+                        updated_hdr = hdr_txt.replace(matched_str, new_date_str)
+                        set_cell_value(hdr_cell, updated_hdr, align_right=True)
+
+        if movement_date_cols:
+            for mov_c in movement_date_cols:
+                if mov_c in protected_tbl_cols:
+                    continue
+                for hr_idx in range(min(4, num_rows_tbl)):
+                    if hr_idx in protected_tbl_rows or mov_c >= len(table.rows[hr_idx].cells):
+                        continue
+                    hdr_cell = table.rows[hr_idx].cells[mov_c]
+                    hdr_txt = hdr_cell.text
+                    hdr_low = hdr_txt.lower()
+                    m_date = date_regex.search(hdr_txt)
+                    if m_date:
+                        matched_str = m_date.group(0)
+                        is_open = ("inicial" in hdr_low or "01/01" in hdr_low or "01.01" in hdr_low or "01-01" in hdr_low)
+                        target_dot_use = open_dot if is_open else dot_date
+                        target_iso_use = f"{act_year}-01" if (is_open and act_year) else periodo_actual
+                        new_date_str = format_period_into_matched_date(matched_str, target_iso_use, target_dot_use)
+                        set_cell_value(hdr_cell, hdr_txt.replace(matched_str, new_date_str), align_right=False)
+
     from src.reporting.word_export import _is_total_or_subtotal_label
     from src.reporting.formatting import detect_internal_header_rows, is_separator_row_series
-    def _normalize_total_row_borders():
-        # Asegurar estilo corporativo celeste (#E8EEF6) en filas de cabecera internas si la tabla no tiene fila de cabecera extra
-        if num_rows_tbl == len(clean_df):
-            int_hdr_rows, bot_hdr_rows = detect_internal_header_rows(clean_df)
-        else:
-            int_hdr_rows, bot_hdr_rows = set(), set()
 
+    # Si la tabla existente en Word estaba colapsada/incompleta (menos filas que clean_df, ej. #N24.1 y #N24.2 sin líneas de detalle)
+    # y tiene la misma estructura de columnas horizontales de fecha, expandir todas las filas preservando 100% la columna comparativa.
+    if (
+        num_rows_tbl < len(clean_df)
+        and num_cols_tbl == len(df_cols)
+        and bool(hdr_date_cols)
+        and comp_block_start_row is None
+        and df_comp_block_start is None
+    ):
+        exp_int_hdr_rows, _ = detect_internal_header_rows(clean_df)
+        hdr_cutoff = (max(exp_int_hdr_rows) + 1) if exp_int_hdr_rows else min(3, num_rows_tbl)
+        df_expanded = clean_df.copy().astype(object)
+
+        if is_no_comp and protected_tbl_cols:
+            orig_hdr_comp = {}
+            for r_h in range(min(hdr_cutoff, num_rows_tbl)):
+                for c_i in protected_tbl_cols:
+                    if c_i < len(table.rows[r_h].cells):
+                        orig_hdr_comp[(r_h, c_i)] = table.rows[r_h].cells[c_i].text
+
+            orig_data_comp = {}
+            for r_d in range(min(hdr_cutoff, num_rows_tbl), num_rows_tbl):
+                c0_raw = table.rows[r_d].cells[0].text.strip() if len(table.rows[r_d].cells) > 0 else ""
+                c0_n = normalize_text(c0_raw)
+                row_comp_vals = {
+                    c_i: table.rows[r_d].cells[c_i].text
+                    for c_i in protected_tbl_cols
+                    if c_i < len(table.rows[r_d].cells)
+                }
+                if c0_n:
+                    orig_data_comp[c0_n] = row_comp_vals
+                elif r_d == num_rows_tbl - 1 and len(clean_df) > 0:
+                    last_df_norm = normalize_text(str(clean_df.iloc[-1, 0]))
+                    if last_df_norm and last_df_norm not in orig_data_comp:
+                        orig_data_comp[last_df_norm] = row_comp_vals
+
+            for r_idx in range(len(df_expanded)):
+                if r_idx in exp_int_hdr_rows:
+                    for c_i in protected_tbl_cols:
+                        if (r_idx, c_i) in orig_hdr_comp:
+                            df_expanded.iloc[r_idx, c_i] = orig_hdr_comp[(r_idx, c_i)]
+                else:
+                    c_df_norm = normalize_text(str(df_expanded.iloc[r_idx, 0]))
+                    matched_comp_dict = orig_data_comp.get(c_df_norm)
+                    if matched_comp_dict is None and len(c_df_norm) >= 7:
+                        for k_norm, v_dict in orig_data_comp.items():
+                            if k_norm in c_df_norm or c_df_norm in k_norm:
+                                matched_comp_dict = v_dict
+                                break
+                    if matched_comp_dict is not None:
+                        for c_i in protected_tbl_cols:
+                            df_expanded.iloc[r_idx, c_i] = matched_comp_dict.get(c_i, "-")
+                    else:
+                        has_act_val = any(
+                            pd.notna(df_expanded.iloc[r_idx, ac]) and str(df_expanded.iloc[r_idx, ac]).strip() not in ["", "nan", "None"]
+                            for ac in act_tbl_cols if ac < len(df_cols)
+                        )
+                        for c_i in protected_tbl_cols:
+                            df_expanded.iloc[r_idx, c_i] = "-" if has_act_val else ""
+
+        orig_hdr_alignments = {}
+        for r_h in range(min(hdr_cutoff, num_rows_tbl)):
+            for c_i in range(len(table.rows[r_h].cells)):
+                if table.rows[r_h].cells[c_i].paragraphs:
+                    p_al = table.rows[r_h].cells[c_i].paragraphs[0].alignment
+                    if p_al is not None:
+                        orig_hdr_alignments[(r_h, c_i)] = p_al
+
+        populate_notes_docx_table(table, df_expanded)
+        num_rows_tbl = len(table.rows)
+        _update_actual_header_dates()
+        for (r_h, c_i), p_al in orig_hdr_alignments.items():
+            if r_h < len(table.rows) and c_i < len(table.rows[r_h].cells) and table.rows[r_h].cells[c_i].paragraphs:
+                table.rows[r_h].cells[c_i].paragraphs[0].alignment = p_al
+        return
+
+    if num_rows_tbl == len(clean_df):
+        int_hdr_rows_all, bot_hdr_rows_all = detect_internal_header_rows(clean_df)
+    else:
+        int_hdr_rows_all, bot_hdr_rows_all = set(), set()
+
+    def _normalize_total_row_borders():
         for r_i, t_row in enumerate(table.rows):
-            if not t_row.cells:
+            if r_i in protected_tbl_rows or not t_row.cells:
                 continue
-            if r_i in int_hdr_rows:
-                is_bot_h = (r_i in bot_hdr_rows)
+            if r_i in int_hdr_rows_all:
+                is_bot_h = (r_i in bot_hdr_rows_all)
                 for cell_c in t_row.cells:
-                    set_cell_bg(cell_c, "E8EEF6")
-                    set_cell_borders(
-                        cell_c,
-                        top=None,
-                        bottom={'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bot_h else None
-                    )
+                    if not cell_c._tc.xpath('.//w:shd'):
+                        set_cell_bg(cell_c, "E8EEF6")
+                    if not cell_c._tc.xpath('.//w:tcBorders'):
+                        set_cell_borders(
+                            cell_c,
+                            top=None,
+                            bottom={'val': 'single', 'sz': '8', 'color': '1F3864'} if is_bot_h else None
+                        )
                     for p_c in cell_c.paragraphs:
                         for r_c in p_c.runs:
                             r_c.font.bold = True
                             r_c.font.color.rgb = RGBColor(31, 56, 100)
-                if is_bot_h and (r_i + 1) < len(table.rows):
+                if is_bot_h and (r_i + 1) < len(table.rows) and (r_i + 1) not in protected_tbl_rows:
                     for cell_nxt in table.rows[r_i + 1].cells:
-                        set_cell_borders(
-                            cell_nxt,
-                            top={'val': 'single', 'sz': '8', 'color': '1F3864'},
-                            bottom={'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
-                        )
+                        if not cell_nxt._tc.xpath('.//w:tcBorders'):
+                            set_cell_borders(
+                                cell_nxt,
+                                top={'val': 'single', 'sz': '8', 'color': '1F3864'},
+                                bottom={'val': 'single', 'sz': '2', 'color': 'E1E1E1'}
+                            )
                 continue
             if r_i > 0 and all(not (c.text or "").strip() for c in t_row.cells):
                 prev_is_tot = _is_total_or_subtotal_label((table.rows[r_i - 1].cells[0].text or "").strip().lower()) if len(table.rows[r_i - 1].cells) > 0 else False
@@ -594,7 +881,8 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                 continue
             if r_i == 0:
                 continue
-            if not any(c._tc.xpath('.//w:tcBorders') for c in t_row.cells):
+            # Respetar los bordes (w:tcBorders) que el usuario ya haya configurado manualmente en su plantilla Word
+            if any(c._tc.xpath('.//w:tcBorders') for c in t_row.cells):
                 continue
             c0_txt = t_row.cells[0].text.strip()
             if _is_total_or_subtotal_label(c0_txt):
@@ -605,8 +893,6 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                         bottom={'val': 'single', 'sz': '6', 'color': '404040'}
                     )
 
-        # Caso 1: Coincidencia posicional exacta de filas (SOLO si no es tabla multi-bloque, o si es multi-bloque en modo comparativo)
-    is_multi_block = any("2025" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0) and any("2026" in str(r.cells[0].text) for r in table.rows if len(r.cells) > 0)
     has_header_row = (num_rows_tbl == len(clean_df) + 1)
 
     # Actualizar encabezados de fecha en la fila 0 cuando la tabla tiene fila de cabecera de columnas (ej. #BALANCE, #ER, #ORI, #EFE)
@@ -632,7 +918,7 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
         from src.reporting.note_generator import format_date_dots
         dot_act = format_date_dots(periodo_actual)
         dot_comp = format_date_dots(periodo_comp) if periodo_comp and str(periodo_comp).strip().lower() not in ["ninguno", "none", ""] else None
-        date_tbl_cols = [c_idx for c_idx in range(1, num_cols_tbl) if c_idx not in protected_tbl_cols and any(re.search(r'20\d{2}', table.rows[hr].cells[c_idx].text) for hr in range(min(4, num_rows_tbl)) if c_idx < len(table.rows[hr].cells))]
+        date_tbl_cols = [c_idx for c_idx in range(1, num_cols_tbl) if c_idx not in protected_tbl_cols and c_idx not in non_period_cols and any(re.search(r'20\d{2}', table.rows[hr].cells[c_idx].text) for hr in range(min(4, num_rows_tbl)) if c_idx < len(table.rows[hr].cells))]
         for pair_pos, t_col in enumerate(date_tbl_cols):
             target_dot = dot_act if (pair_pos % 2 == 0 or not dot_comp) else dot_comp
             target_iso = str(periodo_actual) if (pair_pos % 2 == 0 or not dot_comp) else str(periodo_comp)
@@ -646,26 +932,44 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                 m_date = re.search(r'(\d{2}[\.\-\/]\d{2}[\.\-\/])?20\d{2}([\.\-\/]\d{2}([\.\-\/]\d{2})?)?', hdr_txt)
                 if m_date and len(m_date.group(0)) >= 7:
                     matched_str = m_date.group(0)
-                    if "-" in matched_str:
-                        new_date_str = target_dot.replace(".", "-") if not re.match(r'^20\d{2}-\d{2}$', matched_str) else target_iso
-                    elif "." in matched_str:
-                        new_date_str = target_dot
-                    elif "/" in matched_str:
-                        new_date_str = target_dot.replace(".", "/")
-                    else:
-                        new_date_str = target_iso
+                    new_date_str = format_period_into_matched_date(matched_str, target_iso, target_dot)
                     set_cell_value(hdr_cell, hdr_txt.replace(matched_str, new_date_str), align_right=True)
 
-    if (num_rows_tbl == len(clean_df) or has_header_row) and (not is_multi_block or not is_no_comp):
-        row_offset = 1 if has_header_row else 0
-        for r_idx in range(len(clean_df)):
+    # Caso 1: Coincidencia posicional exacta de filas (o coincidencia posicional del Bloque 1 en tablas multi-bloque)
+    can_use_positional = (num_rows_tbl == len(clean_df) or has_header_row)
+    pos_df_rows_limit = len(clean_df)
+    row_offset = 1 if has_header_row else 0
+
+    if not can_use_positional and is_no_comp and comp_block_start_row is not None and df_comp_block_start is not None:
+        # Verificar si la fila 0 de Word es cabecera de columnas mientras que la fila 0 de clean_df ya es fila de datos
+        tbl_r0_c0 = table.rows[0].cells[0].text.strip() if (num_rows_tbl > 0 and len(table.rows[0].cells) > 0) else ""
+        df_r0_c0 = str(clean_df.iloc[0, 0]).strip() if (len(clean_df) > 0 and pd.notna(clean_df.iloc[0, 0])) else ""
+        tbl_has_extra_top_hdr = (not tbl_r0_c0 and bool(df_r0_c0))
+        if not tbl_has_extra_top_hdr and comp_block_start_row == df_comp_block_start:
+            can_use_positional = True
+            row_offset = 0
+            pos_df_rows_limit = df_comp_block_start
+        elif tbl_has_extra_top_hdr and comp_block_start_row == df_comp_block_start + 1:
+            can_use_positional = True
+            row_offset = 1
+            pos_df_rows_limit = df_comp_block_start
+
+    if can_use_positional:
+        for r_idx in range(pos_df_rows_limit):
+            tbl_row_idx = r_idx + row_offset
+            if tbl_row_idx >= num_rows_tbl or tbl_row_idx in protected_tbl_rows:
+                continue
             df_row = clean_df.iloc[r_idx]
-            tbl_row = table.rows[r_idx + row_offset]
-            # Si es modo comparativo o fila de saldo en Patrimonio, actualizar también etiquetas dinámicas de fecha en columna 0
-            if not is_no_comp and len(tbl_row.cells) > 0:
+            tbl_row = table.rows[tbl_row_idx]
+            # Actualizar etiquetas dinámicas de fecha en columna 0 para filas no protegidas (ej. Bloque 1 de Patrimonio o #N16.2)
+            if len(tbl_row.cells) > 0:
                 c0_df = str(df_row.iloc[0]).strip() if pd.notna(df_row.iloc[0]) else ""
                 c0_tbl = tbl_row.cells[0].text.strip()
-                if c0_df and (re.search(r'20\d{2}', c0_df) or re.search(r'20\d{2}', c0_tbl)):
+                c0_tbl_yrs = re.findall(r'20\d{2}', c0_tbl)
+                if c0_df and (re.search(r'20\d{2}', c0_df) or c0_tbl_yrs):
+                    if not is_no_comp or len(c0_tbl_yrs) == 1:
+                        set_cell_value(tbl_row.cells[0], c0_df, align_right=False)
+                elif not c0_tbl and c0_df and tbl_row_idx not in int_hdr_rows_all:
                     set_cell_value(tbl_row.cells[0], c0_df, align_right=False)
             for df_c_idx, tbl_c_idx in col_mapping.items():
                 if df_c_idx == 0:
@@ -675,17 +979,24 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
                 val = df_row.iloc[df_c_idx]
                 fmt_val = format_num_val(val)
                 is_num = isinstance(val, (int, float, np.number))
-                # NUNCA vaciar celda si df tiene vacío/NaN
                 if fmt_val != "":
                     set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
+                elif tbl_row_idx not in int_hdr_rows_all and (not has_header_row or tbl_row_idx > 0):
+                    # Si la celda del período actual tenía un saldo numérico de otro período en el template y ahora es NaN, limpiar a '-'
+                    old_cell_txt = tbl_row.cells[tbl_c_idx].text.strip()
+                    if old_cell_txt and re.match(r'^[\(\-\d\.,\)]+$', old_cell_txt) and any(ch.isdigit() for ch in old_cell_txt):
+                        set_cell_value(tbl_row.cells[tbl_c_idx], "-", align_right=True)
+        _update_actual_header_dates()
         _normalize_total_row_borders()
+        _enforce_protected_snapshot()
         return
 
-    # Caso 2: Coincidencia semántica por concepto en Columna 0 (con soporte multi-bloque por año)
+    # Caso 2: Coincidencia semántica por concepto en Columna 0 (respetando bloques verticales protegidos)
+    df_for_semantic = clean_df.iloc[:df_comp_block_start] if (is_no_comp and df_comp_block_start is not None) else clean_df
     df_concepts = {}
     df_concepts_by_year = {}
     df_sec_year = act_year
-    for df_r_idx, (_, df_row) in enumerate(clean_df.iterrows()):
+    for df_r_idx, (_, df_row) in enumerate(df_for_semantic.iterrows()):
         row_joined = " ".join(str(v) for v in df_row if pd.notna(v))
         yrs_found = re.findall(r'20\d{2}', row_joined)
         if yrs_found:
@@ -698,58 +1009,67 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
             if df_sec_year and (df_sec_year, c_norm) not in df_concepts_by_year:
                 df_concepts_by_year[(df_sec_year, c_norm)] = df_row
 
-    # Rastrear sección de año en tablas verticales apiladas (ej. Patrimonio)
     current_section_year = act_year
 
     for tbl_r_idx, tbl_row in enumerate(table.rows):
-        if not tbl_row.cells:
+        if tbl_r_idx in protected_tbl_rows or not tbl_row.cells:
             continue
         c_cell = tbl_row.cells[0]
         c_text = c_cell.text.strip()
         c_norm = normalize_text(c_text)
         
-        # Detectar cambio de bloque o año en filas
         row_full_text = ' '.join(c.text for c in tbl_row.cells)
         found_years = re.findall(r'20\d{2}', row_full_text)
         if found_years:
             current_section_year = found_years[0]
             
-        # BLINDAJE: Si no hay comparativo y la fila o bloque es de un año anterior, NO MODIFICAR
-        if is_no_comp and act_year and current_section_year and current_section_year != act_year:
-            continue
+        # Si es modo sin comparativo y NO se pudo detectar comp_block_start_row estructuralmente,
+        # usar detección de bloque por segundo año solo después de haber pasado las primeras filas del Bloque 1
+        if is_no_comp and comp_block_start_row is None and not hdr_date_cols:
+            if tbl_r_idx >= 5 and act_year and current_section_year and current_section_year != act_year:
+                continue
         
-        # Detección especial de fila de saldo de cierre en Patrimonio
         is_closing_patrimonio = (
             "saldoal" in c_norm and 
             "1deenero" not in c_norm and 
-            "inicial" not in c_norm and 
-            (not act_year or act_year in c_text)
+            "0101" not in c_norm and
+            "inicial" not in c_norm
+        )
+        is_opening_patrimonio = (
+            ("saldoal" in c_norm or "saldoinicial" in c_norm) and
+            ("1deenero" in c_norm or "0101" in c_norm or "inicial" in c_norm)
         )
         
         matched_df_row = None
         if is_closing_patrimonio:
-            for _, df_r_cand in clean_df.iterrows():
+            for _, df_r_cand in df_for_semantic.iterrows():
                 cand_norm = normalize_text(str(df_r_cand.iloc[0]))
-                if "saldoal" in cand_norm and "1deenero" not in cand_norm and "inicial" not in cand_norm and (not act_year or act_year in str(df_r_cand.iloc[0])):
+                if ("saldoal" in cand_norm or "saldofinal" in cand_norm) and "1deenero" not in cand_norm and "0101" not in cand_norm and "inicial" not in cand_norm:
                     matched_df_row = df_r_cand
-                    # Actualizar fecha de la celda de Word a la nueva fecha de cierre
                     if df_r_cand.iloc[0] and str(df_r_cand.iloc[0]).strip():
-                        c_cell.text = str(df_r_cand.iloc[0]).strip()
+                        set_cell_value(c_cell, str(df_r_cand.iloc[0]).strip(), align_right=False)
                     break
-                cand_c0 = str(df_r_cand.iloc[0]).lower().strip()
-                if "saldo al" in cand_c0 and "1 de enero" not in cand_c0 and (not act_year or act_year in cand_c0):
+        elif is_opening_patrimonio and is_no_comp:
+            for _, df_r_cand in df_for_semantic.iterrows():
+                cand_norm = normalize_text(str(df_r_cand.iloc[0]))
+                if ("saldoal" in cand_norm or "saldoinicial" in cand_norm) and ("1deenero" in cand_norm or "0101" in cand_norm or "inicial" in cand_norm):
                     matched_df_row = df_r_cand
-                    # Actualizar fecha de la celda de Word a la nueva fecha de cierre
                     if df_r_cand.iloc[0] and str(df_r_cand.iloc[0]).strip():
-                        c_cell.text = str(df_r_cand.iloc[0]).strip()
+                        set_cell_value(c_cell, str(df_r_cand.iloc[0]).strip(), align_right=False)
                     break
         elif current_section_year and (current_section_year, c_norm) in df_concepts_by_year:
             matched_df_row = df_concepts_by_year[(current_section_year, c_norm)]
         elif c_norm in df_concepts:
             matched_df_row = df_concepts[c_norm]
+        elif not c_norm and tbl_r_idx == num_rows_tbl - 1 and len(df_for_semantic) > 0:
+            last_df_r = df_for_semantic.iloc[-1]
+            last_df_c0 = str(last_df_r.iloc[0]).strip() if pd.notna(last_df_r.iloc[0]) else ""
+            if _is_total_or_subtotal_label(last_df_c0.lower()):
+                set_cell_value(c_cell, last_df_c0, align_right=False)
+                matched_df_row = last_df_r
         else:
             for (cand_sec_yr, df_c_norm), df_r_candidate in df_concepts_by_year.items():
-                if current_section_year and cand_sec_yr and cand_sec_yr != current_section_year:
+                if not is_no_comp and current_section_year and cand_sec_yr and cand_sec_yr != current_section_year:
                     continue
                 if len(c_norm) >= 7 and (c_norm in df_c_norm or df_c_norm in c_norm):
                     matched_df_row = df_r_candidate
@@ -757,30 +1077,35 @@ def update_table_cells_inplace(table, df, preserve_styles=True, periodo_actual=N
             if matched_df_row is None:
                 for df_c_norm, df_r_candidate in df_concepts.items():
                     if len(c_norm) >= 7 and (c_norm in df_c_norm or df_c_norm in c_norm):
-                        # Evitar emparejamientos cruzados entre años
-                        cand_str = str(df_r_candidate.iloc[0])
-                        cand_yrs = re.findall(r'20\d{2}', cand_str)
-                        row_yrs = re.findall(r'20\d{2}', c_text)
-                        if cand_yrs and row_yrs and cand_yrs[0] != row_yrs[0]:
-                            continue
+                        if not is_no_comp:
+                            cand_str = str(df_r_candidate.iloc[0])
+                            cand_yrs = re.findall(r'20\d{2}', cand_str)
+                            row_yrs = re.findall(r'20\d{2}', c_text)
+                            if cand_yrs and row_yrs and cand_yrs[0] != row_yrs[0]:
+                                continue
                         matched_df_row = df_r_candidate
                         break
                     
         if matched_df_row is not None:
             for df_c_idx, tbl_c_idx in col_mapping.items():
                 if df_c_idx == 0:
-                    continue # Preservar texto de Columna 0
+                    continue
                 if tbl_c_idx in protected_tbl_cols:
-                    continue # BLINDAJE: Columna protegida
+                    continue
                 if tbl_c_idx < len(tbl_row.cells):
                     val = matched_df_row.iloc[df_c_idx]
                     fmt_val = format_num_val(val)
                     is_num = isinstance(val, (int, float, np.number))
-                    # NUNCA vaciar celda si el valor de origen es vacío/NaN
                     if fmt_val != "":
                         set_cell_value(tbl_row.cells[tbl_c_idx], fmt_val, align_right=is_num)
+                    elif tbl_r_idx not in int_hdr_rows_all and tbl_r_idx > 0:
+                        old_cell_txt = tbl_row.cells[tbl_c_idx].text.strip()
+                        if old_cell_txt and re.match(r'^[\(\-\d\.,\)]+$', old_cell_txt) and any(ch.isdigit() for ch in old_cell_txt):
+                            set_cell_value(tbl_row.cells[tbl_c_idx], "-", align_right=True)
 
+    _update_actual_header_dates()
     _normalize_total_row_borders()
+    _enforce_protected_snapshot()
 
 def load_mappings_for_entity(empresa):
     """Carga los mapeos de balance y PL para una entidad."""
@@ -917,6 +1242,9 @@ class WordTemplateEngine:
         preview_df = df_data.iloc[:, cols_to_keep].copy()
         preview_df.columns = ["Descripción", col_actual, col_comp]
         preview_df = preview_df[~preview_df["Descripción"].apply(is_cf_title_or_header_row)].reset_index(drop=True)
+        if str(col_comp).strip().lower() in ["comp", "ninguno", "none", ""]:
+            import numpy as np
+            preview_df[col_comp] = np.nan
 
         return preview_df
 
@@ -962,7 +1290,11 @@ class WordTemplateEngine:
         if col_act_use in preview_df.columns:
             preview_df[col_act_use] = pd.to_numeric(preview_df[col_act_use], errors='coerce')
         if col_cmp_use in preview_df.columns:
-            preview_df[col_cmp_use] = pd.to_numeric(preview_df[col_cmp_use], errors='coerce')
+            if str(col_comp).strip().lower() in ["comp", "ninguno", "none", ""]:
+                import numpy as np
+                preview_df[col_cmp_use] = np.nan
+            else:
+                preview_df[col_cmp_use] = pd.to_numeric(preview_df[col_cmp_use], errors='coerce')
 
         return preview_df
 
@@ -1028,13 +1360,16 @@ class WordTemplateEngine:
                     has_any_nota = True
                     break
 
+        is_no_comp_er = str(col_comp).strip().lower() in ["comp", "ninguno", "none", ""]
+        import numpy as np
+
         for r in range(start_row, ws_check.max_row + 1):
             name_val = ws_check.cell(row=r, column=name_col_idx).value
             v25 = ws_check.cell(row=r, column=val25_col_idx).value
-            v24 = ws_check.cell(row=r, column=val24_col_idx).value
+            v24 = np.nan if is_no_comp_er else ws_check.cell(row=r, column=val24_col_idx).value
             
             # Si la fila es completamente vacía, verificar si hay más contenido abajo
-            if name_val is None and v25 is None and v24 is None:
+            if name_val is None and v25 is None and (v24 is None or pd.isna(v24)):
                 has_more = any(ws_check.cell(row=r_next, column=name_col_idx).value is not None for r_next in range(r + 1, ws_check.max_row + 1))
                 if not has_more:
                     break
@@ -1100,6 +1435,9 @@ class WordTemplateEngine:
         preview_df = df_raw.iloc[:, cols_to_keep].copy()
         preview_df.columns = ["Detalle", col_actual, col_comp]
         preview_df = preview_df.dropna(how='all', subset=["Detalle"]).reset_index(drop=True)
+        if str(col_comp).strip().lower() in ["comp", "ninguno", "none", ""]:
+            import numpy as np
+            preview_df[col_comp] = np.nan
         return preview_df
 
     def _get_consolidated_bal_and_pl(self, grupo_id, periodo_actual, comp_period, scale_factor, empresa_path, grupo_name):
@@ -1510,6 +1848,8 @@ class WordTemplateEngine:
 
         statements_cache = {}  # Key: (base_code_clean, comp_period) -> (preview_df, report_name)
         note_elements_cache = {}  # Key: (base_code, note_comp) -> list of elements
+        from src.core.rounding_reconciler import RoundingReconciler
+        RoundingReconciler.clear_cache()
 
         template_nota = "Plantilla de notas_v1.xlsx"
         engine_notes = None
@@ -1571,6 +1911,15 @@ class WordTemplateEngine:
                         preview_df, report_name = snap_stmt
                         statements_cache[stmt_cache_key] = (preview_df, report_name)
                         was_loaded_from_snapshot = True
+                        result_bytes = SnapshotVaultManager.get_statement_excel(
+                            empresa=empresa_activa,
+                            periodo_actual=periodo_actual,
+                            code=base_code_clean,
+                            comp_period=comp_period,
+                            scale_factor=scale_factor,
+                            df_override=preview_df,
+                            target_lang=target_lang,
+                        )
                 
                 if preview_df is None and base_code_clean in ["#BALANCE", "#ESF"]:
                     report_name = "ESTADO DE SITUACIÓN FINANCIERA CONSOLIDADO" if is_consolidated else "ESTADO DE SITUACIÓN FINANCIERA CLASIFICADO"
@@ -1796,6 +2145,13 @@ class WordTemplateEngine:
                         
                         bal_df_pat = None
                         pl_df_pat = None
+                        pat_comp_for_open = comp_period
+                        if str(comp_period).strip().lower() in ["ninguno", "none", ""]:
+                            try:
+                                pat_comp_for_open = f"{int(str(periodo_actual)[:4]) - 1}-12"
+                            except Exception:
+                                pat_comp_for_open = "Ninguno"
+
                         if is_consolidated:
                             grupo_name = empresa_activa.replace("[GRUPO] ", "").strip()
                             db = SessionLocal()
@@ -1809,23 +2165,23 @@ class WordTemplateEngine:
                                 bal_df_pat, pl_df_pat, _, _ = self._get_consolidated_bal_and_pl(
                                     grupo_id=grupo_id,
                                     periodo_actual=periodo_actual,
-                                    comp_period=comp_period,
+                                    comp_period=pat_comp_for_open,
                                     scale_factor=scale_factor,
                                     empresa_path=empresa_path,
                                     grupo_name=grupo_name
                                 )
                         else:
-                            # Cargar Balance para empresa individual
+                            # Cargar Balance para empresa individual (incluyendo cierre año anterior para el Saldo Inicial al 01.01 del Bloque 1)
                             tb_df_p = TrialBalanceDB.get_trial_balance(empresa_activa, periodo_actual)
-                            tb_comp_p = TrialBalanceDB.get_trial_balance(empresa_activa, comp_period) if comp_period != "Ninguno" else None
+                            tb_comp_p = TrialBalanceDB.get_trial_balance(empresa_activa, pat_comp_for_open) if pat_comp_for_open != "Ninguno" else None
                             template_bal_p = os.path.join(empresa_path, "Balance clasificado.xlsx")
                             if not os.path.exists(template_bal_p):
                                 template_bal_p = os.path.join("templates", "Balance clasificado.xlsx")
                             from src.reporting.balance_generator import BalanceGenerator
                             gen_b = BalanceGenerator(template_bal_p)
-                            b_out = gen_b.generate(tb_df_p, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_comp_p, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
+                            b_out = gen_b.generate(tb_df_p, map_balance_df, scale_factor=scale_factor, tb_df_comp=tb_comp_p, periodo_actual_str=periodo_actual, periodo_comp_str=pat_comp_for_open if pat_comp_for_open != "Ninguno" else None)
                             col_act_str = str(periodo_actual)
-                            col_cmp_str = str(comp_period) if comp_period != "Ninguno" else "Comp"
+                            col_cmp_str = str(pat_comp_for_open) if pat_comp_for_open != "Ninguno" else "Comp"
                             bal_df_pat = self._extract_balance_preview(b_out, col_act_str, col_cmp_str)
 
                             # Cargar Estado de Resultados para empresa individual
@@ -1838,11 +2194,12 @@ class WordTemplateEngine:
                             gen_er = ERGenerator(template_er_p)
                             _, pl_df_pat = gen_er.generate(pl_df_wide_p, scale_factor=scale_factor, pl_df_comp=pl_df_comp_wide_p, periodo_actual_str=periodo_actual, periodo_comp_str=comp_period if comp_period != "Ninguno" else None)
 
-                        if comp_period != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
+                        if pat_comp_for_open != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_activa, pat_comp_for_open):
                             if bal_df_pat is not None:
                                 bal_df_pat = SnapshotVaultManager.apply_closed_comp_to_statement(
-                                    bal_df_pat, empresa_activa, "#BALANCE", periodo_actual, comp_period, scale_factor=scale_factor
+                                    bal_df_pat, empresa_activa, "#BALANCE", periodo_actual, pat_comp_for_open, scale_factor=scale_factor
                                 )
+                        if comp_period != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
                             if pl_df_pat is not None:
                                 pl_df_pat = SnapshotVaultManager.apply_closed_comp_to_statement(
                                     pl_df_pat, empresa_activa, "#ER", periodo_actual, comp_period, scale_factor=scale_factor
@@ -1920,7 +2277,15 @@ class WordTemplateEngine:
                     preview_df = self._extract_cf_preview(result_bytes, col_actual, col_comp)
                     
                 if preview_df is not None:
-                    if not was_loaded_from_snapshot and comp_period != "Ninguno" and base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI"] and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
+                    if was_loaded_from_snapshot and str(comp_period).strip().lower() in ["ninguno", "none", ""] and base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#EFE"]:
+                        import numpy as np
+                        preview_df = preview_df.copy()
+                        if len(preview_df.columns) >= 3:
+                            last_col = preview_df.columns[-1]
+                            preview_df[last_col] = np.nan
+                            if last_col != "Comp":
+                                preview_df = preview_df.rename(columns={last_col: "Comp"})
+                    elif not was_loaded_from_snapshot and comp_period != "Ninguno" and base_code_clean in ["#BALANCE", "#ESF", "#ER", "#ORI", "#EFE"] and SnapshotVaultManager.has_active_snapshot(empresa_activa, comp_period):
                         preview_df = SnapshotVaultManager.apply_closed_comp_to_statement(
                             preview_df, empresa_activa, base_code_clean, periodo_actual, comp_period, scale_factor=scale_factor
                         )
@@ -2010,51 +2375,35 @@ class WordTemplateEngine:
                                 pass
                     else:
                         # item_type == 'table': Actualización in-place respetando anchos y estilos nativos de Word
-                        # Si es #PATRIMONIO y la tabla Word previa no tenía el segundo bloque de encabezado, reconstruir estructura
+                        # Si es #PATRIMONIO y la tabla Word previa no tenía el segundo bloque de encabezado, reconstruir estructura (SOLO en modo con comparativo)
                         pat_needs_rebuild = False
-                        if base_code_clean == "#PATRIMONIO" and len(old_tbl.rows) >= 12:
-                            old_hdr_count = sum(
-                                1 for r in old_tbl.rows
-                                if not (r.cells[0].text or "").strip() and any("capital" in (c.text or "").lower() or "issued" in (c.text or "").lower() for c in r.cells[1:])
-                            )
-                            new_hdr_count = 1 + sum(
-                                1 for _, r_df in preview_df.iterrows()
-                                if not str(r_df.iloc[0] if pd.notna(r_df.iloc[0]) else "").strip() and any("capital" in str(v).lower() or "issued" in str(v).lower() for v in r_df.iloc[1:] if pd.notna(v))
-                            )
-                            has_old_sep_row = any(
-                                all(not (c.text or "").strip() for c in r.cells)
-                                for r in old_tbl.rows[1:]
-                            )
-                            if old_hdr_count < new_hdr_count or not has_old_sep_row:
-                                pat_needs_rebuild = True
+                        is_pat_no_comp = (not comp_period) or str(comp_period).strip().lower() in ["ninguno", "none", ""]
+                        old_pat_matrix_chk = [[c.text.strip() for c in r_o.cells] for r_o in old_tbl.rows]
+                        old_has_two_blocks = (_find_vertical_comp_block_start_texts(old_pat_matrix_chk) is not None)
+                        if base_code_clean == "#PATRIMONIO" and not is_pat_no_comp and not old_has_two_blocks:
+                            pat_needs_rebuild = True
                         if pat_needs_rebuild:
                             # Si se solicitó con comp_period == 'Ninguno', preservar los valores del bloque comparativo
-                            # que ya existían en la tabla Word anterior antes de reconstruirla con el segundo encabezado
+                            # que ya existían en la tabla Word anterior por POSICIÓN ESTRUCTURAL de bloque (2° bloque)
                             if str(comp_period).strip().lower() in ["ninguno", "none", ""]:
-                                act_yr_p = str(periodo_actual)[:4] if periodo_actual and len(str(periodo_actual)) >= 4 else "2026"
-                                old_comp_rows = []
-                                in_comp_sec = False
-                                for r_old in old_tbl.rows:
-                                    r_txt = " ".join(c.text for c in r_old.cells)
-                                    yrs_r = re.findall(r'20\d{2}', r_txt)
-                                    if yrs_r:
-                                        in_comp_sec = (yrs_r[0] != act_yr_p)
-                                    if in_comp_sec:
-                                        old_comp_rows.append([c.text.strip() for c in r_old.cells])
-                                if old_comp_rows:
-                                    comp_start_df = None
-                                    for idx_p, r_p in preview_df.iterrows():
-                                        c0_p = str(r_p.iloc[0]).lower()
-                                        if ("saldo" in c0_p or "balance" in c0_p) and act_yr_p not in c0_p and any(y in c0_p for y in ["2023", "2024", "2025", "1 de enero", "january 1"]):
-                                            comp_start_df = idx_p
-                                            break
-                                    if comp_start_df is not None:
-                                        for offset_c, old_vals in enumerate(old_comp_rows):
-                                            target_df_idx = comp_start_df + offset_c
-                                            if target_df_idx < len(preview_df):
-                                                for col_c in range(min(len(old_vals), len(preview_df.columns))):
-                                                    if old_vals[col_c] != "":
-                                                        preview_df.iloc[target_df_idx, col_c] = old_vals[col_c]
+                                old_tbl_matrix = [[c.text.strip() for c in r_old.cells] for r_old in old_tbl.rows]
+                                old_comp_start = _find_vertical_comp_block_start_texts(old_tbl_matrix)
+                                df_pat_matrix = [["" if pd.isna(v) else str(v).strip() for v in r_p] for _, r_p in preview_df.iterrows()]
+                                comp_start_df = _find_vertical_comp_block_start_texts(df_pat_matrix)
+                                if old_comp_start is not None and comp_start_df is not None:
+                                    # Si old_tbl no tenía fila separadora vacía al inicio del bloque 2 pero preview_df sí la tiene, alinear tras la fila separadora
+                                    if all(not t for t in df_pat_matrix[comp_start_df]) and any(t for t in old_tbl_matrix[old_comp_start]):
+                                        comp_start_df += 1
+                                    # Si preview_df tiene fila de segundo encabezado y old_tbl no la tenía, alinear en la primera fila de saldo inicial
+                                    if comp_start_df < len(df_pat_matrix) and not df_pat_matrix[comp_start_df][0] and old_tbl_matrix[old_comp_start][0]:
+                                        comp_start_df += 1
+                                    old_comp_rows = old_tbl_matrix[old_comp_start:]
+                                    for offset_c, old_vals in enumerate(old_comp_rows):
+                                        target_df_idx = comp_start_df + offset_c
+                                        if target_df_idx < len(preview_df):
+                                            for col_c in range(min(len(old_vals), len(preview_df.columns))):
+                                                if old_vals[col_c] != "":
+                                                    preview_df.iloc[target_df_idx, col_c] = old_vals[col_c]
                             unit_str = "M$" if scale_factor == 1000.0 else "Ch$"
                             while len(old_tbl.rows) > 1:
                                 old_tbl._tbl.remove(old_tbl.rows[-1]._tr)
@@ -2158,9 +2507,14 @@ class WordTemplateEngine:
                                             target_lang=target_lang
                                         )
                                         
-                                        # Evaluar las fórmulas antes de procesar para evitar NaNs en totales
-                                        from src.ui_pages.informes_y_notas import evaluate_formulas_in_workbook
-                                        excel_nota_out = evaluate_formulas_in_workbook(excel_nota_out)
+                                        # Evaluar las fórmulas y reconciliar redondeos (<= 4 M$) contra EEFF antes de procesar
+                                        _, excel_nota_out = RoundingReconciler.reconcile_and_evaluate_note_workbook(
+                                            excel_nota_out,
+                                            empresa=empresa_activa,
+                                            periodo_actual=periodo_actual,
+                                            scale_factor=scale_factor,
+                                            target_sheets=target_sheets,
+                                        )
                                         
                                         # Intentar extraer usando rangos nombrados
                                         from src.core.excel_utils import extract_named_ranges_from_excel
@@ -2255,10 +2609,8 @@ class WordTemplateEngine:
                                                 "transacciones significativas" in r.cells[0].text.lower()
                                                 for r in old_tbl.rows if len(r.cells) > 0
                                             )
-                                            from src.reporting.formatting import is_separator_row_series
-                                            df_has_sep_row = any(is_separator_row_series(r_s) for _, r_s in chunk_df.iterrows())
-                                            tbl_has_sep_row = any(all(not (c.text or "").strip() for c in r.cells) for r in old_tbl.rows[1:])
-                                            needs_rebuild = (len(old_tbl.columns) != len(chunk_df.columns)) or has_corrupted_rows or (df_has_sep_row and not tbl_has_sep_row)
+                                            is_note_no_comp = (not note_comp) or str(note_comp).strip().lower() in ["ninguno", "none", ""]
+                                            needs_rebuild = has_corrupted_rows or (not is_note_no_comp and len(old_tbl.columns) != len(chunk_df.columns))
                                             if needs_rebuild:
                                                 # Si se emitió con 'Ninguno' para preservar el comparativo pero la tabla cambió de formato/columnas,
                                                 # cargar el comparativo IFRS por defecto para que las nuevas columnas comparativas no queden vacías
