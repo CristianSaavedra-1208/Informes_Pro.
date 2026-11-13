@@ -479,6 +479,8 @@ def main():
         importlib.reload(aju_mod)
         import src.core.sabana_manager as sm_mod
         importlib.reload(sm_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
         import src.core.snapshot_vault_manager as svm_mod
         importlib.reload(svm_mod)
         import src.ui_pages.estados_financieros as pg_estados
@@ -498,6 +500,8 @@ def main():
         importlib.reload(ext_mgr)
         import src.core.sabana_manager as sm_mod
         importlib.reload(sm_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
         import src.core.snapshot_vault_manager as svm_mod
         importlib.reload(svm_mod)
         import src.ui_pages.informes_y_notas as pg_informes
@@ -515,6 +519,8 @@ def main():
         importlib.reload(erg_mod)
         import src.reporting.patrimonio_generator as pat_mod
         importlib.reload(pat_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
         import src.core.validation_tie_out as vto_mod
         importlib.reload(vto_mod)
         import src.ui_pages.validacion_saldos as pg_val
@@ -570,6 +576,8 @@ def main():
         importlib.reload(pat_mod)
         import src.core.sabana_manager as sm_mod
         importlib.reload(sm_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
         import src.core.snapshot_vault_manager as svm_mod
         importlib.reload(svm_mod)
         import src.ui_pages.reportes_consolidados as pg_reportes_cons
@@ -591,6 +599,8 @@ def main():
         importlib.reload(erg_mod)
         import src.core.sabana_manager as sm_mod
         importlib.reload(sm_mod)
+        import src.core.external_notes_manager as ext_mgr
+        importlib.reload(ext_mgr)
         import src.core.snapshot_vault_manager as svm_mod
         importlib.reload(svm_mod)
         import src.core.word_template_engine as wte_mod

@@ -5,8 +5,8 @@
   "comp_period_pl": "2025-06",
   "base_scale": 1000.0,
   "is_consolidated": true,
-  "fecha_cierre": "2026-11-10T20:48:13.188468",
-  "cerrado_por": "Nota26_AutoRefresh",
+  "fecha_cierre": "2026-11-12T20:31:08.530848",
+  "cerrado_por": "Sincronizador Automático",
   "statements_count": 6,
   "notes_count": 23,
   "statements": [
@@ -42,6 +42,6 @@
     "#N26",
     "#N27"
   ],
-  "checksum": "850cde1a372a5b1dc1fd03bd27d92d6752218f5a22b97854d160d226aea85db8",
+  "checksum": "db3998d433e9c5b416e980dfa26e567306533f44f2026d70f545ed118e82cf07",
   "is_active": true
 }

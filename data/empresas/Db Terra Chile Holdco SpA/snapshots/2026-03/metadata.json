@@ -5,8 +5,8 @@
   "comp_period_pl": "2025-03",
   "base_scale": 1000.0,
   "is_consolidated": false,
-  "fecha_cierre": "2026-11-11T19:26:49.584226",
-  "cerrado_por": "Sistema (Fix IC ER)",
+  "fecha_cierre": "2026-11-12T20:32:24.077120",
+  "cerrado_por": "Sincronizador Automático",
   "statements_count": 6,
   "notes_count": 22,
   "statements": [
@@ -41,6 +41,6 @@
     "#N25",
     "#N27"
   ],
-  "checksum": "a74ea7b4cf9de908913f266a583270ae0ece880d5d414105efcc75cae84542be",
+  "checksum": "776de9776d1333db51797997ef49cace079793802e70f81e5ce56ff915a55ec7",
   "is_active": true
 }

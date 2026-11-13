@@ -5,8 +5,8 @@
   "comp_period_pl": "2025-05",
   "base_scale": 1000.0,
   "is_consolidated": false,
-  "fecha_cierre": "2026-11-05T12:35:55.390034",
-  "cerrado_por": "Administrador",
+  "fecha_cierre": "2026-11-12T20:30:18.562164",
+  "cerrado_por": "Sincronizador Automático",
   "statements_count": 6,
   "notes_count": 22,
   "statements": [
@@ -41,6 +41,6 @@
     "#N25",
     "#N27"
   ],
-  "checksum": "e5b3250b3138e25ba629cb38f333dd8ba277b631a9b776eb8eba8c81b32dfa2a",
+  "checksum": "ade8350db2a548000f44f4ef91ba821a5784307d607b313695f2911add50a311",
   "is_active": true
 }
