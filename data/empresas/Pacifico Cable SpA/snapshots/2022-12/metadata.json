@@ -1,0 +1,22 @@
+{
+  "empresa": "Pacifico Cable SpA",
+  "periodo": "2022-12",
+  "comp_period_bal": "2021-12",
+  "comp_period_pl": "2021-12",
+  "base_scale": 1000.0,
+  "is_consolidated": false,
+  "fecha_cierre": "2026-11-19T08:50:16.674917",
+  "cerrado_por": "PDF Auditado Import",
+  "statements_count": 5,
+  "notes_count": 0,
+  "statements": [
+    "#BALANCE",
+    "#ER",
+    "#ORI",
+    "#PATRIMONIO",
+    "#EFE"
+  ],
+  "notes": [],
+  "is_active": true,
+  "checksum": "6e69f151e681e635832237fe44de659a74951f181efe0ee5d0734cef17495560"
+}

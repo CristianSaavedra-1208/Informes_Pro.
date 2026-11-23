@@ -25,6 +25,42 @@ def get_patrimonio_balances_from_db(empresa, periodo):
         # Retornar saldos fijos hardcodeados en miles
         return 503344994.549, -67404679.0, 178919911.0
 
+    # Prioridad 1: Si el período tiene un Snapshot activo certificado en Bóveda, extraer los saldos directamente de él
+    try:
+        from src.core.snapshot_vault_manager import SnapshotVaultManager
+        if SnapshotVaultManager.has_active_snapshot(empresa, periodo):
+            snap_bal_res = SnapshotVaultManager.get_statement(
+                empresa, periodo, "#BALANCE", comp_period="Ninguno", scale_factor=1000.0
+            )
+            if snap_bal_res and snap_bal_res[0] is not None and not snap_bal_res[0].empty:
+                df_sb = snap_bal_res[0]
+                lbl_c = df_sb.columns[0]
+                val_cols = [c for c in df_sb.columns[1:] if str(c).strip().lower() not in ("nota", "notas")]
+                if val_cols:
+                    vc = val_cols[0]
+                    c_snap = 0.0
+                    g_snap = 0.0
+                    r_snap = 0.0
+                    hit_snap = False
+                    for _, r_sb in df_sb.iterrows():
+                        li_s = str(r_sb.get(lbl_c, "")).strip().lower()
+                        li_s_plain = li_s.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+                        v_s = parse_numeric_value(r_sb.get(vc))
+                        if li_s_plain == "capital emitido":
+                            c_snap = v_s
+                            hit_snap = True
+                        elif li_s_plain == "otras reservas":
+                            r_snap = v_s
+                            hit_snap = True
+                        elif li_s_plain in ("resultados acumulados", "ganancias acumuladas", "ganancias (perdidas) acumuladas"):
+                            if v_s != 0.0 or g_snap == 0.0:
+                                g_snap = v_s
+                            hit_snap = True
+                    if hit_snap and (c_snap != 0.0 or g_snap != 0.0 or r_snap != 0.0):
+                        return float(c_snap), float(g_snap), float(r_snap)
+    except Exception:
+        pass
+
     from src.models.database import SessionLocal
     db_session = SessionLocal()
     try:

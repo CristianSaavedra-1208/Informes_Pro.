@@ -9,11 +9,9 @@ def _cached_read_excel(path, mtime, engine=None, **kwargs):
         return pd.read_excel(path, engine=engine, **kwargs)
     return pd.read_excel(path, **kwargs)
 
-def read_excel_cached(path, engine=None, **kwargs):
-    if os.path.exists(path):
-        mtime = os.path.getmtime(path)
-    else:
-        mtime = 0
+def read_excel_cached(path, engine=None, mtime=None, **kwargs):
+    if mtime is None:
+        mtime = os.path.getmtime(path) if os.path.exists(path) else 0
     return _cached_read_excel(path, mtime, engine=engine, **kwargs)
 
 

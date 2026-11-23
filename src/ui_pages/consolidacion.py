@@ -7,6 +7,7 @@ from src.core.consolidacion_account_mapper import (
     get_consolidation_accounts_list,
     get_account_info,
     find_account_by_rubro_nota,
+    resolve_je_account_and_nota,
     load_consolidation_account_map,
     normalize_text
 )
@@ -414,16 +415,22 @@ def render(empresa_seleccionada, empresa_path):
                     st.session_state["asiento_msg_success"] = None
                     return
 
-                st.session_state['temp_asiento_lineas'] = [
-                    {
-                        "cuenta_codigo": getattr(l, 'cuenta_codigo', None),
+                resolved_edit_lines = []
+                for l in lines:
+                    c_cod, l_nota = resolve_je_account_and_nota(
+                        l.linea_item,
+                        cuenta_codigo=getattr(l, 'cuenta_codigo', None),
+                        linea_nota=getattr(l, 'linea_nota', None),
+                    )
+                    resolved_edit_lines.append({
+                        "cuenta_codigo": c_cod,
                         "linea_item": l.linea_item,
-                        "linea_nota": getattr(l, 'linea_nota', None),
+                        "linea_nota": l_nota,
                         "debe": float(l.debe or 0.0),
                         "haber": float(l.haber or 0.0),
                         "elimina_saldo_total": bool(l.elimina_saldo_total)
-                    } for l in lines
-                ]
+                    })
+                st.session_state['temp_asiento_lineas'] = resolved_edit_lines
                 st.session_state['asiento_glosa'] = glosa
                 st.session_state['asiento_col_ajuste'] = columna
                 st.session_state['per_asiento'] = periodo
@@ -435,7 +442,7 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_msg_error'] = None
                 
                 # Advertencia para líneas históricas sin cuenta_codigo
-                sin_cuenta = [l.linea_item for l in lines if not getattr(l, 'cuenta_codigo', None)]
+                sin_cuenta = [x["linea_item"] for x in resolved_edit_lines if not x.get("cuenta_codigo")]
                 if sin_cuenta:
                     st.session_state['asiento_msg_warning'] = f"⚠️ Este comprobante contiene {len(sin_cuenta)} línea(s) histórica(s) sin cuenta contable 9999xxx asignada. Al editarlo o agregar líneas, puedes reasignarles su cuenta contable correspondiente."
                 else:
@@ -444,16 +451,22 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['asiento_draft_version'] = st.session_state.get('asiento_draft_version', 0) + 1
 
             def cb_copiar_asiento(periodo, columna, glosa, es_rec, lines):
-                st.session_state['temp_asiento_lineas'] = [
-                    {
-                        "cuenta_codigo": getattr(l, 'cuenta_codigo', None),
+                resolved_copy_lines = []
+                for l in lines:
+                    c_cod, l_nota = resolve_je_account_and_nota(
+                        l.linea_item,
+                        cuenta_codigo=getattr(l, 'cuenta_codigo', None),
+                        linea_nota=getattr(l, 'linea_nota', None),
+                    )
+                    resolved_copy_lines.append({
+                        "cuenta_codigo": c_cod,
                         "linea_item": l.linea_item,
-                        "linea_nota": getattr(l, 'linea_nota', None),
+                        "linea_nota": l_nota,
                         "debe": float(l.debe or 0.0),
                         "haber": float(l.haber or 0.0),
                         "elimina_saldo_total": bool(l.elimina_saldo_total)
-                    } for l in lines
-                ]
+                    })
+                st.session_state['temp_asiento_lineas'] = resolved_copy_lines
                 st.session_state['asiento_glosa'] = f"Copia de {glosa}"
                 st.session_state['asiento_col_ajuste'] = columna
                 st.session_state['asiento_es_rec'] = bool(es_rec)
@@ -462,7 +475,7 @@ def render(empresa_seleccionada, empresa_path):
                 st.session_state['edit_msg_success'] = f"📋 **Estructura copiada**: Desplázate hacia arriba 👆 al formulario superior ('Nuevo Asiento Contable') para cambiar el período/montos y guardar."
                 st.session_state['asiento_msg_error'] = None
                 
-                sin_cuenta = [l.linea_item for l in lines if not getattr(l, 'cuenta_codigo', None)]
+                sin_cuenta = [x["linea_item"] for x in resolved_copy_lines if not x.get("cuenta_codigo")]
                 if sin_cuenta:
                     st.session_state['asiento_msg_warning'] = f"⚠️ La estructura copiada contiene {len(sin_cuenta)} línea(s) sin código 9999xxx asignado."
                 else:
@@ -517,12 +530,9 @@ def render(empresa_seleccionada, empresa_path):
                 if st.session_state.get("asiento_msg_success"):
                     st.success(st.session_state["asiento_msg_success"])
 
-                # Obtener periodos disponibles en históricos
-                db = SessionLocal()
-                per_recs = db.query(HistoricalDataRecord.periodo).distinct().all()
-                db.close()
-                periodos_hist = sorted([r[0] for r in per_recs], reverse=True)
-                if not periodos_hist: periodos_hist = ["2026-12", "2026-11", "2026-10", "2026-09", "2026-08", "2026-07", "2026-06", "2026-05", "2026-04", "2026-03", "2026-02", "2026-01", "2025-12"]
+                # Obtener todos los periodos disponibles (históricos, snapshots cerrados, balances abiertos y asientos)
+                from src.core.consolidacion_engine import get_available_consolidation_periods
+                periodos_hist = get_available_consolidation_periods(grupo_id=sel_grupo)
                 
                 # Asegurar que el periodo que estamos editando esté en las opciones
                 if edit_key and edit_key[0] not in periodos_hist:
@@ -1126,14 +1136,22 @@ def render(empresa_seleccionada, empresa_path):
                                     
                                     st.write(f"**Previsualización de Líneas del Comprobante `{codigo_actual}`:**")
                                     from src.core.consolidacion_engine import resolver_montos_asiento
+                                    _prev_meta = [
+                                        resolve_je_account_and_nota(
+                                            l.linea_item,
+                                            cuenta_codigo=getattr(l, 'cuenta_codigo', None),
+                                            linea_nota=getattr(l, 'linea_nota', None),
+                                        )
+                                        for l in lineas_comp
+                                    ]
                                     try:
                                         resolved_preview = resolver_montos_asiento(sel_grupo, chosen.periodo, lineas_comp, columna_destino=chosen.columna_ajuste)
                                         df_preview = pd.DataFrame([{
                                             "Línea #": getattr(l, 'num_linea', i + 1),
-                                            "N° Cuenta": getattr(l, 'cuenta_codigo', None) or "— (Histórico)",
+                                            "N° Cuenta": _prev_meta[i][0] or "— (Histórico)",
                                             "Código Folio": getattr(l, 'asiento_codigo', 'N/A') or "N/A",
                                             "Rubro": l.linea_item,
-                                            "Nota Afectada": getattr(l, 'linea_nota', None) or "Sin Detalle",
+                                            "Nota Afectada": _prev_meta[i][1] or "Sin Detalle",
                                             "Saldo Base": f"{int(round(resolved_preview[i]['saldo_base'])):,}".replace(",", "."),
                                             "Debe (Ajuste Real)": f"{int(round(resolved_preview[i]['debe_calculado'])):,}".replace(",", "."),
                                             "Haber (Ajuste Real)": f"{int(round(resolved_preview[i]['haber_calculado'])):,}".replace(",", "."),
@@ -1142,10 +1160,10 @@ def render(empresa_seleccionada, empresa_path):
                                     except Exception as e:
                                         df_preview = pd.DataFrame([{
                                             "Línea #": getattr(a, 'num_linea', i + 1),
-                                            "N° Cuenta": getattr(a, 'cuenta_codigo', None) or "— (Histórico)",
+                                            "N° Cuenta": _prev_meta[i][0] or "— (Histórico)",
                                             "Código Folio": getattr(a, 'asiento_codigo', 'N/A') or "N/A",
                                             "Rubro": a.linea_item,
-                                            "Nota Afectada": getattr(a, 'linea_nota', None) or "Sin Detalle",
+                                            "Nota Afectada": _prev_meta[i][1] or "Sin Detalle",
                                             "Saldo Base": "0",
                                             "Debe (Ajuste Real)": f"{int(round(a.debe or 0.0)):,}".replace(",", "."),
                                             "Haber (Ajuste Real)": f"{int(round(a.haber or 0.0)):,}".replace(",", "."),
@@ -1247,11 +1265,8 @@ def render(empresa_seleccionada, empresa_path):
             col_gc, col_pc = st.columns(2)
             sel_g_c = col_gc.selectbox("Seleccionar Grupo a Conciliar", options=list(grupo_dict_c.keys()), format_func=lambda x: grupo_dict_c[x], key="sel_g_c")
             
-            db = SessionLocal()
-            per_recs_c = db.query(HistoricalDataRecord.periodo).distinct().all()
-            db.close()
-            periodos_hist_c = sorted([r[0] for r in per_recs_c], reverse=True)
-            if not periodos_hist_c: periodos_hist_c = ["2026-12", "2025-12"]
+            from src.core.consolidacion_engine import get_available_consolidation_periods
+            periodos_hist_c = get_available_consolidation_periods(grupo_id=sel_g_c)
             
             periodo_concil = col_pc.selectbox("Periodo a Conciliar", periodos_hist_c, key="per_concil", format_func=format_periodo)
             
@@ -1459,11 +1474,8 @@ def render(empresa_seleccionada, empresa_path):
             col_g, col_p2 = st.columns(2)
             sel_g2 = col_g.selectbox("Seleccionar Grupo a Consolidar", options=list(grupo_dict2.keys()), format_func=lambda x: grupo_dict2[x], key="sel_g2")
             
-            db = SessionLocal()
-            per_recs2 = db.query(HistoricalDataRecord.periodo).distinct().all()
-            db.close()
-            periodos_hist2 = sorted([r[0] for r in per_recs2], reverse=True)
-            if not periodos_hist2: periodos_hist2 = ["2026-12", "2025-12"]
+            from src.core.consolidacion_engine import get_available_consolidation_periods
+            periodos_hist2 = get_available_consolidation_periods(grupo_id=sel_g2)
             
             periodo_cons = col_p2.selectbox("Periodo a Consolidar", periodos_hist2, key="per_cons", format_func=format_periodo)
             

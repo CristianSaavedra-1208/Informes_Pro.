@@ -312,6 +312,96 @@ def _extract_positional_table_rows(source_ws, start_r, label_col=1):
             rows.append(r)
     return rows
 
+def _extract_comp_table_col_headers(ws_obj, start_r: int, label_col: int, max_col: int) -> dict:
+    import unicodedata
+    hdr_end = min(start_r + 4, ws_obj.max_row)
+    for r_m in range(start_r + 1, min(start_r + 6, ws_obj.max_row + 1)):
+        has_ms = any(
+            isinstance(ws_obj.cell(r_m, c_m).value, str)
+            and ws_obj.cell(r_m, c_m).value.strip().lower() in ("m$", "ms", "thch$")
+            for c_m in range(label_col + 1, min(max_col + 1, ws_obj.max_column + 1))
+        )
+        if has_ms:
+            hdr_end = r_m
+            break
+
+    col_hdrs = {}
+    for c in range(label_col + 1, min(max_col + 1, ws_obj.max_column + 1)):
+        parts = []
+        for r in range(start_r + 1, hdr_end + 1):
+            v = ws_obj.cell(r, c).value
+            if v is None or isinstance(v, (int, float, bool)):
+                continue
+            s = str(v).strip()
+            if not s or s.startswith("="):
+                continue
+            s_norm = "".join(ch for ch in unicodedata.normalize("NFKD", s.lower()) if not unicodedata.combining(ch))
+            s_norm = re.sub(r"\s+", " ", s_norm).strip()
+            if s_norm in ("m$", "ms", "thch$", "pagos"):
+                continue
+            if re.match(r"^20\d{2}$", s_norm):
+                continue
+            s_norm = re.sub(r"\s+al\s+\d{1,2}[\./\-]\d{1,2}[\./\-]20\d{2}.*$", "", s_norm).strip().rstrip(":.")
+            if s_norm:
+                parts.append(s_norm)
+        col_hdrs[c] = " ".join(parts).strip()
+    return col_hdrs
+
+
+def _build_comp_column_mapping(target_ws, target_r0: int, target_c0: int, max_target_col: int, src_ws, src_r0: int, src_c0: int) -> dict:
+    max_src_col = src_c0
+    for r_sc in range(src_r0, min(src_r0 + 9, src_ws.max_row + 1)):
+        for c_sc in range(src_c0 + 1, min(src_c0 + 16, src_ws.max_column + 1)):
+            if src_ws.cell(r_sc, c_sc).value is not None and c_sc > max_src_col:
+                max_src_col = c_sc
+
+    col_offset = src_c0 - target_c0
+    tgt_cols = list(range(target_c0 + 1, max_target_col + 1))
+    if not tgt_cols or max_src_col <= src_c0:
+        return {c_t: c_t + col_offset for c_t in tgt_cols}
+
+    tgt_hdrs = _extract_comp_table_col_headers(target_ws, target_r0, target_c0, max_target_col)
+    src_hdrs = _extract_comp_table_col_headers(src_ws, src_r0, src_c0, max_src_col)
+
+    nonempty_tgt = [h for h in tgt_hdrs.values() if h]
+    nonempty_src = [h for h in src_hdrs.values() if h]
+    if len(nonempty_tgt) < 2 or len(nonempty_src) < 2:
+        return {c_t: c_t + col_offset for c_t in tgt_cols}
+
+    if (max_target_col - target_c0) == (max_src_col - src_c0):
+        if all((not tgt_hdrs.get(c_t)) or tgt_hdrs.get(c_t) == src_hdrs.get(c_t + col_offset) for c_t in tgt_cols):
+            return {c_t: c_t + col_offset for c_t in tgt_cols}
+
+    mapping = {}
+    used_src = set()
+    src_cols = list(range(src_c0 + 1, max_src_col + 1))
+
+    for c_t in tgt_cols:
+        h_t = tgt_hdrs.get(c_t, "")
+        if not h_t:
+            cand_pos = c_t + col_offset
+            mapping[c_t] = cand_pos if (cand_pos in src_cols and cand_pos not in used_src) else None
+            if mapping[c_t] is not None:
+                used_src.add(mapping[c_t])
+            continue
+        exact_cands = [c_s for c_s in src_cols if c_s not in used_src and src_hdrs.get(c_s, "") == h_t]
+        if not exact_cands:
+            base_t = re.sub(r"\s*\(\d+\)\s*$", "", h_t).strip()
+            if base_t:
+                exact_cands = [
+                    c_s for c_s in src_cols
+                    if c_s not in used_src and re.sub(r"\s*\(\d+\)\s*$", "", src_hdrs.get(c_s, "")).strip() == base_t
+                ]
+        if exact_cands:
+            best_s = min(exact_cands, key=lambda cs: abs((cs - src_c0) - (c_t - target_c0)))
+            mapping[c_t] = best_s
+            used_src.add(best_s)
+        else:
+            mapping[c_t] = None
+
+    return mapping
+
+
 def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_comp_str="2025-Dic", ext_cmp_ws=None, ext_act_ws=None):
     is_no_comp = not periodo_comp_str or str(periodo_comp_str).strip() in ["None", "Ninguno", ""]
 
@@ -424,6 +514,13 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                     if c_scan > max_table_col:
                         max_table_col = c_scan
 
+        act_col_map = None
+        if not is_pos_table and ext_act_ws is not None and ext_act_r0 is not None:
+            act_col_map = _build_comp_column_mapping(ws, start_row, comp_c, max_table_col, ext_act_ws, ext_act_r0, ext_act_c0)
+        cmp_col_map = None
+        if not is_pos_table and ext_cmp_ws is not None and ext_cmp_r0 is not None:
+            cmp_col_map = _build_comp_column_mapping(ws, start_row, comp_c, max_table_col, ext_cmp_ws, ext_cmp_r0, ext_cmp_c0)
+
         # 1. Actualizar fechas e inyectar ext_act_ws en Bloque 1 (Actual)
         pos_data_idx_act = 0
         for r_orig in range(start_row, end_row + 1):
@@ -479,8 +576,8 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                     target_c = ws.cell(r_orig, c_data)
                     if isinstance(target_c.value, str) and target_c.value.startswith('='):
                         continue
-                    c_ext = c_data + act_col_offset
-                    v_ext = ext_act_ws.cell(ext_r, c_ext).value if (1 <= c_ext <= ext_act_ws.max_column) else None
+                    c_ext = act_col_map.get(c_data) if act_col_map is not None else (c_data + act_col_offset)
+                    v_ext = ext_act_ws.cell(ext_r, c_ext).value if (c_ext is not None and 1 <= c_ext <= ext_act_ws.max_column) else None
                     if v_ext is None or str(v_ext).strip() in ['', '-', '-   ']:
                         target_c.value = 0
                     elif isinstance(v_ext, (int, float)):
@@ -568,8 +665,8 @@ def process_comparative_tables_in_ws(ws, periodo_actual_str="2026-Ago", periodo_
                     target_cell.value = re.sub(r'([A-Za-z]+)\d+', rf'\g<1>{target_r}', val_o)
                 elif c >= comp_c + 1 and concept_k and concept_k in cmp_concept_map and ext_cmp_ws is not None:
                     ext_r = cmp_concept_map[concept_k]
-                    c_ext = c + cmp_col_offset
-                    if 1 <= c_ext <= ext_cmp_ws.max_column:
+                    c_ext = cmp_col_map.get(c) if cmp_col_map is not None else (c + cmp_col_offset)
+                    if c_ext is not None and 1 <= c_ext <= ext_cmp_ws.max_column:
                         val_ext = ext_cmp_ws.cell(ext_r, c_ext).value
                         if val_ext is None or str(val_ext).strip() in ['', '-', '-   ']:
                             target_cell.value = 0
@@ -704,6 +801,45 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
                     return _sum_rubro(rubro_data, flow_key)
         return 0.0
 
+    sheet_title_low = str(ws.title).strip().lower()
+    if (
+        sheet_title_low == 'pasivos financieros'
+        and filter_sign is None
+        and match_type in ('nota1', 'nota2')
+    ):
+        g1 = period_ctx.get('nota1', {}).get(matched_key) or {}
+        g2 = period_ctx.get('nota2', {}).get(matched_key) or {}
+        d1 = g1.get('acct_details', []) if isinstance(g1, dict) else []
+        d2 = g2.get('acct_details', []) if isinstance(g2, dict) else []
+        pf_details = [
+            d for d in (list(d1) + list(d2))
+            if 'pasivos financieros' in str(d.get('clasificacion_bal', '')).lower()
+            and 'derechos de uso' not in str(d.get('clasificacion_bal', '')).lower()
+        ]
+        if pf_details:
+            status = detect_row_corriente_status(ws, row, col=col)
+            seen_pf = set()
+            pf_sum = 0.0
+            for detail in pf_details:
+                val = float(detail.get(flow_key, 0.0) or 0.0)
+                dedup_k = (
+                    str(detail.get('cuenta_id', '')).strip(),
+                    str(detail.get('nombre', '')).strip(),
+                    round(abs(val), 2),
+                )
+                if dedup_k in seen_pf:
+                    continue
+                seen_pf.add(dedup_k)
+                if status != "unknown":
+                    clasif = str(detail.get('clasificacion_bal', '')).lower()
+                    is_nc = any(nc_kw in clasif for nc_kw in ["no corriente", "no-corriente", "largo plazo"])
+                    if status == "no_corriente" and not is_nc:
+                        continue
+                    elif status == "corriente" and is_nc:
+                        continue
+                pf_sum += val
+            return pf_sum
+
     group_data = period_ctx.get(match_type, {}).get(matched_key)
     if not group_data and filter_sign:
         other_type = 'nota2' if match_type == 'nota1' else ('nota1' if match_type == 'nota2' else None)
@@ -728,7 +864,6 @@ def get_filtered_value(period_ctx, matched_key, match_type, flow_key, row, ws, s
         if filter_sign == 'depr' and val > 0:
             continue
 
-        sheet_title_low = str(ws.title).strip().lower()
         if sheet_title_low in ['intangibles', 'intangible']:
             clasif_lbl = str(detail.get('clasificacion_bal', '')).lower()
             if clasif_lbl and 'intangib' not in clasif_lbl:
@@ -959,9 +1094,13 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
             pl_df = None
             
         merged_pl = build_pl_sabana(None, map_pl_df, tb_df)
+        map_pl_cuenta_col = next((c for c in map_pl_df.columns if c.strip() in [mc.strip() for mc in mapping_cols]), map_pl_df.columns[0])
+        if tb_cuenta_col in merged_pl.columns and map_pl_cuenta_col in merged_pl.columns and tb_cuenta_col != map_pl_cuenta_col:
+            merged_pl[tb_cuenta_col] = merged_pl[tb_cuenta_col].fillna(merged_pl[map_pl_cuenta_col])
         if tb_df is not None and not tb_df.empty:
             tb_acct_set = set(tb_df[tb_cuenta_col].astype(str).str.strip())
-            map_pl_cuenta_col = next((c for c in map_pl_df.columns if c.strip() in [mc.strip() for mc in mapping_cols]), None)
+            if pl_df is not None and not pl_df.empty:
+                tb_acct_set |= set(pl_df[pl_df.columns[0]].astype(str).str.strip())
             acct_col_in_merged = tb_cuenta_col if tb_cuenta_col in merged_pl.columns else map_pl_cuenta_col
             if acct_col_in_merged and acct_col_in_merged in merged_pl.columns:
                 merged_pl = merged_pl[merged_pl[acct_col_in_merged].astype(str).str.strip().isin(tb_acct_set)]
@@ -1032,11 +1171,16 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
                 if clean_col not in pl_mappings:
                     pl_mappings[clean_col] = {}
                 
+                visited_col_cubo_accs = set()
                 grouped = merged_pl.groupby(col)
                 for name, gp in grouped:
                     k_str = str(name).strip()
                     if k_str and k_str.lower() != 'nan':
                         ck = clean_label(k_str)
+                        if clean_col == 'otros ingresos por funcion' and ck == 'otros ingresos':
+                            ck = 'otros'
+                        elif clean_col == 'otros egresos por funcion' and ck == 'otros egresos':
+                            ck = 'otros'
                         accts = gp[tb_cuenta_col].tolist()
                         acct_names = gp[tb_nombre_col].tolist() if tb_nombre_col else []
                         
@@ -1053,7 +1197,7 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
                                 debit_abs += bal
                         
                         if credit_abs == 0.0 and debit_abs == 0.0:
-                            factor = -1 if ('ingreso' in clean_col or any(a.startswith('2') or a.startswith('3101') for a in accts)) else determine_factor_for_accounts(accts)
+                            factor = -1 if 'ingreso' in clean_col else determine_factor_for_accounts(accts)
                         else:
                             factor = -1 if credit_abs >= debit_abs else 1
                         
@@ -1087,6 +1231,7 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
                                     sum_val += cubo_val * factor
                                     sum_ini += cubo_val * factor
                                     visited_cubo_accs.add(acc_id)
+                                    visited_col_cubo_accs.add(acc_id)
                                 use_cubo = True
                                     
                             if not use_cubo:
@@ -1101,6 +1246,51 @@ def build_entity_context(tb_df, map_balance_df, map_pl_df=None, empresa_name=Non
                         pl_mappings[clean_col][ck]['creditos'] += sum_cred
                         pl_mappings[clean_col][ck]['accts'].extend(accts)
                         pl_mappings[clean_col][ck]['acct_names'].extend(acct_names)
+
+                # Respaldo automático: cualquier cuenta con saldo en Cubo P&L cuyo sub-ítem en map_pl esté vacío (NaN)
+                if has_pl_cubo and cubo_col_dict:
+                    pl_name_lookup = {}
+                    if pl_df is not None and pl_nombre_col and pl_nombre_col in pl_df.columns:
+                        for _, rp in pl_df.iterrows():
+                            pl_name_lookup[str(rp[pl_df.columns[0]]).strip()] = str(rp.get(pl_nombre_col, '') or '')
+                    fb_factor = -1 if ('ingreso' in clean_col) else 1
+                    for acc_id_u, c_val_u in cubo_col_dict.items():
+                        if acc_id_u in visited_col_cubo_accs or abs(float(c_val_u or 0.0)) <= 0.001:
+                            continue
+                        nm_u = pl_name_lookup.get(acc_id_u, '')
+                        nm_low = clean_label(nm_u)
+                        if clean_col == 'depreciacion operacional':
+                            fb_ck = 'amortizacion por derechos de uso' if ('derecho de uso' in nm_low or acc_id_u.startswith(('310583', '310584'))) else 'depreciacion activos fijos de operacion'
+                        elif clean_col == 'ingresos de actividades ordinarias':
+                            fb_ck = 'ingresos por servicios ic' if ('intercomp' in nm_low or nm_low.endswith(' ic') or ' ic ' in nm_low) else 'otros ingresos de explotacion'
+                        elif clean_col == 'costo de ventas':
+                            fb_ck = 'costos venta de materiales ic' if ('intercomp' in nm_low or nm_low.endswith(' ic') or ' ic ' in nm_low) else 'otros costos por servicios'
+                        elif clean_col == 'gastos de administracion':
+                            fb_ck = 'gastos de servicios intercompania' if ('intercomp' in nm_low or nm_low.endswith(' ic')) else 'otros gastos generales'
+                        elif clean_col == 'depreciacion y amortizaciones':
+                            fb_ck = 'amortizacion de intangibles' if 'intang' in nm_low else 'depreciacion del ejercicio'
+                        elif clean_col in ('otros ingresos por funcion', 'otros egresos por funcion', 'resultados por unidades de reajuste'):
+                            fb_ck = 'otros'
+                        elif clean_col == 'diferencias de cambio':
+                            fb_ck = 'derivados de cobertura' if any(w in nm_low for w in ('forward', 'derivad', 'cobertura')) else 'otros activos financieros'
+                        elif clean_col in ('ingresos financieros', 'ingresos financieros ic'):
+                            fb_ck = 'intereses con empresas relacionadas' if ('intercomp' in nm_low or 'relacionad' in nm_low) else 'ganancia sobre inversiones en instrumentos financieros'
+                        elif clean_col == 'costos financieros':
+                            fb_ck = 'intereses prestamos empresas relacionadas' if ('intercomp' in nm_low or 'relacionad' in nm_low) else 'otros costos financieros'
+                        elif clean_col == 'resultado por impuestos a las ganancias':
+                            fb_ck = 'gasto por impuestos diferidos'
+                        else:
+                            fb_ck = 'otros'
+                        if fb_ck not in pl_mappings[clean_col]:
+                            pl_mappings[clean_col][fb_ck] = {
+                                'val': 0.0, 'inicial': 0.0, 'debitos': 0.0, 'creditos': 0.0,
+                                'accts': [], 'acct_names': []
+                            }
+                        adj_v = float(c_val_u) * fb_factor
+                        pl_mappings[clean_col][fb_ck]['val'] += adj_v
+                        pl_mappings[clean_col][fb_ck]['inicial'] += adj_v
+                        pl_mappings[clean_col][fb_ck]['accts'].append(acc_id_u)
+                        pl_mappings[clean_col][fb_ck]['acct_names'].append(nm_u)
 
     # Limpiar y agregar etiquetas duplicadas después de normalizar espacios
     sums_nota1_clean = {}
@@ -2108,6 +2298,8 @@ class NoteGenerator:
             elif len(years_found) == 1:
                 template_year_to_period_type[years_found[0]] = 'actual'
 
+            single_date_row_period_type = {}
+
             def detect_block_year(ws_obj, current_row, col_idx):
                 for r_b in range(current_row - 1, 0, -1):
                     is_boundary_b = False
@@ -2140,6 +2332,54 @@ class NoteGenerator:
                         match_b = re.search(r'\b(202\d|199\d)\b', val_str_b)
                         if match_b:
                             return int(match_b.group(1))
+                    if is_boundary_b:
+                        break
+                return None
+
+            def detect_block_period(ws_obj, current_row, col_idx):
+                for r_b in range(current_row - 1, 0, -1):
+                    if r_b in single_date_row_period_type:
+                        return single_date_row_period_type[r_b]
+                    is_boundary_b = False
+                    for c_lbl in range(1, min(5, ws_obj.max_column + 1)):
+                        cell_lbl = ws_obj.cell(row=r_b, column=c_lbl).value
+                        if cell_lbl is not None:
+                            cell_lbl_clean = clean_label(cell_lbl)
+                            if (
+                                ("total" in cell_lbl_clean and "sub" not in cell_lbl_clean)
+                                or "transaccion" in cell_lbl_clean
+                                or "las principales" in cell_lbl_clean
+                                or "la composicion" in cell_lbl_clean
+                                or "saldo final" in cell_lbl_clean
+                                or "valores netos al final" in cell_lbl_clean
+                            ):
+                                is_boundary_b = True
+                                break
+
+                    val_found = None
+                    for c_b in [col_idx, col_idx + 1, col_idx - 1]:
+                        if 1 <= c_b <= ws_obj.max_column:
+                            val_b = get_merged_cell_value(ws_obj, r_b, c_b)
+                            if val_b is not None:
+                                if isinstance(val_b, (_dt.datetime, _dt.date)):
+                                    val_found = val_b
+                                    break
+                                val_str_b = str(val_b).strip()
+                                match_b = re.search(r'\b(202\d|199\d)\b', val_str_b)
+                                if match_b:
+                                    val_found = val_b
+                                    break
+
+                    if val_found is not None:
+                        yr_b = None
+                        if isinstance(val_found, (datetime.datetime, datetime.date)):
+                            yr_b = val_found.year
+                        else:
+                            match_b = re.search(r'\b(202\d|199\d)\b', str(val_found).strip())
+                            if match_b:
+                                yr_b = int(match_b.group(1))
+                        if yr_b is not None and yr_b in template_year_to_period_type:
+                            return template_year_to_period_type[yr_b]
                     if is_boundary_b:
                         break
                 return None
@@ -2228,6 +2468,18 @@ class NoteGenerator:
                         if v_low in ["fecha  comparativa", "fecha comparativa", "fecha_comparativa", "comparativa", "comparativo"]:
                             target_dot = _comp_dot
                             is_comp_cell = True
+                        else:
+                            m_yr_s = re.search(r'\b(202\d)\b', val)
+                            if m_yr_s and template_year_to_period_type.get(int(m_yr_s.group(1))) == 'comp':
+                                target_dot = _comp_dot
+                                is_comp_cell = True
+                    non_empty_in_row = sum(
+                        1 for c_ne in range(1, ws.max_column + 1)
+                        if ws.cell(row=r, column=c_ne).value is not None
+                        and str(ws.cell(row=r, column=c_ne).value).strip() != ""
+                    )
+                    if non_empty_in_row == 1:
+                        single_date_row_period_type[r] = 'comp' if is_comp_cell else 'actual'
                     if not (is_comp_cell and is_no_comp_notes):
                         ws.cell(row=r, column=c).value = target_dot
                     elif isinstance(val, (datetime.datetime, datetime.date)):
@@ -2555,8 +2807,21 @@ class NoteGenerator:
                             (len(cell_clean.split()) > 10 and len(cell_clean) > 60)
                         )
                         total_string_cells = sum(1 for c_temp in range(1, ws.max_column + 1) if ws.cell(row=row, column=c_temp).value is not None and isinstance(ws.cell(row=row, column=c_temp).value, str) and not str(ws.cell(row=row, column=c_temp).value).startswith('='))
+                        has_unit_row_below = (
+                            row < ws.max_row and sum(
+                                1 for c_u in range(1, ws.max_column + 1)
+                                if str(ws.cell(row=row + 1, column=c_u).value or '').strip().lower() in ('m$', 'mus$', '$', '%')
+                            ) >= 2
+                        )
+                        alpha_headers_right = sum(
+                            1 for c_r in range(c_idx + 1, ws.max_column + 1)
+                            if isinstance(ws.cell(row=row, column=c_r).value, str)
+                            and not str(ws.cell(row=row, column=c_r).value).startswith('=')
+                            and any(ch.isalpha() for ch in str(ws.cell(row=row, column=c_r).value))
+                            and str(ws.cell(row=row, column=c_r).value).strip().lower() not in ('-', 'm$', 'mus$', '$', '%')
+                        )
                         is_header = False
-                        if is_section_header:
+                        if is_section_header or has_unit_row_below or (alpha_headers_right >= 2 and c_idx >= 2):
                             is_header = True
                         elif not is_in_ctx:
                             if is_intro_text or total_string_cells >= 3 or cell_val.isupper():
@@ -2583,6 +2848,8 @@ class NoteGenerator:
                             'costo financiero por instrumentos de cobertura': 'instrumentos de cobertura (2)',
                             'ganancia en instrumentos de cobertura*': 'instrumentos de cobertura (1)',
                             'ganancia en instrumentos de cobertura': 'instrumentos de cobertura (1)',
+                            'otros (cta 3106104)': 'otros',
+                            'otros (cta 3103110)': 'otros',
                         }
                         if cell_clean in PL_ALIASES:
                             alias_candidate = PL_ALIASES[cell_clean]
@@ -2797,10 +3064,10 @@ class NoteGenerator:
                         if not entity_ctx:
                             continue
                             
-                        # Intentar detectar el año del bloque de filas actual
-                        block_yr = None if is_results_note else detect_block_year(ws, row, c)
-                        if block_yr and block_yr in template_year_to_period_type:
-                            period_type = template_year_to_period_type[block_yr]
+                        # Intentar detectar el periodo del bloque de filas actual (incluyendo cabeceras apiladas de 1 fecha)
+                        block_ptype = None if is_results_note else detect_block_period(ws, row, c)
+                        if block_ptype:
+                            period_type = block_ptype
                         else:
                             period_type = col_info.get('period_type') or template_year_to_period_type.get(col_info['year'], 'actual')
                         if is_no_comp_notes and period_type == 'comp':
@@ -2825,6 +3092,9 @@ class NoteGenerator:
                                             is_boundary = True
                                             break
                                 if is_boundary:
+                                    break
+                                if r_idx in single_date_row_period_type:
+                                    has_header_in_block = True
                                     break
                                 
                                 val_h = get_merged_cell_value(ws, r_idx, c)
@@ -2931,9 +3201,9 @@ class NoteGenerator:
                         if not col_info or col_info['entity'] != 'Consolidado':
                             continue
                             
-                        block_yr = detect_block_year(ws, row, c)
-                        if block_yr and block_yr in template_year_to_period_type:
-                            period_type = template_year_to_period_type[block_yr]
+                        block_ptype = detect_block_period(ws, row, c)
+                        if block_ptype:
+                            period_type = block_ptype
                         else:
                             period_type = col_info.get('period_type') or template_year_to_period_type.get(col_info['year'], 'actual')
                         if is_no_comp_notes and period_type == 'comp':
@@ -3119,105 +3389,172 @@ class NoteGenerator:
                         ws.cell(row=r_fin, column=c_comp).value = saldo_fin_comp
                         ws.cell(row=r_fin, column=c_comp).number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
 
-            # --- Regla especial para la nota de Intangibles (Cuadro #N08.3 - Movimiento de Intangibles) ---
+            # --- Regla especial para la nota de Intangibles (Cuadro #N08.2 - Movimiento de Intangibles) ---
             if sheet_name == 'Intangibles':
-                r_ini = None
-                r_adi = None
-                r_amo = None
-                r_fin = None
-                r_hdr = None
-                
-                # Buscar las filas en el cuadro #N08.3
-                for r in range(25, min(ws.max_row + 1, 45)):
-                    val_c = ws.cell(row=r, column=3).value
-                    if val_c is not None and isinstance(val_c, str):
-                        clean_lbl = clean_label(val_c)
-                        if 'inicio del periodo' in clean_lbl or 'inicial' in clean_lbl:
-                            r_ini = r
-                        elif 'adiciones' in clean_lbl:
-                            r_adi = r
-                        elif 'amortizacion' in clean_lbl:
-                            r_amo = r
-                        elif 'final del periodo' in clean_lbl or 'saldo final' in clean_lbl:
-                            r_fin = r
-                    
-                    if r_hdr is None:
-                        row_vals = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
-                        if any(val and isinstance(val, str) and clean_label(val) in ['licencias', 'concesiones', 'licencia'] for val in row_vals):
-                            r_hdr = r
+                mov_blocks = []
+                for r in range(25, ws.max_row + 1):
+                    row_vals = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
+                    has_conces = any(v and isinstance(v, str) and clean_label(v) == 'concesiones' for v in row_vals)
+                    has_licenc = any(v and isinstance(v, str) and clean_label(v) in ('licencias', 'licencia') for v in row_vals)
+                    if has_conces and has_licenc:
+                        b_ini = b_adi = b_amo = b_fin = None
+                        for r_sub in range(r + 1, min(ws.max_row + 1, r + 10)):
+                            lbl_val = None
+                            for c_lbl in (1, 2, 3):
+                                cand = ws.cell(row=r_sub, column=c_lbl).value
+                                if cand is not None and isinstance(cand, str) and not cand.startswith('='):
+                                    if clean_label(cand) not in ('m$', 'mus$', '$', '%', ''):
+                                        lbl_val = cand
+                                        break
+                            if lbl_val:
+                                cl = clean_label(lbl_val)
+                                if 'inicio del periodo' in cl or 'inicial' in cl:
+                                    b_ini = r_sub
+                                elif 'adiciones' in cl:
+                                    b_adi = r_sub
+                                elif 'amortizacion' in cl:
+                                    b_amo = r_sub
+                                elif 'final del periodo' in cl or 'saldo final' in cl:
+                                    b_fin = r_sub
+                                    break
+                        mov_blocks.append((r, b_ini, b_adi, b_amo, b_fin))
 
-                if r_hdr is not None:
-                    entity_ctx = find_best_context(active_entity_name, entity_contexts)
-                    ctx_act = entity_ctx.get('actual', {}) if entity_ctx else None
-                    ctx_cmp = entity_ctx.get('comp', {}) if entity_ctx else None
-                    
-                    def find_ctx_key(clean_hdr, ctx):
-                        if not ctx:
-                            return None
-                        for k in ctx.get('nota1', {}).keys():
-                            if k == clean_hdr or k.startswith(clean_hdr) or clean_hdr.startswith(k):
-                                return k
-                        for k in ctx.get('nota2', {}).keys():
-                            if k == clean_hdr or k.startswith(clean_hdr) or clean_hdr.startswith(k):
-                                return k
+                entity_ctx = find_best_context(active_entity_name, entity_contexts)
+                ctx_act = entity_ctx.get('actual', {}) if entity_ctx else None
+                ctx_cmp = entity_ctx.get('comp', {}) if entity_ctx else None
+
+                def find_ctx_key(clean_hdr, ctx):
+                    if not ctx:
                         return None
+                    for k in ctx.get('nota1', {}).keys():
+                        if k == clean_hdr or k.startswith(clean_hdr) or clean_hdr.startswith(k):
+                            return k
+                    for k in ctx.get('nota2', {}).keys():
+                        if k == clean_hdr or k.startswith(clean_hdr) or clean_hdr.startswith(k):
+                            return k
+                    return None
 
-                    # Rellenar cada columna que tenga una clase de intangibles
-                    for c in range(1, ws.max_column + 1):
-                        hdr = ws.cell(row=r_hdr, column=c).value
-                        if not hdr or 'total' in str(hdr).lower() or 'detalle' in str(hdr).lower() or 'm$' in str(hdr).lower():
-                            continue
-                        clean_hdr = clean_label(hdr)
-                        if len(clean_hdr) <= 2:
-                            continue
-                            
-                        # Buscar la clave correspondiente en los contextos
-                        key_act = find_ctx_key(clean_hdr, ctx_act)
-                        key_cmp = find_ctx_key(clean_hdr, ctx_cmp)
-                        
-                        key_cmp = key_cmp or key_act
-                        key_act = key_act or key_cmp
-                        
-                        if not key_act:
-                            continue
-                            
-                        # Valores Iniciales (Diciembre 2025)
-                        gross_ini = get_filtered_value(ctx_cmp, key_cmp, 'nota1', 'val', r_ini or r_hdr, ws) if ctx_cmp else 0.0
-                        depr_ini = get_filtered_value(ctx_cmp, key_cmp, 'nota2', 'val', r_ini or r_hdr, ws) if ctx_cmp else 0.0
-                        net_ini = round((gross_ini + depr_ini) / scale_factor)
-                        
-                        # Valores Finales (Mayo 2026 / Junio 2026)
-                        gross_fin = get_filtered_value(ctx_act, key_act, 'nota1', 'val', r_fin or r_hdr, ws) if ctx_act else 0.0
-                        depr_fin = get_filtered_value(ctx_act, key_act, 'nota2', 'val', r_fin or r_hdr, ws) if ctx_act else 0.0
-                        net_fin = round((gross_fin + depr_fin) / scale_factor)
-                        
-                        # Adiciones: max(0, gross_fin - gross_ini)
-                        adiciones = round(max(0.0, (gross_fin - gross_ini) / scale_factor))
-                        
-                        # Amortización del ejercicio: net_fin - net_ini - adiciones
-                        amortizacion = round(net_fin - net_ini - adiciones)
-                        
-                        # Escribir en las celdas
-                        if r_ini is not None:
-                            cell = ws.cell(row=r_ini, column=c)
-                            if not (isinstance(cell.value, str) and cell.value.startswith('=')):
-                                cell.value = net_ini
-                                cell.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
-                        if r_adi is not None:
-                            cell = ws.cell(row=r_adi, column=c)
-                            if not (isinstance(cell.value, str) and cell.value.startswith('=')):
-                                cell.value = adiciones
-                                cell.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
-                        if r_amo is not None:
-                            cell = ws.cell(row=r_amo, column=c)
-                            if not (isinstance(cell.value, str) and cell.value.startswith('=')):
-                                cell.value = amortizacion
-                                cell.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
-                        if r_fin is not None:
-                            cell = ws.cell(row=r_fin, column=c)
-                            if not (isinstance(cell.value, str) and cell.value.startswith('=')):
-                                cell.value = net_fin
-                                cell.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
+                num_fmt_int = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
+
+                # Bloque 1 (Actual)
+                if len(mov_blocks) >= 1:
+                    r_hdr, r_ini, r_adi, r_amo, r_fin = mov_blocks[0]
+                    if r_adi is not None and ws.cell(row=r_adi, column=2).value == '=+B9-B19':
+                        ws.cell(row=r_adi, column=2).value = '=+B8-B19'
+                    if r_ini is not None:
+                        _legacy_ini_map = {2: ('=+B48', '=+D19'), 3: ('=+C48', '=+D20'), 4: ('=+D48', '=+D21'), 5: ('=+E48', '=+D22')}
+                        for col_k, (old_f, new_f) in _legacy_ini_map.items():
+                            if ws.cell(row=r_ini, column=col_k).value == old_f:
+                                ws.cell(row=r_ini, column=col_k).value = new_f
+
+                    if is_no_comp_notes:
+                        for c in range(2, ws.max_column + 1):
+                            hdr = ws.cell(row=r_hdr, column=c).value
+                            if not hdr or 'total' in str(hdr).lower():
+                                continue
+                            for rr in (r_ini, r_adi, r_amo):
+                                if rr is not None:
+                                    ws.cell(row=rr, column=c).value = None
+                    else:
+                        for c in range(1, ws.max_column + 1):
+                            hdr = ws.cell(row=r_hdr, column=c).value
+                            if not hdr or 'total' in str(hdr).lower() or 'detalle' in str(hdr).lower() or 'm$' in str(hdr).lower():
+                                continue
+                            clean_hdr = clean_label(hdr)
+                            if len(clean_hdr) <= 2:
+                                continue
+                            key_act = find_ctx_key(clean_hdr, ctx_act)
+                            key_cmp = find_ctx_key(clean_hdr, ctx_cmp)
+                            key_cmp = key_cmp or key_act
+                            key_act = key_act or key_cmp
+                            if not key_act:
+                                continue
+                            gross_ini = round(get_filtered_value(ctx_cmp, key_cmp, 'nota1', 'val', r_ini or r_hdr, ws) / scale_factor) if ctx_cmp else 0
+                            depr_ini = round(get_filtered_value(ctx_cmp, key_cmp, 'nota2', 'val', r_ini or r_hdr, ws) / scale_factor) if ctx_cmp else 0
+                            net_ini = gross_ini + depr_ini
+                            gross_fin = round(get_filtered_value(ctx_act, key_act, 'nota1', 'val', r_fin or r_hdr, ws) / scale_factor) if ctx_act else 0
+                            depr_fin = round(get_filtered_value(ctx_act, key_act, 'nota2', 'val', r_fin or r_hdr, ws) / scale_factor) if ctx_act else 0
+                            net_fin = gross_fin + depr_fin
+                            adiciones = gross_fin - gross_ini
+                            amortizacion = depr_fin - depr_ini
+                            for rr, val_m in ((r_ini, net_ini), (r_adi, adiciones), (r_amo, amortizacion), (r_fin, net_fin)):
+                                if rr is not None:
+                                    cell = ws.cell(row=rr, column=c)
+                                    if not (isinstance(cell.value, str) and cell.value.startswith('=')):
+                                        cell.value = val_m
+                                        cell.number_format = num_fmt_int
+
+                # Bloque 2 (Comparativo)
+                if len(mov_blocks) >= 2 and not is_no_comp_notes and ctx_cmp:
+                    r_hdr_c, r_ini_c, r_adi_c, r_amo_c, r_fin_c = mov_blocks[1]
+                    ctx_prev_cmp = None
+                    try:
+                        if _comp_yr and str(_comp_yr).isdigit():
+                            prev_comp_str = f"{int(_comp_yr) - 1}-12"
+                            from src.core.snapshot_vault_manager import SnapshotVaultManager
+                            from src.models.trial_balance_db import TrialBalanceDB
+                            has_prev_data = SnapshotVaultManager.has_active_snapshot(active_entity_name, prev_comp_str)
+                            if not has_prev_data:
+                                if not is_consolidated:
+                                    tb_p = TrialBalanceDB.get_trial_balance(active_entity_name, prev_comp_str)
+                                    has_prev_data = tb_p is not None and not tb_p.empty
+                                else:
+                                    for ent_k in (entity_contexts or {}).keys():
+                                        if not str(ent_k).startswith('[GRUPO]'):
+                                            if SnapshotVaultManager.has_active_snapshot(ent_k, prev_comp_str):
+                                                has_prev_data = True
+                                                break
+                                            tb_p = TrialBalanceDB.get_trial_balance(ent_k, prev_comp_str)
+                                            if tb_p is not None and not tb_p.empty:
+                                                has_prev_data = True
+                                                break
+                            if has_prev_data:
+                                from src.core.sabana_manager import SabanaManager
+                                prev_bundle = SabanaManager.get_sabana_bundle(
+                                    active_entity_name, prev_comp_str, "Ninguno", map_balance_df, map_pl_df
+                                )
+                                prev_ent_ctx = find_best_context(active_entity_name, prev_bundle.get('contexts', {}))
+                                if prev_ent_ctx:
+                                    ctx_prev_cmp = prev_ent_ctx.get('actual', {})
+                    except Exception:
+                        ctx_prev_cmp = None
+
+                    has_inicial_in_cmp = any(
+                        abs(float((ctx_cmp.get(sec, {}).get(k_i, {}) or {}).get('inicial', 0.0) or 0.0)) > 0.01
+                        for sec in ('nota1', 'nota2')
+                        for k_i in ['concesiones', 'licencias', 'licencia', 'marca', 'marcas', 'cartera de clientes']
+                    )
+
+                    if ctx_prev_cmp or has_inicial_in_cmp:
+                        for c in range(1, ws.max_column + 1):
+                            hdr = ws.cell(row=r_hdr_c, column=c).value
+                            if not hdr or 'total' in str(hdr).lower() or 'detalle' in str(hdr).lower() or 'm$' in str(hdr).lower():
+                                continue
+                            clean_hdr = clean_label(hdr)
+                            if len(clean_hdr) <= 2:
+                                continue
+                            key_cmp = find_ctx_key(clean_hdr, ctx_cmp)
+                            key_prev = find_ctx_key(clean_hdr, ctx_prev_cmp) if ctx_prev_cmp else key_cmp
+                            if not key_cmp and not key_prev:
+                                continue
+                            gross_cmp_m = round(get_filtered_value(ctx_cmp, key_cmp, 'nota1', 'val', r_fin_c or r_hdr_c, ws) / scale_factor) if key_cmp else 0
+                            depr_cmp_m = round(get_filtered_value(ctx_cmp, key_cmp, 'nota2', 'val', r_fin_c or r_hdr_c, ws) / scale_factor) if key_cmp else 0
+                            if ctx_prev_cmp:
+                                gross_prev_m = round(get_filtered_value(ctx_prev_cmp, key_prev, 'nota1', 'val', r_ini_c or r_hdr_c, ws) / scale_factor) if key_prev else 0
+                                depr_prev_m = round(get_filtered_value(ctx_prev_cmp, key_prev, 'nota2', 'val', r_ini_c or r_hdr_c, ws) / scale_factor) if key_prev else 0
+                            else:
+                                gross_prev_m = round(get_filtered_value(ctx_cmp, key_cmp, 'nota1', 'inicial', r_ini_c or r_hdr_c, ws) / scale_factor) if key_cmp else 0
+                                depr_prev_m = round(get_filtered_value(ctx_cmp, key_cmp, 'nota2', 'inicial', r_ini_c or r_hdr_c, ws) / scale_factor) if key_cmp else 0
+                            net_ini_cmp = gross_prev_m + depr_prev_m
+                            adiciones_cmp = gross_cmp_m - gross_prev_m
+                            amortizacion_cmp = depr_cmp_m - depr_prev_m
+                            net_fin_cmp = gross_cmp_m + depr_cmp_m
+                            for rr, val_m in ((r_ini_c, net_ini_cmp), (r_adi_c, adiciones_cmp), (r_amo_c, amortizacion_cmp), (r_fin_c, net_fin_cmp)):
+                                if rr is not None:
+                                    cell = ws.cell(row=rr, column=c)
+                                    if not (isinstance(cell.value, str) and cell.value.startswith('=')):
+                                        cell.value = val_m
+                                        cell.number_format = num_fmt_int
 
             # 4. Filtrar columnas si es reporte individual
             from openpyxl.utils import get_column_letter

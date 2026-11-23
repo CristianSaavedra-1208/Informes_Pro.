@@ -574,8 +574,8 @@ def render_note_section(notes_list, key_prefix, scale_factor_nota, unidad_nota, 
                         _meta_n = SnapshotVaultManager._get_snapshot_meta(empresa_seleccionada, periodo_actual)
                         _nat_n = SnapshotVaultManager._get_note_native_comp(_meta_n, selected_id)
                         _is_comp_closed = bool(periodo_comp and periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp))
-                        if periodo_comp and periodo_comp != "Ninguno" and str(periodo_comp).strip() != str(_nat_n).strip() and not _is_comp_closed:
-                            _tie_msg = f"🔒 **[Snapshot Híbrido]** Período **{periodo_actual}** cargado desde cierre certificado + comparativo **{periodo_comp}** calculado al vuelo."
+                        if periodo_comp and periodo_comp != "Ninguno" and not _is_comp_closed:
+                            _tie_msg = f"🔒 **[Snapshot Híbrido]** Período **{periodo_actual}** cargado desde cierre certificado + comparativo abierto **{periodo_comp}** calculado al vuelo."
                         elif _is_comp_closed and str(periodo_comp).strip() != str(_nat_n).strip():
                             _tie_msg = f"🔒 **[Snapshots Certificados]** Período **{periodo_actual}** y comparativo **{periodo_comp}** cargados desde sus cierres en Bóveda."
                         else:

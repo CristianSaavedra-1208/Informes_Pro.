@@ -211,21 +211,44 @@ def find_account_by_rubro_nota(
             load_consolidation_account_map(empresa)
         account_map = _ACCOUNT_MAP_CACHE.get(map_key, {})
     
-    # 1. Búsqueda exacta normalizada
+    # 0. Alias históricos explícitos (asientos previos al catálogo 9999xxx)
+    HISTORICAL_ITEM_ALIASES = {
+        "costos de uso fibra optica": "9999315",
+        "costo de uso fibra optica": "9999315",
+        "ganancias (perdida) del ejercicio": "9999345",
+        "ganancia (perdida) del ejercicio": "9999345",
+    }
+    if norm_item in HISTORICAL_ITEM_ALIASES and HISTORICAL_ITEM_ALIASES[norm_item] in account_map:
+        res_alias = HISTORICAL_ITEM_ALIASES[norm_item]
+        if cache_lookup_key is not None:
+            _RUBRO_LOOKUP_CACHE[cache_lookup_key] = res_alias
+        return res_alias
+
+    # 1. Búsqueda exacta normalizada (por rubro o por desglose de nota cuando el histórico guardó la nota en linea_item)
     candidates = []
+    nota_as_item_candidates = []
     for cod, info in account_map.items():
         cand_item = normalize_text(info.get('linea_item'))
+        cand_nota = normalize_text(info.get('linea_nota')) if info.get('linea_nota') else None
         if cand_item == norm_item:
-            cand_nota = normalize_text(info.get('linea_nota')) if info.get('linea_nota') else None
             if norm_nota and cand_nota == norm_nota:
                 if cache_lookup_key is not None:
                     _RUBRO_LOOKUP_CACHE[cache_lookup_key] = cod
                 return cod
             candidates.append((cod, cand_nota))
+        elif cand_nota and cand_nota == norm_item:
+            nota_as_item_candidates.append(cod)
 
     if candidates:
         candidates.sort(key=lambda x: (0 if (norm_nota and x[1] == norm_nota) else (1 if x[1] is None else 2), x[0]))
         res_cod = candidates[0][0]
+        if cache_lookup_key is not None:
+            _RUBRO_LOOKUP_CACHE[cache_lookup_key] = res_cod
+        return res_cod
+
+    if nota_as_item_candidates:
+        nota_as_item_candidates.sort()
+        res_cod = nota_as_item_candidates[0]
         if cache_lookup_key is not None:
             _RUBRO_LOOKUP_CACHE[cache_lookup_key] = res_cod
         return res_cod
@@ -262,4 +285,82 @@ def find_account_by_rubro_nota(
     if cache_lookup_key is not None:
         _RUBRO_LOOKUP_CACHE[cache_lookup_key] = None
     return None
+
+
+def resolve_je_account_and_nota(
+    linea_item: str,
+    cuenta_codigo: Optional[str] = None,
+    linea_nota: Optional[str] = None,
+    empresa: Optional[str] = None,
+    account_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Resuelve (cuenta_codigo, linea_nota) para una línea de asiento de consolidación,
+    infiriendo desde el catálogo 9999xxx cuando alguno de los campos viene vacío.
+    """
+    if account_map is None:
+        account_map = load_consolidation_account_map(empresa)
+
+    cod_clean = str(cuenta_codigo).strip() if cuenta_codigo and str(cuenta_codigo).strip().lower() not in ("none", "nan", "") else None
+    nota_clean = str(linea_nota).strip() if linea_nota and str(linea_nota).strip().lower() not in ("none", "nan", "", "sin detalle") else None
+
+    if not cod_clean:
+        cod_clean = find_account_by_rubro_nota(
+            linea_item,
+            nota_clean,
+            empresa=empresa,
+            account_map=account_map,
+        )
+
+    if cod_clean and not nota_clean:
+        acc_info = account_map.get(cod_clean)
+        if acc_info and acc_info.get("linea_nota"):
+            nota_clean = acc_info.get("linea_nota")
+
+    return cod_clean, nota_clean
+
+
+def backfill_missing_je_account_codes(db=None) -> Dict[str, int]:
+    """
+    Homologa en base de datos `cuenta_codigo` (y `linea_nota` cuando viene vacía)
+    en todas las líneas de `ConsolidationJournalEntry` sin modificar ningún monto ni período.
+    """
+    from src.models.database import SessionLocal
+    from src.models.consolidacion import ConsolidationJournalEntry
+
+    local_db = False
+    if db is None:
+        db = SessionLocal()
+        local_db = True
+
+    updated_codes = 0
+    updated_notas = 0
+    total = 0
+    try:
+        acc_map = load_consolidation_account_map()
+        rows = db.query(ConsolidationJournalEntry).all()
+        total = len(rows)
+        for r in rows:
+            cur_cod = getattr(r, "cuenta_codigo", None)
+            cur_nota = getattr(r, "linea_nota", None)
+            new_cod, new_nota = resolve_je_account_and_nota(
+                r.linea_item,
+                cuenta_codigo=cur_cod,
+                linea_nota=cur_nota,
+                account_map=acc_map,
+            )
+            if (not cur_cod or str(cur_cod).strip() == "") and new_cod:
+                r.cuenta_codigo = new_cod
+                updated_codes += 1
+            if (not cur_nota or str(cur_nota).strip() == "") and new_nota:
+                r.linea_nota = new_nota
+                updated_notas += 1
+        if updated_codes > 0 or updated_notas > 0:
+            db.commit()
+    finally:
+        if local_db:
+            db.close()
+
+    return {"total": total, "updated_codes": updated_codes, "updated_notas": updated_notas}
+
 

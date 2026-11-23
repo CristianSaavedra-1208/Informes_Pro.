@@ -118,7 +118,9 @@ def render(empresa_seleccionada, empresa_path):
             if periodo_actual and periodo_actual in available_periods:
                 st.session_state['tb_df'] = TrialBalanceDB.get_trial_balance(empresa_seleccionada, periodo_actual)
 
-        if 'tb_df' not in st.session_state or st.session_state['tb_df'] is None or 'map_balance_df' not in st.session_state:
+        from src.core.snapshot_vault_manager import SnapshotVaultManager
+        has_snap_bal = SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+        if not has_snap_bal and ('tb_df' not in st.session_state or st.session_state['tb_df'] is None or 'map_balance_df' not in st.session_state):
             miss = []
             if 'tb_df' not in st.session_state: miss.append('tb_df (no está en memoria)')
             elif st.session_state['tb_df'] is None: miss.append('Trial Balance de este periodo no cargado')
@@ -529,23 +531,43 @@ def render(empresa_seleccionada, empresa_path):
                     val_actual_report_pesos = val_actual_report * scale_factor
                     
                     from src.models.pl_cubo_db import PlCuboDB
+                    from src.models.trial_balance_db import TrialBalanceDB
+                    from src.core.snapshot_vault_manager import SnapshotVaultManager
+
+                    def _has_source_cube_or_tb(per_str):
+                        if not per_str or per_str == "Ninguno":
+                            return False
+                        tb_chk = TrialBalanceDB.get_trial_balance(empresa_seleccionada, per_str)
+                        return tb_chk is not None and not tb_chk.empty
+
                     total_actual_cube = -1 * PlCuboDB.get_pl_cubo_total_sum(empresa_seleccionada, periodo_actual)
-                    
-                    cols_verificar = [(col_actual_name, val_actual_report_pesos, total_actual_cube)]
-                    
+                    cols_verificar = [(col_actual_name, val_actual_report_pesos, total_actual_cube, periodo_actual)]
+
                     if len(year_cols_validation) >= 2:
                         col_comp_name = year_cols_validation[1]
                         val_comp_report = float(last_row[col_comp_name]) if pd.notna(last_row[col_comp_name]) else 0.0
                         val_comp_report_pesos = val_comp_report * scale_factor
                         total_comp_cube = -1 * PlCuboDB.get_pl_cubo_total_sum(empresa_seleccionada, periodo_comp)
-                        cols_verificar.append((col_comp_name, val_comp_report_pesos, total_comp_cube))
-                    
+                        cols_verificar.append((col_comp_name, val_comp_report_pesos, total_comp_cube, periodo_comp))
+
                     cols_metrics = st.columns(len(cols_verificar))
-                    for idx, (col_name, val_rep_pesos, val_cube_pesos) in enumerate(cols_verificar):
+                    for idx, (col_name, val_rep_pesos, val_cube_pesos, per_ref) in enumerate(cols_verificar):
                         diff = abs(val_rep_pesos - val_cube_pesos)
-                        
+                        is_pdf_snapshot_only = (
+                            abs(val_cube_pesos) < 1.0
+                            and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, per_ref)
+                            and not _has_source_cube_or_tb(per_ref)
+                        )
+
                         with cols_metrics[idx]:
-                            if diff <= 999.0:
+                            if is_pdf_snapshot_only:
+                                rep_fmt = f"{val_rep_pesos:,.0f}".replace(",", ".")
+                                st.info(
+                                    f"**{col_name}**\n\n"
+                                    f"🔒 Snapshot histórico importado (sin Cubo P&L en BD)\n\n"
+                                    f"* Resultado Reporte: ${rep_fmt}"
+                                )
+                            elif diff <= 999.0:
                                 diff_fmt = f"{diff:,.0f}".replace(",", ".")
                                 st.success(f"**{col_name}**\n\nCuadrado (Diferencia: ${diff_fmt})")
                             else:
@@ -747,7 +769,9 @@ def render(empresa_seleccionada, empresa_path):
             btn_run_flujo = st.form_submit_button("🚀 Ejecutar Flujo de Efectivo", type="primary", use_container_width=True)
 
         if btn_run_flujo:
-            if 'tb_df' not in st.session_state or 'map_balance_df' not in st.session_state:
+            from src.core.snapshot_vault_manager import SnapshotVaultManager
+            has_snap_cf_act = (metodo_flujo == "Directo") and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_actual)
+            if not has_snap_cf_act and ('tb_df' not in st.session_state or st.session_state['tb_df'] is None or 'map_balance_df' not in st.session_state):
                 st.warning("⚠️ Debes importar un Trial Balance y haber configurado tu Mapeo de Balance antes de correr este reporte.")
             else:
                 with st.spinner("Procesando balances detailed cuenta por cuenta y calculando variaciones..."):
@@ -1158,6 +1182,13 @@ def render(empresa_seleccionada, empresa_path):
                             else:
                                 bal_df = st.session_state['preview_df'].copy()
                                 pl_df = st.session_state['er_preview_df'].copy()
+                                if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                                    bal_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        bal_df, empresa_seleccionada, "BALANCE", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
+                                    pl_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        pl_df, empresa_seleccionada, "ER", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
                                 
                                 target_lang = st.session_state.get('idioma_reporte', 'es')
                                 pat_engine = PatrimonioGenerator(template_pat_path)
@@ -1310,6 +1341,17 @@ def render(empresa_seleccionada, empresa_path):
                                 st.error(f"❌ No se encontró la plantilla '{template_ori_path}'.")
                             else:
                                 pl_df = st.session_state['er_preview_df'].copy()
+                                bal_ori_df = st.session_state.get('preview_df')
+                                if bal_ori_df is not None:
+                                    bal_ori_df = bal_ori_df.copy()
+                                if periodo_comp != "Ninguno" and SnapshotVaultManager.has_active_snapshot(empresa_seleccionada, periodo_comp):
+                                    pl_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                        pl_df, empresa_seleccionada, "ER", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                    )
+                                    if bal_ori_df is not None:
+                                        bal_ori_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                            bal_ori_df, empresa_seleccionada, "BALANCE", periodo_actual, periodo_comp, scale_factor=scale_factor
+                                        )
                                 
                                 target_lang = st.session_state.get('idioma_reporte', 'es')
                                 ori_engine = OriGenerator(template_ori_path)
@@ -1317,7 +1359,7 @@ def render(empresa_seleccionada, empresa_path):
                                     pl_df, 
                                     periodo_actual_str=str(periodo_actual), 
                                     periodo_comp_str=str(periodo_comp) if periodo_comp != "Ninguno" else None,
-                                    bal_preview_df=st.session_state.get('preview_df'),
+                                    bal_preview_df=bal_ori_df,
                                     empresa=empresa_seleccionada,
                                     target_lang=target_lang
                                 )

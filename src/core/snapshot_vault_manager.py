@@ -364,6 +364,12 @@ class SnapshotVaultManager:
         try:
             from src.ui_pages.informes_y_notas import load_all_entity_contexts
             from src.core.sabana_manager import SabanaManager
+            ctx_path_existing = os.path.join(snap_dir, "context.pkl")
+            if os.path.exists(ctx_path_existing):
+                try:
+                    os.remove(ctx_path_existing)
+                except Exception:
+                    pass
             SabanaManager.clear_sabana_cache()
             raw_ctx_snap = load_all_entity_contexts(
                 active_entity=empresa_clean,
@@ -988,7 +994,11 @@ class SnapshotVaultManager:
             ]
             if src_date_cols:
                 src_act_col = src_date_cols[0]
-                if len(out_df) == len(df_comp_source):
+                same_labels = (
+                    len(out_df) == len(df_comp_source)
+                    and [_norm_lbl(x) for x in out_df.iloc[:, 0]] == [_norm_lbl(x) for x in df_comp_source.iloc[:, 0]]
+                )
+                if same_labels:
                     out_df[comp_col] = df_comp_source[src_act_col].values
                 else:
                     src_occ_map: Dict[Tuple[str, int], Any] = {}
@@ -1305,6 +1315,49 @@ class SnapshotVaultManager:
 
         try:
             is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
+            meta_act = SnapshotVaultManager._get_snapshot_meta(empresa_clean, periodo_act_clean)
+            meta_cmp = SnapshotVaultManager._get_snapshot_meta(empresa_clean, comp_key) if (not is_no_comp and SnapshotVaultManager.has_active_snapshot(empresa_clean, comp_key)) else {}
+            is_pdf_pat = ("pdf" in str(meta_act.get("cerrado_por", "")).lower()) or ("pdf" in str(meta_cmp.get("cerrado_por", "")).lower())
+
+            if is_pdf_pat and SnapshotVaultManager.has_active_snapshot(empresa_clean, periodo_act_clean):
+                def _load_pat_block1(per_s):
+                    p_pkl = os.path.join(SnapshotVaultManager.get_snapshot_dir(empresa_clean, per_s), "statements", "patrimonio.pkl")
+                    if not os.path.exists(p_pkl):
+                        return None
+                    with open(p_pkl, "rb") as fp:
+                        df_p, _ = pickle.load(fp)
+                    m_p = SnapshotVaultManager._get_snapshot_meta(empresa_clean, per_s)
+                    b_sc = float(m_p.get("base_scale", 1000.0) or 1000.0)
+                    df_p = SnapshotVaultManager._scale_dataframe_cells(df_p, scale_factor, base_scale=b_sc)
+                    # Extraer únicamente el Bloque 1 (hasta la primera fila separadora vacía)
+                    cut_idx = len(df_p)
+                    for r_i in range(len(df_p)):
+                        row_vals = [df_p.iloc[r_i, c_i] for c_i in range(len(df_p.columns))]
+                        if all(v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == "" for v in row_vals):
+                            cut_idx = r_i
+                            break
+                    return df_p.iloc[:cut_idx].copy()
+
+                df_b1 = _load_pat_block1(periodo_act_clean)
+                if df_b1 is not None and not df_b1.empty:
+                    df_comb = df_b1.copy()
+                    if not is_no_comp:
+                        df_b2 = _load_pat_block1(comp_key)
+                        if df_b2 is not None and not df_b2.empty:
+                            cols_p = list(df_comb.columns)
+                            unit_lbl = "M$" if abs(float(scale_factor) - 1000.0) < 0.01 else ("MM$" if abs(float(scale_factor) - 1000000.0) < 0.01 else "Ch$")
+                            sep_df = pd.DataFrame([
+                                [None] * len(cols_p),
+                                [""] + cols_p[1:],
+                                [""] + [unit_lbl] * (len(cols_p) - 1),
+                            ], columns=cols_p)
+                            df_b2.columns = cols_p
+                            df_comb = pd.concat([df_comb, sep_df, df_b2], ignore_index=True)
+                    from src.core.excel_utils import df_to_excel_bytes
+                    raw_bytes_pdf = df_to_excel_bytes(df_comb, "Patrimonio")
+                    _HYBRID_COMP_CACHE[cache_key] = (_time.time(), (df_comb.copy(), raw_bytes_pdf))
+                    return df_comb, raw_bytes_pdf
+
             if is_no_comp:
                 try:
                     pat_comp_bal = f"{int(periodo_act_clean[:4]) - 1}-12"
@@ -1543,7 +1596,26 @@ class SnapshotVaultManager:
         norm_note_code = "#" + str(note_code or "").replace("#", "").strip().upper()
         comp_clean = "Ninguno" if SnapshotVaultManager._is_no_comp(comp_period) else str(comp_period or "").strip()
 
-        cache_key = ("note_hybrid", empresa_clean, periodo_act_clean, norm_note_code, comp_clean, float(scale_factor), str(target_lang))
+        from src.core.external_notes_manager import ExternalNotesManager as _ExtMgrKey
+        def _anexo_mtime_sig(emp_n: str, per_n: str) -> float:
+            if not per_n or per_n == "Ninguno":
+                return 0.0
+            try:
+                if _ExtMgrKey.has_explicit_anexo(emp_n, per_n):
+                    return float(os.path.getmtime(_ExtMgrKey.get_anexo_path(emp_n, per_n)))
+                if _ExtMgrKey.is_consolidated_group(emp_n):
+                    subs = _ExtMgrKey.get_group_companies(emp_n)
+                    return sum(
+                        float(os.path.getmtime(_ExtMgrKey.get_anexo_path(s, per_n)))
+                        for s in subs if _ExtMgrKey.has_explicit_anexo(s, per_n)
+                    )
+            except Exception:
+                pass
+            return 0.0
+
+        tpl_mtime = float(os.path.getmtime("Plantilla de notas_v1.xlsx")) if os.path.exists("Plantilla de notas_v1.xlsx") else 0.0
+        anexo_sig = (_anexo_mtime_sig(empresa_clean, periodo_act_clean), _anexo_mtime_sig(empresa_clean, comp_clean), tpl_mtime)
+        cache_key = ("note_hybrid", empresa_clean, periodo_act_clean, norm_note_code, comp_clean, float(scale_factor), str(target_lang), anexo_sig)
         cached = _HYBRID_COMP_CACHE.get(cache_key)
         if cached and (_time.time() - cached[0]) < _HYBRID_COMP_TTL_SEC:
             c_els, c_bytes = cached[1]
@@ -1671,6 +1743,7 @@ class SnapshotVaultManager:
                                     for r_k in range(min(3, len(df_fa)))
                                 )
                                 if has_dates:
+                                    df_h = df_h.astype(object)
                                     df_h.iloc[:, 1] = df_fa.iloc[:, 1].values
                                     raw_els[idx_el] = (item[0], df_h, *item[2:])
                         tbl_i += 1
@@ -1738,8 +1811,9 @@ class SnapshotVaultManager:
         comp_str = str(comp_period).strip()
         comp_differs = is_no_comp or (not native_comp) or (comp_str != str(native_comp).strip())
         comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+        comp_is_open = (not is_no_comp) and (not comp_is_closed)
 
-        if comp_differs or comp_is_closed:
+        if comp_differs or comp_is_closed or comp_is_open:
             if norm_code == "#PATRIMONIO":
                 pat_hyb = SnapshotVaultManager._build_hybrid_patrimonio(
                     empresa, periodo_actual, comp_period, scale_factor=scale_factor, target_lang=target_lang
@@ -1782,7 +1856,9 @@ class SnapshotVaultManager:
             is_no_comp = SnapshotVaultManager._is_no_comp(comp_period)
             comp_str = str(comp_period).strip()
             comp_differs = is_no_comp or (not note_native_comp) or (comp_str != str(note_native_comp).strip())
-            if comp_differs or abs(float(scale_factor) - 1000.0) >= 0.01:
+            comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+            comp_is_open = (not is_no_comp) and (not comp_is_closed)
+            if comp_differs or comp_is_open or comp_is_closed or abs(float(scale_factor) - 1000.0) >= 0.01:
                 hyb = SnapshotVaultManager._build_hybrid_note_for_comp(
                     empresa, periodo_actual, note_code, comp_period, scale_factor=scale_factor, target_lang=target_lang
                 )
@@ -1964,12 +2040,11 @@ class SnapshotVaultManager:
                     comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
 
                     if norm_code == "#PATRIMONIO":
-                        if comp_differs or comp_is_closed:
-                            pat_hyb = SnapshotVaultManager._build_hybrid_patrimonio(
-                                empresa, periodo_actual, comp_period, scale_factor=scale_factor
-                            )
-                            if pat_hyb is not None:
-                                df_scaled = pat_hyb[0]
+                        pat_hyb = SnapshotVaultManager._build_hybrid_patrimonio(
+                            empresa, periodo_actual, comp_period, scale_factor=scale_factor
+                        )
+                        if pat_hyb is not None:
+                            df_scaled = pat_hyb[0]
                     elif norm_code in ["#BALANCE", "#ESF", "#ER", "#ORI", "#EFE"]:
                         if is_no_comp:
                             df_scaled = SnapshotVaultManager._splice_comp_into_statement_df(
@@ -1979,7 +2054,8 @@ class SnapshotVaultManager:
                             df_scaled = SnapshotVaultManager.apply_closed_comp_to_statement(
                                 df_scaled, empresa, norm_code, periodo_actual, comp_str, scale_factor=scale_factor
                             )
-                        elif comp_differs:
+                        else:
+                            # El período comparativo está abierto: calcular siempre al vuelo para reflejar ajustes/TB vigentes
                             df_comp_live = SnapshotVaultManager._compute_live_statement_for_period(
                                 empresa, comp_str, norm_code, scale_factor=scale_factor
                             )
@@ -2038,8 +2114,35 @@ class SnapshotVaultManager:
                 comp_str = str(comp_period).strip()
                 comp_differs = is_no_comp or (not note_native_comp) or (comp_str != str(note_native_comp).strip())
                 comp_is_closed = (not is_no_comp) and SnapshotVaultManager.has_active_snapshot(empresa, comp_str)
+                has_stale_stacked_comp = False
+                if (not is_no_comp) and comp_str != str(periodo_actual).strip():
+                    from src.reporting.note_generator import format_date_dots
+                    act_dot_chk = format_date_dots(str(periodo_actual).strip())
+                    if act_dot_chk:
+                        for s_item in scaled_els:
+                            if s_item[0] == "table" and isinstance(s_item[1], pd.DataFrame):
+                                df_chk = s_item[1]
+                                act_dot_rows = [
+                                    r_i for r_i in range(len(df_chk))
+                                    if any(str(df_chk.iloc[r_i, c_i] or "").strip() == act_dot_chk for c_i in range(min(3, len(df_chk.columns))))
+                                ]
+                                if len(act_dot_rows) >= 2:
+                                    has_stale_stacked_comp = True
+                                    break
 
-                if comp_differs:
+                comp_snap_newer = False
+                if comp_is_closed:
+                    try:
+                        comp_snap_dir = SnapshotVaultManager.get_snapshot_dir(empresa, comp_str)
+                        comp_pkl_path = os.path.join(comp_snap_dir, "notes", f"{clean_code}.pkl")
+                        if os.path.exists(comp_pkl_path) and os.path.exists(file_path):
+                            comp_snap_newer = os.path.getmtime(comp_pkl_path) > os.path.getmtime(file_path)
+                    except Exception:
+                        comp_snap_newer = False
+
+                if is_no_comp or (not comp_is_closed) or comp_differs or has_stale_stacked_comp or comp_snap_newer:
+                    # Si comp_period es 'Ninguno', está abierto en memoria viva (con posibles anexos/ajustes nuevos),
+                    # o difiere del comparativo nativo, construir nota híbrida (Actual congelado + Comparativo al vuelo/cerrado)
                     hyb_note = SnapshotVaultManager._build_hybrid_note_for_comp(
                         empresa, periodo_actual, note_code, comp_period, scale_factor=scale_factor
                     )
@@ -2163,3 +2266,229 @@ class SnapshotVaultManager:
                 logs.append(f"✗ {emp} - {per}: Error {msg}")
 
         return success_count, error_count, logs
+
+    @staticmethod
+    def refresh_notes_in_snapshot(empresa: str, periodo: str) -> Tuple[bool, str]:
+        """
+        Regenera únicamente `context.pkl`, sábanas de auditoría y las Notas (`notes/*.pkl` y `.xlsx`)
+        dentro de un Snapshot activo ya existente, dejando 100% intactos los Estados Financieros
+        certificados (`statements/*`) y reconciliando las notas contra esos mismos EEFF congelados.
+        """
+        empresa_clean = str(empresa).strip()
+        periodo_clean = str(periodo).strip()
+        if not SnapshotVaultManager.has_active_snapshot(empresa_clean, periodo_clean):
+            return False, f"No existe snapshot activo para {empresa_clean} ({periodo_clean})."
+
+        snap_dir = SnapshotVaultManager.get_snapshot_dir(empresa_clean, periodo_clean)
+        stmt_dir = os.path.join(snap_dir, "statements")
+        notes_dir = os.path.join(snap_dir, "notes")
+        os.makedirs(notes_dir, exist_ok=True)
+
+        meta = SnapshotVaultManager._get_snapshot_meta(empresa_clean, periodo_clean)
+        base_scale = float(meta.get("base_scale", 1000.0) or 1000.0)
+        is_consolidated = empresa_clean.startswith("[GRUPO]")
+
+        parts = periodo_clean.split('-')
+        prev_year = str(int(parts[0]) - 1) if len(parts) >= 2 else "2024"
+        comp_period_bal = meta.get("comp_period_bal") or f"{prev_year}-12"
+        comp_period_pl = meta.get("comp_period_pl") or (f"{prev_year}-{parts[1]}" if len(parts) >= 2 else f"{prev_year}-12")
+
+        # 1. Leer EEFF congelados existentes (sin tocarlos en disco)
+        bal_preview = None
+        er_preview = None
+        bal_pkl = os.path.join(stmt_dir, "balance.pkl")
+        er_pkl = os.path.join(stmt_dir, "er.pkl")
+        if os.path.exists(bal_pkl):
+            with open(bal_pkl, "rb") as f:
+                bal_preview, _ = pickle.load(f)
+        if os.path.exists(er_pkl):
+            with open(er_pkl, "rb") as f:
+                er_preview, _ = pickle.load(f)
+
+        # 2. Reconstruir context.pkl fresco (preservando mapeos congelados si existen)
+        from src.core.word_template_engine import load_mappings_for_entity
+        from src.core.sabana_manager import SabanaManager
+        from src.ui_pages.informes_y_notas import split_sheet_into_elements
+        from src.core.excel_utils import extract_named_ranges_from_excel
+        from src.reporting.note_generator import NoteGenerator
+        from src.core.external_notes_manager import ExternalNotesManager
+        from src.core.rounding_reconciler import RoundingReconciler
+
+        f_mb, f_mp = SnapshotVaultManager.get_frozen_mappings(empresa_clean, periodo_clean)
+        if f_mb is None or f_mp is None:
+            mb_live, mp_live = load_mappings_for_entity(empresa_clean)
+            map_balance_df = f_mb if f_mb is not None else mb_live
+            map_pl_df = f_mp if f_mp is not None else mp_live
+        else:
+            map_balance_df, map_pl_df = f_mb, f_mp
+
+        ctx_path = os.path.join(snap_dir, "context.pkl")
+        ctx_backup = None
+        if os.path.exists(ctx_path):
+            with open(ctx_path, "rb") as f:
+                ctx_backup = f.read()
+            os.remove(ctx_path)
+
+        try:
+            SabanaManager.clear_sabana_cache()
+            bundle_self = SabanaManager.build_sabana_bundle(
+                active_entity=empresa_clean,
+                periodo_actual=periodo_clean,
+                periodo_comp="Ninguno",
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+            )
+            raw_ctx_snap = bundle_self.get("contexts", {})
+            frozen_ctx_data = {
+                "map_balance_df": map_balance_df.copy() if map_balance_df is not None else None,
+                "map_pl_df": map_pl_df.copy() if map_pl_df is not None else None,
+                "contexts_actual": {k: v.get("actual", {}) for k, v in (raw_ctx_snap or {}).items() if isinstance(v, dict)},
+            }
+            with open(ctx_path, "wb") as f_ctx:
+                pickle.dump(frozen_ctx_data, f_ctx)
+        except Exception as e_ctx:
+            if ctx_backup is not None and not os.path.exists(ctx_path):
+                with open(ctx_path, "wb") as f_restore:
+                    f_restore.write(ctx_backup)
+            return False, f"Error reconstruyendo context.pkl: {e_ctx}"
+
+        try:
+            SnapshotVaultManager._build_and_save_frozen_sabanas(
+                empresa_clean=empresa_clean,
+                periodo_clean=periodo_clean,
+                snap_dir=snap_dir,
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+            )
+        except Exception:
+            pass
+
+        # 3. Regenerar notas reconciliadas contra los EEFF congelados del propio Snapshot
+        template_nota = "Plantilla de notas_v1.xlsx"
+        engine_notes = NoteGenerator(template_nota)
+        full_registry = get_full_note_registry()
+
+        sheets_by_comp = {}
+        for code, info in full_registry.items():
+            t_sheets = info.get("sheets", [])
+            if not t_sheets:
+                continue
+            if info.get("consolidated_only", False) and not is_consolidated:
+                continue
+            cat = info.get("category", "resultados")
+            is_bal_n = cat in ["activos_corrientes", "activos_no_corrientes", "pasivos_corrientes", "pasivos_no_corrientes", "patrimonio"]
+            n_comp = comp_period_bal if is_bal_n else comp_period_pl
+            sheets_by_comp.setdefault(n_comp, [])
+            for s_n in t_sheets:
+                if s_n not in sheets_by_comp[n_comp]:
+                    sheets_by_comp[n_comp].append(s_n)
+
+        evaluated_wb_cache = {}
+        import openpyxl
+        for n_comp, all_comp_sheets in sheets_by_comp.items():
+            SabanaManager.clear_sabana_cache()
+            bundle_c = SabanaManager.build_sabana_bundle(
+                active_entity=empresa_clean,
+                periodo_actual=periodo_clean,
+                periodo_comp=n_comp,
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+            )
+            wb_out = engine_notes.generate(
+                sheet_names=all_comp_sheets,
+                entity_contexts=bundle_c["contexts"],
+                active_entity_name=empresa_clean,
+                is_consolidated=is_consolidated,
+                scale_factor=base_scale,
+                periodo_actual_str=periodo_clean,
+                periodo_comp_str=n_comp,
+                map_balance_df=map_balance_df,
+                map_pl_df=map_pl_df,
+                evaluate_formulas=False,
+            )
+            wb_out = ExternalNotesManager.inject_external_data(
+                wb_out,
+                empresa=empresa_clean,
+                periodo_actual=periodo_clean,
+                periodo_comp=n_comp if n_comp != "Ninguno" else None,
+            )
+            _, wb_eval_rec = RoundingReconciler.reconcile_and_evaluate_note_workbook(
+                wb_out,
+                empresa=empresa_clean,
+                periodo_actual=periodo_clean,
+                scale_factor=base_scale,
+                df_bal=bal_preview,
+                df_er=er_preview,
+                target_sheets=all_comp_sheets,
+                return_raw=False,
+            )
+            wb_bytes = wb_eval_rec.getvalue()
+            wb_openpyxl_eval = openpyxl.load_workbook(BytesIO(wb_bytes), data_only=True)
+            evaluated_wb_cache[n_comp] = (wb_bytes, pd.ExcelFile(BytesIO(wb_bytes)), wb_openpyxl_eval)
+
+        notes_saved = []
+        for code, info in full_registry.items():
+            target_sheets = info.get("sheets", [])
+            if not target_sheets or (info.get("consolidated_only", False) and not is_consolidated):
+                continue
+            cat = info.get("category", "resultados")
+            is_bal_n = cat in ["activos_corrientes", "activos_no_corrientes", "pasivos_corrientes", "pasivos_no_corrientes", "patrimonio"]
+            note_comp = comp_period_bal if is_bal_n else comp_period_pl
+            if note_comp not in evaluated_wb_cache:
+                continue
+            wb_bytes, xl_nota_f, wb_openpyxl_eval = evaluated_wb_cache[note_comp]
+            named_ranges = extract_named_ranges_from_excel(None, code, wb=wb_openpyxl_eval)
+            raw_els = []
+            if named_ranges:
+                for _, df_chunk in named_ranges:
+                    raw_els.append(("table", df_chunk, target_sheets[0], None))
+            else:
+                for s_name in target_sheets:
+                    if s_name in xl_nota_f.sheet_names:
+                        preview_nota_df = xl_nota_f.parse(sheet_name=s_name, header=None)
+                        sheet_els = split_sheet_into_elements(preview_nota_df, sheet_name=s_name)
+                        for s_item in sheet_els:
+                            el_t = s_item[0]
+                            el_v = s_item[1]
+                            sh_n = s_item[2] if len(s_item) > 2 else s_name
+                            exp_c = s_item[3] if len(s_item) > 3 else None
+                            raw_els.append((el_t, el_v, sh_n, exp_c))
+            if raw_els:
+                clean_code = code.replace("#", "").strip()
+                with open(os.path.join(notes_dir, f"{clean_code}.pkl"), "wb") as f:
+                    pickle.dump(raw_els, f)
+                with open(os.path.join(notes_dir, f"{clean_code}.xlsx"), "wb") as f_ex:
+                    f_ex.write(wb_bytes)
+                notes_saved.append(code)
+
+        for _, xl_cached, wb_cached in evaluated_wb_cache.values():
+            try:
+                xl_cached.close()
+            except Exception:
+                pass
+            try:
+                wb_cached.close()
+            except Exception:
+                pass
+
+        new_checksum = SnapshotVaultManager._compute_checksum(snap_dir)
+        meta["notes_count"] = len(notes_saved)
+        meta["notes"] = notes_saved
+        meta["checksum"] = new_checksum
+        with open(os.path.join(snap_dir, "metadata.json"), "w", encoding="utf-8") as f_m:
+            json.dump(meta, f_m, indent=2, ensure_ascii=False)
+
+        db = SessionLocal()
+        try:
+            rec = db.query(ClosingSnapshotRecord).filter_by(
+                empresa=empresa_clean, periodo=periodo_clean, is_active=True
+            ).first()
+            if rec:
+                rec.checksum = new_checksum
+                db.commit()
+        finally:
+            db.close()
+
+        _HYBRID_COMP_CACHE.clear()
+        SabanaManager.clear_sabana_cache()
+        return True, f"Notas repobladas con éxito ({len(notes_saved)} notas) en {empresa_clean} {periodo_clean}."

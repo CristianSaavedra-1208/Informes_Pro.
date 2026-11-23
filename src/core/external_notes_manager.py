@@ -23,6 +23,12 @@ class ExternalNotesManager:
         path = cls.MASTER_EXTERNAL_TEMPLATE
         with open(path, "wb") as f:
             f.write(file_bytes)
+        cls._AGG_ANEXO_CACHE.clear()
+        try:
+            from src.core.snapshot_vault_manager import _HYBRID_COMP_CACHE
+            _HYBRID_COMP_CACHE.clear()
+        except Exception:
+            pass
         return path
 
     @classmethod
@@ -320,6 +326,46 @@ class ExternalNotesManager:
             )
         )
 
+    @classmethod
+    def _build_desc_row_key(cls, desc_vals: list) -> tuple:
+        """
+        Construye la llave normalizada de una fila a partir de todas sus columnas descriptivas:
+        - Textos: sin tildes/diacríticos, minúsculas y espacios limpios (sin alterar palabras/nombres).
+        - Fechas: YYYY-MM-DD.
+        - Números: representación canónica (7500000 == 7500000.0).
+        - Celdas vacías o guiones: ''.
+        """
+        parts = []
+        for v in desc_vals:
+            if v is None:
+                parts.append("")
+            elif isinstance(v, bool):
+                parts.append(str(v).lower())
+            elif isinstance(v, (datetime.datetime, datetime.date)):
+                parts.append(v.strftime("%Y-%m-%d"))
+            elif isinstance(v, (int, float)):
+                fv = float(v)
+                if abs(fv - round(fv)) < 1e-7:
+                    parts.append(str(int(round(fv))))
+                else:
+                    parts.append(f"{fv:.6f}".rstrip("0").rstrip("."))
+            elif isinstance(v, str):
+                s = v.strip()
+                if not s or s in ("-", "—", "–"):
+                    parts.append("")
+                else:
+                    ok_n, fv = cls._parse_numeric_cell(s)
+                    if ok_n:
+                        if abs(fv - round(fv)) < 1e-7:
+                            parts.append(str(int(round(fv))))
+                        else:
+                            parts.append(f"{fv:.6f}".rstrip("0").rstrip("."))
+                    else:
+                        parts.append(cls._norm_concept_static(s))
+            else:
+                parts.append(cls._norm_concept_static(str(v)))
+        return tuple(parts)
+
     @staticmethod
     def _parse_numeric_cell(val) -> tuple[bool, float]:
         if val is None or isinstance(val, bool) or isinstance(val, (datetime.datetime, datetime.date)):
@@ -399,6 +445,7 @@ class ExternalNotesManager:
         detail_rows = []
         footer_rows = []
         seen_hdr = False
+        last_hdr_r = None
         for r_curr in range(r0 + 1, min(r_end + 1, ws.max_row + 1)):
             is_h = any(c_d <= ws.max_column and cls._is_header_cell_static(ws.cell(r_curr, c_d).value) for c_d in data_cols)
             if not is_h:
@@ -407,6 +454,7 @@ class ExternalNotesManager:
                     is_h = True
             if is_h and not detail_rows and not footer_rows:
                 seen_hdr = True
+                last_hdr_r = r_curr
                 continue
             f_lbl = ""
             for c_any in desc_cols + data_cols:
@@ -422,6 +470,15 @@ class ExternalNotesManager:
             if f_lbl or has_sum_f:
                 footer_rows.append((r_curr, f_lbl or "__subtotal_sum__"))
             elif (seen_hdr or (r_curr - r0) >= 3) and not footer_rows:
+                if not detail_rows and last_hdr_r is not None and r_curr == last_hdr_r + 1:
+                    is_blank_spacer = not any(
+                        c_b <= ws.max_column and ws.cell(r_curr, c_b).value is not None and str(ws.cell(r_curr, c_b).value).strip() != ""
+                        for c_b in desc_cols + data_cols
+                    )
+                    if is_blank_spacer and r_curr + 1 <= min(r_end, ws.max_row):
+                        detail_rows_skip = True
+                        if detail_rows_skip:
+                            continue
                 detail_rows.append(r_curr)
         return detail_rows, footer_rows
 
@@ -438,6 +495,7 @@ class ExternalNotesManager:
         from src.reporting.note_generator import (
             shift_formula_rows,
             _extract_movement_table_rows,
+            _build_comp_column_mapping,
         )
         from src.reporting.notes import is_technical_sheet
 
@@ -452,7 +510,7 @@ class ExternalNotesManager:
             (s, os.path.getmtime(cls.get_anexo_path(s, periodo)))
             for s in active_subs
         )
-        cache_key = ("v2_code_aligned", str(grupo_name).strip(), cls.normalize_period_str(periodo), master_mtime, sub_mtimes)
+        cache_key = ("v4_comp_hdr_map", str(grupo_name).strip(), cls.normalize_period_str(periodo), master_mtime, sub_mtimes)
         if cache_key in cls._AGG_ANEXO_CACHE:
             return BytesIO(cls._AGG_ANEXO_CACHE[cache_key])
 
@@ -588,12 +646,30 @@ class ExternalNotesManager:
                     # Regla NIIF 10 para Patrimonio (#N20.1, #N20.2, #N20.3):
                     # El número de acciones y estructura accionaria consolidada corresponden exclusivamente a la Matriz.
                     if code in ("#N20.1", "#N20.2", "#N20.3"):
-                        code_subs = [
-                            (sn, sc, sws) for (sn, sc, sws) in matching_subs
-                            if matriz_canon and sc == matriz_canon
-                        ]
+                        code_subs = []
+                        for (sn, sc, sws) in matching_subs:
+                            if not (matriz_canon and sc == matriz_canon):
+                                continue
+                            scodes = cls.get_code_locations(sws)
+                            if code not in scodes:
+                                continue
+                            sr0, sc0 = scodes[code]["row"], scodes[code]["col"]
+                            sh_tmp = cls._get_ws_table_height(sws, sr0)
+                            _, sdata_tmp = cls._resolve_ws_table_columns(sws, code, sr0, sc0, sh_tmp)
+                            has_nonzero_shares = False
+                            for roff in range(1, sh_tmp + 1):
+                                for cd_t in sdata_tmp:
+                                    if cd_t <= sws.max_column:
+                                        ok_sh, num_sh = cls._parse_numeric_cell(sws.cell(sr0 + roff, cd_t).value)
+                                        if ok_sh and abs(num_sh) > 1.0:
+                                            has_nonzero_shares = True
+                                            break
+                                if has_nonzero_shares:
+                                    break
+                            if has_nonzero_shares:
+                                code_subs.append((sn, sc, sws))
                         if not code_subs:
-                            # Conservar estructura accionaria de la matriz en la plantilla sin mezclar acciones de filiales
+                            # Conservar estructura accionaria de la matriz en la plantilla si la matriz no tiene acciones informadas en este subcuadro
                             continue
                     else:
                         code_subs = matching_subs
@@ -631,7 +707,7 @@ class ExternalNotesManager:
                             s_info = sub_codes[code]
                             s_r0, s_c0 = s_info["row"], s_info["col"]
                             sub_concept_map = _extract_movement_table_rows(sub_ws, s_r0, label_col=s_c0)
-                            col_delta = agg_c0 - s_c0
+                            sub_col_map = _build_comp_column_mapping(agg_ws, agg_r0, agg_c0, max_agg_col, sub_ws, s_r0, s_c0)
                             for ckey, r_a in agg_concept_map.items():
                                 if ckey not in sub_concept_map:
                                     continue
@@ -644,8 +720,8 @@ class ExternalNotesManager:
                                         continue
                                     if cls._is_header_cell_static(cell_a.value):
                                         continue
-                                    c_s = c_a - col_delta
-                                    if 1 <= c_s <= sub_ws.max_column:
+                                    c_s = sub_col_map.get(c_a)
+                                    if c_s is not None and 1 <= c_s <= sub_ws.max_column:
                                         ok, num = cls._parse_numeric_cell(sub_ws.cell(r_s, c_s).value)
                                         if ok:
                                             prev = float(cell_a.value) if isinstance(cell_a.value, (int, float)) and not isinstance(cell_a.value, bool) else 0.0
@@ -679,7 +755,8 @@ class ExternalNotesManager:
                                         if not (isinstance(tc.value, str) and tc.value.startswith("=")):
                                             tc.value = 0
 
-                        collected_details = []
+                        per_sub_rows = []
+                        max_intra_count = {}
                         footer_sums = {}
                         for _, _, sub_ws in code_subs:
                             sub_codes = cls.get_code_locations(sub_ws)
@@ -694,6 +771,8 @@ class ExternalNotesManager:
                             s_detail_rows, s_footer_rows = cls._classify_detail_and_footer_rows(
                                 sub_ws, s_r0, s_c0, s_r0 + s_height, s_desc_cols, s_data_cols
                             )
+                            sub_rows = []
+                            sub_counts = {}
                             for r_s in s_detail_rows:
                                 d_vals = [sub_ws.cell(r_s, cd).value if cd <= sub_ws.max_column else None for cd in s_desc_cols]
                                 parsed_n = [
@@ -703,10 +782,16 @@ class ExternalNotesManager:
                                 has_nonzero_num = any(ok and abs(num) > 1e-6 for ok, num in parsed_n)
                                 if has_nonzero_num:
                                     n_vals = [
-                                        (int(num) if num == int(num) else round(num, 4)) if ok else 0
+                                        (int(num) if num == int(num) else round(num, 4)) if ok else 0.0
                                         for ok, num in parsed_n
                                     ]
-                                    collected_details.append((d_vals, n_vals))
+                                    desc_key = cls._build_desc_row_key(d_vals)
+                                    sub_counts[desc_key] = sub_counts.get(desc_key, 0) + 1
+                                    sub_rows.append((d_vals, n_vals, desc_key))
+                            for dk, cnt in sub_counts.items():
+                                if cnt > max_intra_count.get(dk, 0):
+                                    max_intra_count[dk] = cnt
+                            per_sub_rows.append(sub_rows)
 
                             used_f = set()
                             for r_sf, lbl_sf in s_footer_rows:
@@ -719,6 +804,31 @@ class ExternalNotesManager:
                                                 if ok:
                                                     footer_sums[(r_af, idx_c)] = footer_sums.get((r_af, idx_c), 0.0) + num
                                         break
+
+                        # Unificar: sumar entre compañías solo si la llave es única dentro de cada compañía (max_intra_count == 1);
+                        # si una misma compañía informó múltiples filas iguales (max_intra_count > 1), preservarlas en líneas separadas.
+                        collected_details = []
+                        merged_idx_by_key = {}
+                        for sub_rows in per_sub_rows:
+                            for d_vals, n_vals, desc_key in sub_rows:
+                                is_nonempty_key = any(part != "" for part in desc_key)
+                                if is_nonempty_key and max_intra_count.get(desc_key, 0) == 1:
+                                    if desc_key in merged_idx_by_key:
+                                        existing_d, existing_n = collected_details[merged_idx_by_key[desc_key]]
+                                        for idx_d, dv in enumerate(d_vals):
+                                            if idx_d < len(existing_d) and (existing_d[idx_d] is None or str(existing_d[idx_d]).strip() == ""):
+                                                existing_d[idx_d] = dv
+                                        for idx_n, nv in enumerate(n_vals):
+                                            if idx_n < len(existing_n):
+                                                tot_n = float(existing_n[idx_n]) + float(nv)
+                                                existing_n[idx_n] = int(tot_n) if tot_n == int(tot_n) else round(tot_n, 4)
+                                    else:
+                                        fmt_n = [int(v) if v == int(v) else round(float(v), 4) for v in n_vals]
+                                        merged_idx_by_key[desc_key] = len(collected_details)
+                                        collected_details.append([list(d_vals), fmt_n])
+                                else:
+                                    fmt_n = [int(v) if v == int(v) else round(float(v), 4) for v in n_vals]
+                                    collected_details.append([list(d_vals), fmt_n])
 
                         if len(collected_details) > len(agg_detail_rows) and agg_detail_rows:
                             extra_det = len(collected_details) - len(agg_detail_rows)
@@ -832,7 +942,7 @@ class ExternalNotesManager:
                                 ]
                                 if candidates:
                                     best_ra = min(candidates, key=lambda ra: abs((ra - agg_r0) - off))
-                                    if abs((best_ra - agg_r0) - off) <= 8:
+                                    if norm_s in [na for (rc, na) in agg_concept_rows if rc == best_ra] or abs((best_ra - agg_r0) - off) <= max(8, agg_r_end - agg_r0):
                                         r_target = best_ra
 
                             if r_target is None and code in ("#N20.1", "#N20.2"):
@@ -843,6 +953,59 @@ class ExternalNotesManager:
                                         tc_desc = agg_ws.cell(r_target, agg_desc_cols[0])
                                         if not (isinstance(tc_desc, MergedCell) or tc_desc.__class__.__name__ == "MergedCell"):
                                             tc_desc.value = v_s_desc
+
+                            # Si una sociedad informa un concepto nuevo con saldo != 0 que no existía en la plantilla base,
+                            # insertarlo dinámicamente antes de la fila de Total / Saldo final y expandir =SUM(...)
+                            if r_target is None and code not in ("#N20.1", "#N20.2", "#N20.3") and not cls._is_footer_label_static(norm_s):
+                                has_sub_nonzero = False
+                                for cs_chk in s_data_cols:
+                                    if cs_chk <= sub_ws.max_column:
+                                        ok_chk, num_chk = cls._parse_numeric_cell(sub_ws.cell(r_s, cs_chk).value)
+                                        if ok_chk and abs(num_chk) > 1e-6:
+                                            has_sub_nonzero = True
+                                            break
+                                if has_sub_nonzero and agg_desc_cols:
+                                    tot_r = None
+                                    for r_chk in range(min(agg_ws.max_row, agg_r_end), agg_r0, -1):
+                                        lbl_chk = cls._norm_concept_static(agg_ws.cell(r_chk, agg_desc_cols[0]).value)
+                                        has_sum_chk = any(
+                                            ca_chk <= agg_ws.max_column and isinstance(agg_ws.cell(r_chk, ca_chk).value, str) and "SUM" in str(agg_ws.cell(r_chk, ca_chk).value).upper()
+                                            for ca_chk in agg_data_cols
+                                        )
+                                        if cls._is_footer_label_static(lbl_chk) or has_sum_chk:
+                                            tot_r = r_chk
+                                            break
+                                    ins_r = tot_r if tot_r is not None else (agg_r_end + 1)
+                                    old_prev_r = ins_r - 1
+                                    agg_ws.insert_rows(ins_r, amount=1)
+                                    for r_below in range(ins_r + 1, agg_ws.max_row + 1):
+                                        for c_below in range(1, agg_ws.max_column + 1):
+                                            vb = agg_ws.cell(r_below, c_below).value
+                                            if isinstance(vb, str) and vb.startswith("="):
+                                                agg_ws.cell(r_below, c_below).value = shift_formula_rows(vb, 1, min_row=ins_r)
+                                    if tot_r is not None and old_prev_r > agg_r0:
+                                        tot_r_new = tot_r + 1
+                                        for c_col in range(1, agg_ws.max_column + 1):
+                                            vf = agg_ws.cell(tot_r_new, c_col).value
+                                            if isinstance(vf, str) and vf.upper().startswith("=SUM("):
+                                                agg_ws.cell(tot_r_new, c_col).value = re.sub(
+                                                    rf'(:[A-Za-z]+){old_prev_r}\b',
+                                                    rf'\g<1>{ins_r}',
+                                                    vf
+                                                )
+                                    # Copiar fórmulas horizontales de fila si la fila anterior las tenía (ej. Activo Fijo Neto =SUM(B23:C23))
+                                    if old_prev_r > agg_r0:
+                                        for ca_f in agg_data_cols:
+                                            if ca_f <= agg_ws.max_column:
+                                                v_prev_f = agg_ws.cell(old_prev_r, ca_f).value
+                                                if isinstance(v_prev_f, str) and v_prev_f.startswith("="):
+                                                    agg_ws.cell(ins_r, ca_f).value = shift_formula_rows(v_prev_f, 1, min_row=old_prev_r)
+                                    agg_ws.cell(ins_r, agg_desc_cols[0]).value = v_s_desc
+                                    agg_r_end += 1
+                                    agg_concept_rows = [(ra + 1 if ra >= ins_r else ra, na) for (ra, na) in agg_concept_rows]
+                                    used_agg_rows = {ra + 1 if ra >= ins_r else ra for ra in used_agg_rows}
+                                    agg_concept_rows.append((ins_r, norm_s))
+                                    r_target = ins_r
 
                             if r_target is None or r_target > agg_ws.max_row:
                                 continue
@@ -905,6 +1068,12 @@ class ExternalNotesManager:
         path = cls.get_anexo_path(empresa, periodo)
         with open(path, "wb") as f:
             f.write(file_bytes)
+        cls._AGG_ANEXO_CACHE.clear()
+        try:
+            from src.core.snapshot_vault_manager import _HYBRID_COMP_CACHE
+            _HYBRID_COMP_CACHE.clear()
+        except Exception:
+            pass
         return path
 
     @classmethod
@@ -1271,7 +1440,7 @@ class ExternalNotesManager:
         return ext_desc_cols, target_desc_cols, ext_data_cols, target_data_cols
 
     @classmethod
-    def _inject_table_data(cls, ext_ws, target_ws, is_comparative: bool = False, target_lang: str = "es", structure_only: bool = False):
+    def _inject_table_data(cls, ext_ws, target_ws, is_comparative: bool = False, target_lang: str = "es", structure_only: bool = False, skip_codes: set = None, clean_unused_when_comp_only: bool = False):
         """
         Inyecta los datos y la estructura dinámica de ext_ws en target_ws alineando inteligentemente
         por código de cuadro (#Nxx.y), respetando si se inyecta como Período Actual o Período Comparativo
@@ -1366,6 +1535,8 @@ class ExternalNotesManager:
             return
 
         for code in matched_codes:
+            if skip_codes and code in skip_codes:
+                continue
             ext_codes = cls.get_code_locations(ext_ws)
             target_codes = cls.get_code_locations(target_ws)
             if code not in ext_codes or code not in target_codes:
@@ -1564,7 +1735,7 @@ class ExternalNotesManager:
                                 continue
                         tgt_detail_rows.append(r_t)
 
-                # Si ext_ws tiene más filas de detalle con contenido que la capacidad de detalle de target_ws, expandir antes del primer pie
+                # Si ext_ws tiene filas vacías espaciadoras justo debajo del encabezado antes del primer dato real (ej. R90 en #N15.8), omitirlas
                 active_ext_details = [
                     r_e for r_e in ext_detail_rows
                     if any(
@@ -1572,6 +1743,10 @@ class ExternalNotesManager:
                         for c in ext_desc_cols + ext_data_cols
                     )
                 ]
+                if active_ext_details:
+                    first_act_idx = ext_detail_rows.index(active_ext_details[0])
+                    if first_act_idx > 0:
+                        ext_detail_rows = ext_detail_rows[first_act_idx:]
                 if len(active_ext_details) > len(tgt_detail_rows) and tgt_detail_rows:
                     extra_det = len(active_ext_details) - len(tgt_detail_rows)
                     ins_at = tgt_detail_rows[-1] + 1
@@ -1612,8 +1787,8 @@ class ExternalNotesManager:
                             used_target_rows.add(r_t_f)
                             break
 
-                # Limpiar filas de detalle sobrantes en target_ws que en ext_ws están vacías (cuando no es comparativo)
-                if not is_comparative and not structure_only:
+                # Limpiar filas de detalle sobrantes en target_ws que en ext_ws están vacías
+                if (not is_comparative or clean_unused_when_comp_only) and not structure_only:
                     for idx_det, r_t_det in enumerate(tgt_detail_rows):
                         r_e_det = ext_detail_rows[idx_det] if idx_det < len(ext_detail_rows) else None
                         ext_has_desc = False
@@ -1675,19 +1850,85 @@ class ExternalNotesManager:
                             ]
                             if candidates:
                                 best_r_t = min(candidates, key=lambda rt: abs((rt - target_r0) - off))
-                                if abs((best_r_t - target_r0) - off) <= 4:
+                                if norm_e in [nt for (rc, nt) in target_concept_rows if rc == best_r_t] or abs((best_r_t - target_r0) - off) <= max(4, target_r_end - target_r0):
                                     r_target = best_r_t
                                     used_target_rows.add(best_r_t)
                                     matched_by_concept = True
                     if not matched_by_concept and len(ext_desc_cols) == 1:
-                        # No permitir que una fila de control no emparejada (ej. 'reclasificación' en #N13.1) pise una fila ya usada o de Total
-                        if r_target in used_target_rows:
-                            continue
-                        vt_existing = _norm_concept(target_ws.cell(r_target, target_desc_cols[0]).value) if r_target <= target_ws.max_row else ""
                         ve_current = _norm_concept(ext_ws.cell(r_ext, ext_desc_cols[0]).value)
-                        if _is_footer_or_summary_label(vt_existing) and not _is_footer_or_summary_label(ve_current):
-                            continue
-                        used_target_rows.add(r_target)
+                        has_ext_nonzero = False
+                        for ce_chk in ext_data_cols:
+                            if ce_chk <= ext_ws.max_column:
+                                ok_e, num_e = cls._parse_numeric_cell(ext_ws.cell(r_ext, ce_chk).value)
+                                if ok_e and abs(num_e) > 1e-6:
+                                    has_ext_nonzero = True
+                                    break
+                        # Si es un concepto nuevo con saldo != 0 ausente en target_ws, insertarlo antes del Total y expandir =SUM(...)
+                        if (
+                            ve_current
+                            and ve_current not in ("concepto", "detalle", "m$")
+                            and not _is_header_value(ext_ws.cell(r_ext, ext_desc_cols[0]).value)
+                            and not _is_footer_or_summary_label(ve_current)
+                            and has_ext_nonzero
+                            and code not in ("#N20.1", "#N20.2", "#N20.3")
+                            and not structure_only
+                            and target_desc_cols
+                        ):
+                            tot_t = None
+                            for rt_chk in range(min(target_ws.max_row, target_r_end), target_r0, -1):
+                                lbl_t_chk = _norm_concept(target_ws.cell(rt_chk, target_desc_cols[0]).value)
+                                has_sum_t_chk = any(
+                                    ct_chk <= target_ws.max_column and isinstance(target_ws.cell(rt_chk, ct_chk).value, str) and "SUM" in str(target_ws.cell(rt_chk, ct_chk).value).upper()
+                                    for ct_chk in target_data_cols
+                                )
+                                if _is_footer_or_summary_label(lbl_t_chk) or has_sum_t_chk:
+                                    tot_t = rt_chk
+                                    break
+                            ins_t = tot_t if tot_t is not None else (target_r_end + 1)
+                            old_prev_t = ins_t - 1
+                            target_ws.insert_rows(ins_t, amount=1)
+                            for r_below in range(ins_t + 1, target_ws.max_row + 1):
+                                for c_below in range(1, target_ws.max_column + 1):
+                                    vb = target_ws.cell(r_below, c_below).value
+                                    if isinstance(vb, str) and vb.startswith("="):
+                                        target_ws.cell(r_below, c_below).value = shift_formula_rows(vb, 1, min_row=ins_t)
+                            if tot_t is not None and old_prev_t > target_r0:
+                                tot_t_new = tot_t + 1
+                                for c_col in range(1, target_ws.max_column + 1):
+                                    vf = target_ws.cell(tot_t_new, c_col).value
+                                    if isinstance(vf, str) and vf.upper().startswith("=SUM("):
+                                        target_ws.cell(tot_t_new, c_col).value = re.sub(
+                                            rf'(:[A-Za-z]+){old_prev_t}\b',
+                                            rf'\g<1>{ins_t}',
+                                            vf
+                                        )
+                            if old_prev_t > target_r0:
+                                for c_f in range(max(target_desc_cols) + 1, target_ws.max_column + 1):
+                                    v_pf = target_ws.cell(old_prev_t, c_f).value
+                                    if isinstance(v_pf, str) and v_pf.startswith("="):
+                                        target_ws.cell(ins_t, c_f).value = shift_formula_rows(v_pf, 1, min_row=old_prev_t)
+                            v_raw_desc = ext_ws.cell(r_ext, ext_desc_cols[0]).value
+                            target_ws.cell(ins_t, target_desc_cols[0]).value = (
+                                translate_ifrs_term(str(v_raw_desc).strip(), target_lang="en")
+                                if (is_en and isinstance(v_raw_desc, str) and v_raw_desc.strip())
+                                else v_raw_desc
+                            )
+                            target_r_end += 1
+                            target_concept_rows = [(rt + 1 if rt >= ins_t else rt, nt) for (rt, nt) in target_concept_rows]
+                            used_target_rows = {rt + 1 if rt >= ins_t else rt for rt in used_target_rows}
+                            target_concept_rows.append((ins_t, ve_current))
+                            used_target_rows.add(ins_t)
+                            r_target = ins_t
+                        else:
+                            # No permitir que una fila de control no emparejada (ej. 'reclasificación' en #N13.1) pise una fila ya usada o de Total
+                            if r_target in used_target_rows:
+                                continue
+                            vt_existing = _norm_concept(target_ws.cell(r_target, target_desc_cols[0]).value) if r_target <= target_ws.max_row else ""
+                            if _is_footer_or_summary_label(vt_existing) and not _is_footer_or_summary_label(ve_current):
+                                continue
+                            if vt_existing and ve_current and vt_existing != ve_current and code not in ("#N20.1", "#N20.2"):
+                                continue
+                            used_target_rows.add(r_target)
 
                 if r_target > target_r_end or r_target > target_ws.max_row:
                     continue
@@ -1810,6 +2051,321 @@ class ExternalNotesManager:
                                 if not is_total_or_rate_row:
                                     target_cell.value = None
 
+            # 3. Asegurar unidad (M$), fórmulas =SUM(...) y bordes de sumatoria en columnas comparativas dinámicas o filas Saldo final / Total sin fórmula
+            if not structure_only and target_data_cols:
+                from copy import copy as _copy_st
+                from openpyxl.utils import get_column_letter
+                from openpyxl.styles import Border, Side, Font
+
+                max_desc_c = max(target_desc_cols) if target_desc_cols else target_info["col"]
+                n_td = len(target_data_cols)
+                r_lim = min(target_ws.max_row, target_r_end)
+
+                for c_target in target_data_cols:
+                    tgt_let = get_column_letter(c_target)
+                    c_ref = (c_target - n_td) if is_comparative else None
+                    if c_ref is not None and c_ref > max_desc_c:
+                        ref_let = get_column_letter(c_ref)
+                        for r_chk in range(target_r0 + 1, r_lim + 1):
+                            ref_c = target_ws.cell(r_chk, c_ref)
+                            tgt_c = target_ws.cell(r_chk, c_target)
+                            if isinstance(tgt_c, MergedCell) or tgt_c.__class__.__name__ == 'MergedCell':
+                                continue
+                            rv = ref_c.value
+                            if isinstance(rv, str) and rv.strip().lower() in ("m$", "ms", "thch$") and tgt_c.value is None:
+                                tgt_c.value = rv
+                                if ref_c.has_style:
+                                    tgt_c.font = _copy_st(ref_c.font)
+                                    tgt_c.border = _copy_st(ref_c.border)
+                                    tgt_c.fill = _copy_st(ref_c.fill)
+                                    tgt_c.alignment = _copy_st(ref_c.alignment)
+                            elif isinstance(rv, str) and rv.strip().upper().startswith("=SUM("):
+                                cur_tv = tgt_c.value
+                                if not (isinstance(cur_tv, str) and cur_tv.strip().upper().startswith("=SUM(")):
+                                    tgt_c.value = re.sub(rf'\b{ref_let}(\d+)\b', rf'{tgt_let}\1', rv, flags=re.IGNORECASE)
+                                if ref_c.has_style:
+                                    tgt_c.font = _copy_st(ref_c.font)
+                                    tgt_c.border = _copy_st(ref_c.border)
+                                    tgt_c.fill = _copy_st(ref_c.fill)
+                                    tgt_c.alignment = _copy_st(ref_c.alignment)
+                                    tgt_c.number_format = ref_c.number_format
+                            elif isinstance(tgt_c.value, (int, float)) and ref_c.has_style:
+                                tgt_c.number_format = ref_c.number_format
+                                tgt_c.font = _copy_st(ref_c.font)
+
+                    # Respaldo general: si la fila final 'Total' / 'Saldo final' quedó vacía en c_target habiendo datos numéricos arriba, generar =SUM(...)
+                    if target_desc_cols:
+                        c_d0 = target_desc_cols[0]
+                        first_num_r = None
+                        last_num_r = None
+                        for r_chk in range(target_r0 + 1, r_lim + 1):
+                            lbl_c = _norm_concept(target_ws.cell(r_chk, c_d0).value)
+                            tc_chk = target_ws.cell(r_chk, c_target)
+                            if isinstance(tc_chk, MergedCell) or tc_chk.__class__.__name__ == 'MergedCell':
+                                continue
+                            if _is_footer_or_summary_label(lbl_c):
+                                if tc_chk.value is None and first_num_r is not None and last_num_r is not None:
+                                    tc_chk.value = f"=SUM({tgt_let}{first_num_r}:{tgt_let}{last_num_r})"
+                                    tc_chk.font = Font(bold=True)
+                                    tc_chk.border = Border(
+                                        top=Side(style="thin", color="000000"),
+                                        bottom=Side(style="thin", color="000000"),
+                                    )
+                                    tc_chk.number_format = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
+                                first_num_r = None
+                                last_num_r = None
+                            elif isinstance(tc_chk.value, (int, float)) and not _is_header_value(tc_chk.value):
+                                if first_num_r is None:
+                                    first_num_r = r_chk
+                                last_num_r = r_chk
+
+    @classmethod
+    def _reconcile_multicol_act_and_cmp_in_ws(cls, act_ws, cmp_ws, target_ws, target_lang: str = "es") -> set:
+        """
+        Alinea conjuntamente Período Actual y Período Comparativo por llave descriptiva completa
+        (_build_desc_row_key + índice de ocurrencia intra-período) en tablas multicolumna con
+        columnas comparativas lado a lado (ej. #N04.3, #N14.3, #N15.5, #N15.6, #N15.8).
+        """
+        from src.core.ifrs_glossary import translate_ifrs_term
+        from src.reporting.note_generator import shift_formula_rows
+
+        handled = set()
+        if act_ws is None or cmp_ws is None or target_ws is None:
+            return handled
+
+        is_en = str(target_lang).lower() == "en"
+        act_codes = cls.get_code_locations(act_ws)
+        cmp_codes = cls.get_code_locations(cmp_ws)
+        init_tgt_codes = cls.get_code_locations(target_ws)
+        ordered_codes = [c for c, _ in sorted(init_tgt_codes.items(), key=lambda kv: kv[1]["row"])]
+
+        for code in ordered_codes:
+            if code not in act_codes or code not in cmp_codes:
+                continue
+            cfg = cls.EXTERNAL_TABLE_REGISTRY.get(code)
+            if not cfg:
+                continue
+            base_desc_cols = cfg.get("desc_cols", [])
+            base_act_cols = cfg.get("base_act_data_cols", [])
+            base_cmp_cols = cfg.get("base_cmp_data_cols", [])
+            if len(base_desc_cols) <= 1 or not base_act_cols or not base_cmp_cols or base_act_cols == base_cmp_cols:
+                continue
+
+            tgt_codes = cls.get_code_locations(target_ws)
+            if code not in tgt_codes:
+                continue
+            t_info = tgt_codes[code]
+            if "[COMPARATIVO]" in str(t_info.get("val", "")).upper():
+                continue
+            t_r0, t_c0 = t_info["row"], t_info["col"]
+
+            a_info = act_codes[code]
+            c_info = cmp_codes[code]
+            a_r0, a_c0 = a_info["row"], a_info["col"]
+            c_r0, c_c0 = c_info["row"], c_info["col"]
+            a_h = cls._get_ws_table_height(act_ws, a_r0)
+            c_h = cls._get_ws_table_height(cmp_ws, c_r0)
+            if a_h <= 0 and c_h <= 0:
+                continue
+
+            t_r_end = min(target_ws.max_row, t_r0 + max(a_h, c_h, 10) + 6)
+            for r_scan in range(t_r0 + 1, t_r_end + 1):
+                hit_b = False
+                for c_chk in range(1, min(target_ws.max_column + 1, 15)):
+                    vt_chk = target_ws.cell(r_scan, c_chk).value
+                    if vt_chk and isinstance(vt_chk, str):
+                        vt_s = vt_chk.strip()
+                        if re.search(r'#N\d+\.\d+', vt_s):
+                            hit_b = True
+                            break
+                        if c_chk == t_c0 and re.match(r'^(?:\d+|[a-z])[\)\.\-]\s+', vt_s.lower()):
+                            hit_b = True
+                            break
+                if hit_b:
+                    t_r_end = r_scan - 1
+                    break
+
+            tgt_total_rows = [
+                r_t for r_t in range(t_r0 + 1, t_r_end + 1)
+                if cls._norm_concept_static(target_ws.cell(r_t, t_c0).value).startswith("total")
+            ]
+            if len(tgt_total_rows) > 1:
+                continue
+
+            base_ref_col = base_desc_cols[0]
+            t_delta = t_c0 - base_ref_col
+            target_desc_cols = [c + t_delta for c in base_desc_cols if c + t_delta >= 1]
+            target_act_cols = [c + t_delta for c in base_act_cols if c + t_delta >= 1]
+            target_cmp_cols = [c + t_delta for c in base_cmp_cols if c + t_delta >= 1]
+
+            a_desc_cols, a_data_cols = cls._resolve_ws_table_columns(act_ws, code, a_r0, a_c0, max(a_h, 1))
+            c_desc_cols, c_data_cols = cls._resolve_ws_table_columns(cmp_ws, code, c_r0, c_c0, max(c_h, 1))
+
+            # Clasificar filas de target_ws respetando min_sum_start_row
+            min_sum_start = None
+            for r_t in range(t_r0 + 1, t_r_end + 1):
+                for c_t in target_act_cols + target_cmp_cols:
+                    if c_t <= target_ws.max_column:
+                        vt_f = target_ws.cell(r_t, c_t).value
+                        if isinstance(vt_f, str) and vt_f.upper().startswith("=SUM("):
+                            m_rng = re.search(r'[A-Za-z]+(\d+):[A-Za-z]+(\d+)', vt_f)
+                            if m_rng:
+                                r_sc = int(m_rng.group(1))
+                                if t_r0 < r_sc <= r_t and (min_sum_start is None or r_sc < min_sum_start):
+                                    min_sum_start = r_sc
+
+            raw_tgt_det, tgt_footer_rows = cls._classify_detail_and_footer_rows(
+                target_ws, t_r0, t_c0, t_r_end, target_desc_cols, target_act_cols + target_cmp_cols
+            )
+            tgt_detail_rows = []
+            for r_t in raw_tgt_det:
+                if min_sum_start is not None and r_t < min_sum_start:
+                    has_any_t = any(
+                        target_ws.cell(r_t, c).value is not None
+                        for c in target_desc_cols + target_act_cols + target_cmp_cols
+                        if c <= target_ws.max_column
+                    )
+                    if not has_any_t:
+                        continue
+                tgt_detail_rows.append(r_t)
+            if not tgt_detail_rows:
+                continue
+
+            def _extract_period_items(ws_p, r0_p, c0_p, h_p, desc_c_p, data_c_p):
+                if h_p <= 0:
+                    return [], []
+                det_r_p, foot_r_p = cls._classify_detail_and_footer_rows(
+                    ws_p, r0_p, c0_p, r0_p + h_p, desc_c_p, data_c_p
+                )
+                items = []
+                occ_tracker = {}
+                for rp in det_r_p:
+                    d_vals = [ws_p.cell(rp, cd).value if cd <= ws_p.max_column else None for cd in desc_c_p]
+                    parsed_n = [
+                        cls._parse_numeric_cell(ws_p.cell(rp, cn).value if cn <= ws_p.max_column else None)
+                        for cn in data_c_p
+                    ]
+                    if any(ok and abs(num) > 1e-6 for ok, num in parsed_n):
+                        n_vals = [
+                            (int(num) if num == int(num) else round(num, 4)) if ok else 0
+                            for ok, num in parsed_n
+                        ]
+                        dk = cls._build_desc_row_key(d_vals)
+                        occ = occ_tracker.get(dk, 0)
+                        occ_tracker[dk] = occ + 1
+                        items.append((d_vals, n_vals, (dk, occ)))
+                return items, foot_r_p
+
+            act_items, act_footers = _extract_period_items(act_ws, a_r0, a_c0, a_h, a_desc_cols, a_data_cols)
+            cmp_items, cmp_footers = _extract_period_items(cmp_ws, c_r0, c_c0, c_h, c_desc_cols, c_data_cols)
+
+            cmp_lookup = {k_occ: (idx_c, d_c, n_c) for idx_c, (d_c, n_c, k_occ) in enumerate(cmp_items)}
+            matched_cmp_indices = set()
+            unified_rows = []
+
+            for d_a, n_a, k_occ in act_items:
+                if k_occ in cmp_lookup:
+                    idx_c, d_c, n_c = cmp_lookup[k_occ]
+                    matched_cmp_indices.add(idx_c)
+                    merged_d = [
+                        d_a[i] if (i < len(d_a) and d_a[i] is not None and str(d_a[i]).strip() != "") else (d_c[i] if i < len(d_c) else None)
+                        for i in range(max(len(d_a), len(d_c)))
+                    ]
+                    unified_rows.append((merged_d, n_a, n_c))
+                else:
+                    unified_rows.append((d_a, n_a, None))
+
+            for idx_c, (d_c, n_c, _) in enumerate(cmp_items):
+                if idx_c not in matched_cmp_indices:
+                    unified_rows.append((d_c, None, n_c))
+
+            if len(unified_rows) > len(tgt_detail_rows):
+                extra_det = len(unified_rows) - len(tgt_detail_rows)
+                ins_at = tgt_detail_rows[-1] + 1
+                old_last_det = tgt_detail_rows[-1]
+                new_last_det = old_last_det + extra_det
+                target_ws.insert_rows(ins_at, amount=extra_det)
+                for r_below in range(ins_at + extra_det, target_ws.max_row + 1):
+                    for c_below in range(1, target_ws.max_column + 1):
+                        vb = target_ws.cell(r_below, c_below).value
+                        if isinstance(vb, str) and vb.startswith("="):
+                            target_ws.cell(r_below, c_below).value = shift_formula_rows(vb, extra_det, min_row=ins_at)
+                for r_f_old, _ in tgt_footer_rows:
+                    r_f_new = r_f_old + extra_det
+                    for c_col in range(1, target_ws.max_column + 1):
+                        vf = target_ws.cell(r_f_new, c_col).value
+                        if isinstance(vf, str) and vf.upper().startswith("=SUM("):
+                            target_ws.cell(r_f_new, c_col).value = re.sub(
+                                rf'(:[A-Za-z]+){old_last_det}\b',
+                                rf'\g<1>{new_last_det}',
+                                vf
+                            )
+                tgt_detail_rows.extend(range(ins_at, ins_at + extra_det))
+                tgt_footer_rows = [(rf + extra_det, lf) for (rf, lf) in tgt_footer_rows]
+
+            # Limpiar todas las celdas de detalle en target_ws antes de escribir las filas reconciliadas
+            for r_det in tgt_detail_rows:
+                for c_cl in target_desc_cols + target_act_cols + target_cmp_cols:
+                    if c_cl <= target_ws.max_column:
+                        tc = target_ws.cell(r_det, c_cl)
+                        if not (isinstance(tc, MergedCell) or tc.__class__.__name__ == "MergedCell"):
+                            if not (isinstance(tc.value, str) and tc.value.startswith("=")):
+                                tc.value = None
+
+            for idx_u, (d_vals, n_act, n_cmp) in enumerate(unified_rows):
+                if idx_u >= len(tgt_detail_rows):
+                    break
+                r_dst = tgt_detail_rows[idx_u]
+                for idx_d, cd_t in enumerate(target_desc_cols):
+                    if idx_d < len(d_vals) and cd_t <= target_ws.max_column:
+                        val_d = d_vals[idx_d]
+                        if val_d is not None and not cls._is_header_cell_static(val_d, allow_dates=True):
+                            tc = target_ws.cell(r_dst, cd_t)
+                            if not (isinstance(tc, MergedCell) or tc.__class__.__name__ == "MergedCell"):
+                                if is_en and isinstance(val_d, str) and val_d.strip():
+                                    tc.value = translate_ifrs_term(val_d.strip(), target_lang="en")
+                                else:
+                                    tc.value = val_d
+                if n_act is not None:
+                    for idx_n, ca_t in enumerate(target_act_cols):
+                        if idx_n < len(n_act) and ca_t <= target_ws.max_column:
+                            tc = target_ws.cell(r_dst, ca_t)
+                            if not (isinstance(tc, MergedCell) or tc.__class__.__name__ == "MergedCell"):
+                                if not (isinstance(tc.value, str) and tc.value.startswith("=")):
+                                    tc.value = float(n_act[idx_n])
+                if n_cmp is not None:
+                    for idx_n, cc_t in enumerate(target_cmp_cols):
+                        if idx_n < len(n_cmp) and cc_t <= target_ws.max_column:
+                            tc = target_ws.cell(r_dst, cc_t)
+                            if not (isinstance(tc, MergedCell) or tc.__class__.__name__ == "MergedCell"):
+                                if not (isinstance(tc.value, str) and tc.value.startswith("=")):
+                                    tc.value = float(n_cmp[idx_n])
+
+            # Inyectar valores de pie no-fórmula (ej. intereses diferidos / devengados) para Actual y Comparativo
+            for src_ws, src_footers, src_data_cols, dst_data_cols in (
+                (act_ws, act_footers, a_data_cols, target_act_cols),
+                (cmp_ws, cmp_footers, c_data_cols, target_cmp_cols),
+            ):
+                used_tf = set()
+                for r_sf, lbl_sf in src_footers:
+                    for r_tf, lbl_tf in tgt_footer_rows:
+                        if r_tf not in used_tf and (lbl_sf == lbl_tf or (lbl_sf[:15] and lbl_sf[:15] == lbl_tf[:15])):
+                            used_tf.add(r_tf)
+                            for idx_n, c_src in enumerate(src_data_cols):
+                                if idx_n < len(dst_data_cols) and c_src <= src_ws.max_column and dst_data_cols[idx_n] <= target_ws.max_column:
+                                    tc = target_ws.cell(r_tf, dst_data_cols[idx_n])
+                                    if isinstance(tc, MergedCell) or tc.__class__.__name__ == "MergedCell":
+                                        continue
+                                    if isinstance(tc.value, str) and tc.value.startswith("="):
+                                        continue
+                                    ok_f, num_f = cls._parse_numeric_cell(src_ws.cell(r_sf, c_src).value)
+                                    if ok_f:
+                                        tc.value = float(num_f)
+                            break
+
+            handled.add(code)
+        return handled
+
     @classmethod
     def inject_external_data(cls, excel_bytes_in: BytesIO, empresa: str, periodo_actual: str, periodo_comp: str = None, target_lang: str = "es", **kwargs) -> BytesIO:
         """
@@ -1874,15 +2430,56 @@ class ExternalNotesManager:
                 cmp_ws = None
                 struct_ws = None
 
+            # Preservar líneas contables PPA de consolidación ('Asignacion de compra' y 'Amortizacion PPA')
+            # en #N09.1 cuando la nota Activo Fijo de un grupo consolidado se auto-agrega desde anexos de filiales.
+            saved_af_ppa_cells = {}
+            if sheet_name == "Activo Fijo" and str(empresa or "").strip().startswith("[GRUPO]"):
+                from src.core.consolidacion_account_mapper import normalize_text
+                for r_af in range(1, min(35, target_ws.max_row + 1)):
+                    lbl_af = normalize_text(target_ws.cell(row=r_af, column=1).value)
+                    if lbl_af in ("asignacion de compra", "amortizacion ppa"):
+                        for c_af in (2, 3, 5, 6):
+                            v_af = target_ws.cell(row=r_af, column=c_af).value
+                            if isinstance(v_af, (int, float)) and not isinstance(v_af, bool) and abs(float(v_af)) > 0.001:
+                                saved_af_ppa_cells[(r_af, c_af)] = v_af
+
+            handled_multicol_codes = set()
+            if act_ws and cmp_ws:
+                handled_multicol_codes = cls._reconcile_multicol_act_and_cmp_in_ws(
+                    act_ws, cmp_ws, target_ws, target_lang=target_lang
+                )
+
             # 1. Inyectar datos del período comparativo (si existe)
             if cmp_ws:
-                cls._inject_table_data(cmp_ws, target_ws, is_comparative=True, target_lang=target_lang)
+                cls._inject_table_data(
+                    cmp_ws,
+                    target_ws,
+                    is_comparative=True,
+                    target_lang=target_lang,
+                    skip_codes=handled_multicol_codes,
+                    clean_unused_when_comp_only=(act_ws is None),
+                )
 
             # 2. Inyectar datos del período actual (si existe) o sincronizar estructura desde la plantilla máster
             if act_ws:
-                cls._inject_table_data(act_ws, target_ws, is_comparative=False, target_lang=target_lang)
-            elif struct_ws:
+                cls._inject_table_data(
+                    act_ws,
+                    target_ws,
+                    is_comparative=False,
+                    target_lang=target_lang,
+                    skip_codes=handled_multicol_codes,
+                )
+            elif struct_ws and not cmp_ws:
                 cls._inject_table_data(struct_ws, target_ws, is_comparative=False, target_lang=target_lang, structure_only=True)
+
+            if saved_af_ppa_cells:
+                num_fmt_af = r'_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
+                for (r_af, c_af), v_af in saved_af_ppa_cells.items():
+                    if (c_af in (2, 3) and act_ws is not None and is_auto_agg_act) or (c_af in (5, 6) and cmp_ws is not None and is_auto_agg_cmp):
+                        cur_cell = target_ws.cell(row=r_af, column=c_af)
+                        if cur_cell.value in (None, 0, 0.0, ""):
+                            cur_cell.value = v_af
+                            cur_cell.number_format = num_fmt_af
 
             # 3. Procesar duplicación de cuadros comparativos para tablas con [COMPARATIVO]
             from src.reporting.note_generator import process_comparative_tables_in_ws

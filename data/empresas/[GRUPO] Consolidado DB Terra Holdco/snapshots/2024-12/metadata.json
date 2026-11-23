@@ -1,0 +1,24 @@
+{
+  "empresa": "[GRUPO] Consolidado DB Terra Holdco",
+  "periodo": "2024-12",
+  "comp_period_bal": "2023-12",
+  "comp_period_pl": "2023-12",
+  "base_scale": 1000.0,
+  "is_consolidated": true,
+  "fecha_cierre": "2026-11-18T19:37:22.366128",
+  "cerrado_por": "PDF PwC 2024 Import",
+  "statements_count": 5,
+  "notes_count": 1,
+  "statements": [
+    "#BALANCE",
+    "#ER",
+    "#ORI",
+    "#PATRIMONIO",
+    "#EFE"
+  ],
+  "notes": [
+    "#N08"
+  ],
+  "is_active": true,
+  "checksum": "3e856738588acff71227bf91d7b6e908661aff0ff6801d3f5ba6bbf7148ba6fa"
+}

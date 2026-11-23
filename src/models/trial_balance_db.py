@@ -152,13 +152,22 @@ class TrialBalanceDB:
         """
         db = SessionLocal()
         try:
+            from src.models.historical_data import HistoricalDataRecord, ClosingSnapshotRecord
+
             if empresa and str(empresa).startswith("[GRUPO]"):
                 grupo_name = str(empresa).replace("[GRUPO] ", "").strip()
                 from src.models.consolidacion import ConsolidationGroup
                 grupo = db.query(ConsolidationGroup).filter_by(nombre_grupo=grupo_name).first()
+                periods_snap_grp = db.query(ClosingSnapshotRecord.periodo).filter(
+                    ClosingSnapshotRecord.empresa == empresa,
+                    ClosingSnapshotRecord.is_active == True,
+                ).distinct().all()
+                grp_set = {p[0] for p in periods_snap_grp if p[0]}
                 if grupo and grupo.empresa_matriz:
                     db.close()
-                    return TrialBalanceDB.get_available_periods(grupo.empresa_matriz)
+                    base_list = TrialBalanceDB.get_available_periods(grupo.empresa_matriz)
+                    return sorted(list(set(base_list) | grp_set), reverse=True)
+                return sorted(list(grp_set), reverse=True)
 
             # Obtener periodos de Memoria Activa
             periods_tb = db.query(TrialBalanceRecord.periodo).filter(
@@ -166,12 +175,17 @@ class TrialBalanceDB:
             ).distinct().all()
             
             # Obtener periodos de Memoria Histórica (valores pegados)
-            from src.models.historical_data import HistoricalDataRecord
             periods_hist = db.query(HistoricalDataRecord.periodo).filter(
                 HistoricalDataRecord.empresa == empresa
             ).distinct().all()
+
+            # Obtener periodos con Snapshot activo en Bóveda (ej. cierres importados como 2024-12)
+            periods_snap = db.query(ClosingSnapshotRecord.periodo).filter(
+                ClosingSnapshotRecord.empresa == empresa,
+                ClosingSnapshotRecord.is_active == True,
+            ).distinct().all()
             
-            res = list(set([p[0] for p in periods_tb] + [p[0] for p in periods_hist]))
+            res = list({p[0] for p in periods_tb if p[0]} | {p[0] for p in periods_hist if p[0]} | {p[0] for p in periods_snap if p[0]})
             res.sort(reverse=True)
             return res
         finally:

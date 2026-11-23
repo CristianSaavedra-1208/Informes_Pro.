@@ -139,10 +139,124 @@ def get_target_equity_line(keys_list) -> str:
 
 
 
+def _calcular_saldos_vivos_empresa(empresa: str, periodo: str, db) -> dict:
+    """
+    Calcula al vuelo los agregados de Balance y P&L de una sociedad individual cuyo período
+    se encuentra abierto en memoria activa (sin registros en HistoricalDataRecord), replicando
+    exactamente la lógica vectorizada de cierre_engine.ejecutar_cierre_periodo.
+    """
+    import os
+    from sqlalchemy import func
+    from src.models.trial_balance_db import TrialBalanceDB
+    from src.models.pl_record import PlRecordDim
+    from src.models.audit_adjustment import AuditAdjustmentRecord
+
+    if not empresa or not periodo or str(empresa).startswith("[GRUPO]"):
+        return {}
+
+    tb_df = TrialBalanceDB.get_trial_balance(empresa, periodo)
+    if tb_df is None or tb_df.empty:
+        return {}
+
+    empresa_path = os.path.join("data", "empresas", str(empresa).strip())
+    if not os.path.exists(empresa_path):
+        try:
+            from src.core.external_notes_manager import ExternalNotesManager
+            canon = ExternalNotesManager.resolve_canonical_company_name(empresa)
+            cand_p = os.path.join("data", "empresas", canon)
+            if os.path.exists(cand_p):
+                empresa_path = cand_p
+        except Exception:
+            pass
+
+    map_bal_path = os.path.join(empresa_path, "map_balance.xlsx")
+    df_bal = pd.DataFrame(columns=['cuenta_id', 'clasificacion_balance'])
+    if os.path.exists(map_bal_path):
+        try:
+            df_b_raw = pd.read_excel(map_bal_path, dtype=str)
+            df_b_raw.columns = [str(c).strip() for c in df_b_raw.columns]
+            cuenta_col = next((c for c in df_b_raw.columns if "cuenta" in c.lower()), None)
+            clasif_col = next((c for c in df_b_raw.columns if "clasificaci" in c.lower() and "balance" in c.lower()), None)
+            if not clasif_col:
+                clasif_col = next((c for c in df_b_raw.columns if "clasificaci" in c.lower()), None)
+            if cuenta_col and clasif_col:
+                df_bal = pd.DataFrame({
+                    'cuenta_id': df_b_raw[cuenta_col].astype(str).str.strip(),
+                    'clasificacion_balance': df_b_raw[clasif_col].astype(str).str.strip(),
+                })
+        except Exception:
+            pass
+
+    tb_work = tb_df.copy()
+    tb_work['cuenta_id'] = tb_work['cuenta_id'].astype(str).str.strip()
+    merged = pd.merge(tb_work, df_bal, on='cuenta_id', how='left')
+    merged['saldo_final'] = pd.to_numeric(merged['saldo_final'], errors='coerce').fillna(0.0)
+
+    _cid_str = merged['cuenta_id'].astype(str).str.strip()
+    _is_bs_acct = _cid_str.str.startswith(('1', '2')) | (
+        _cid_str.str.startswith('9999') & ~_cid_str.str.startswith('99993')
+    )
+    _bs_only_sum = float(merged.loc[_is_bs_acct, 'saldo_final'].sum())
+    _tb_all_sum = float(merged['saldo_final'].sum())
+    _bs_already_closed = (abs(_bs_only_sum) <= 100.0) and (abs(_tb_all_sum) > 100.0)
+
+    summaries = {}
+    is_valid_bal = (
+        merged['clasificacion_balance'].notna() &
+        (merged['clasificacion_balance'] != '') &
+        (merged['clasificacion_balance'].str.lower() != 'nan') &
+        (merged['clasificacion_balance'].str.lower() != 'none')
+    )
+    mapped_bal = merged[is_valid_bal]
+    if _bs_already_closed:
+        mapped_bal = mapped_bal[_is_bs_acct.loc[mapped_bal.index]]
+    if not mapped_bal.empty:
+        bal_grouped = mapped_bal.groupby('clasificacion_balance')['saldo_final'].sum().to_dict()
+        for cls_b, sum_val in bal_grouped.items():
+            summaries[str(cls_b).strip()] = summaries.get(str(cls_b).strip(), 0.0) + float(sum_val)
+
+    if not _bs_already_closed:
+        unmapped_bal = merged[~is_valid_bal]
+        pl_residual = float(unmapped_bal['saldo_final'].sum())
+
+        found_eq_key = 'Resultados acumulados'
+        for k in list(summaries.keys()):
+            if k.lower() in ['resultados acumulados', 'ganancias (pérdidas) acumuladas', 'ganancias (perdidas) acumuladas']:
+                found_eq_key = k
+                break
+        summaries[found_eq_key] = summaries.get(found_eq_key, 0.0) + pl_residual
+
+    pl_records = db.query(
+        PlRecordDim.rubro,
+        func.sum(PlRecordDim.monto).label('monto')
+    ).filter(
+        PlRecordDim.empresa == empresa,
+        PlRecordDim.periodo == periodo
+    ).group_by(PlRecordDim.rubro).all()
+
+    for r in pl_records:
+        if pd.notna(r.rubro) and str(r.rubro).strip():
+            li_pl = str(r.rubro).strip()
+            summaries[li_pl] = summaries.get(li_pl, 0.0) + float(r.monto)
+
+    adj_records = db.query(AuditAdjustmentRecord).filter(
+        AuditAdjustmentRecord.empresa == empresa,
+        AuditAdjustmentRecord.periodo == periodo
+    ).all()
+    for adj in adj_records:
+        if adj.linea_item and is_pl_account(adj.linea_item):
+            li_adj = str(adj.linea_item).strip()
+            summaries[li_adj] = summaries.get(li_adj, 0.0) + float(adj.debe - adj.haber)
+
+    return summaries
+
+
 def obtener_saldos_base(grupo_id: int, periodo: str, db=None):
     """
     Obtiene los saldos base de Matriz y Filial para el periodo dado,
     retornando un diccionario {linea_item: {'Matriz': float, 'Filial': float}}.
+    Si alguna sociedad individual tiene el período abierto en memoria activa (sin registros
+    en HistoricalDataRecord), calcula sus saldos base al vuelo de forma transparente.
     """
     is_local_db = False
     if db is None:
@@ -155,8 +269,17 @@ def obtener_saldos_base(grupo_id: int, periodo: str, db=None):
             
         matriz_records = db.query(HistoricalDataRecord).filter_by(empresa=grupo.empresa_matriz, periodo=periodo).all()
         base_data = {}
-        for r in matriz_records:
-            base_data[r.linea_item] = {'Matriz': r.monto, 'Filial': 0.0}
+        if matriz_records:
+            for r in matriz_records:
+                if r.linea_item not in base_data:
+                    base_data[r.linea_item] = {'Matriz': 0.0, 'Filial': 0.0}
+                base_data[r.linea_item]['Matriz'] += float(r.monto)
+        else:
+            live_matriz = _calcular_saldos_vivos_empresa(grupo.empresa_matriz, periodo, db)
+            for li_m, monto_m in live_matriz.items():
+                if li_m not in base_data:
+                    base_data[li_m] = {'Matriz': 0.0, 'Filial': 0.0}
+                base_data[li_m]['Matriz'] += float(monto_m)
             
         if grupo.filial_is_group:
             sub_grupo_id = int(grupo.empresa_filial)
@@ -201,10 +324,17 @@ def obtener_saldos_base(grupo_id: int, periodo: str, db=None):
                     base_data[li_str]['Filial'] += float(val)
         else:
             filial_records = db.query(HistoricalDataRecord).filter_by(empresa=grupo.empresa_filial, periodo=periodo).all()
-            for r in filial_records:
-                if r.linea_item not in base_data:
-                    base_data[r.linea_item] = {'Matriz': 0.0, 'Filial': 0.0}
-                base_data[r.linea_item]['Filial'] += r.monto
+            if filial_records:
+                for r in filial_records:
+                    if r.linea_item not in base_data:
+                        base_data[r.linea_item] = {'Matriz': 0.0, 'Filial': 0.0}
+                    base_data[r.linea_item]['Filial'] += float(r.monto)
+            else:
+                live_filial = _calcular_saldos_vivos_empresa(grupo.empresa_filial, periodo, db)
+                for li_f, monto_f in live_filial.items():
+                    if li_f not in base_data:
+                        base_data[li_f] = {'Matriz': 0.0, 'Filial': 0.0}
+                    base_data[li_f]['Filial'] += float(monto_f)
                 
         return base_data
     finally:
@@ -1060,3 +1190,54 @@ def generar_hoja_trabajo(grupo_id: int, periodo: str):
         return None, str(e)
     finally:
         db.close()
+
+
+def get_available_consolidation_periods(grupo_id=None, db=None):
+    """
+    Retorna la lista ordenada (descendente) de todos los períodos YYYY-MM disponibles
+    para consolidación, unificando:
+    1) HistoricalDataRecord (períodos cerrados de empresas individuales)
+    2) ClosingSnapshotRecord activos y ConsolidationPeriodLock (períodos cerrados de grupos)
+    3) TrialBalanceRecord (períodos abiertos con balance cargado)
+    4) ConsolidationJournalEntry (períodos con comprobantes registrados)
+    """
+    import re
+    from src.models.historical_data import ClosingSnapshotRecord
+    from src.models.consolidacion import ConsolidationPeriodLock
+    from src.models.trial_balance import TrialBalanceRecord
+
+    local_db = False
+    if db is None:
+        db = SessionLocal()
+        local_db = True
+
+    periods = set()
+    try:
+        for (p,) in db.query(HistoricalDataRecord.periodo).distinct().all():
+            if p:
+                periods.add(str(p).strip())
+        for (p,) in db.query(ClosingSnapshotRecord.periodo).filter_by(is_active=True).distinct().all():
+            if p:
+                periods.add(str(p).strip())
+        q_lock = db.query(ConsolidationPeriodLock.periodo).filter_by(is_locked=True)
+        if grupo_id is not None:
+            q_lock = q_lock.filter_by(grupo_id=grupo_id)
+        for (p,) in q_lock.distinct().all():
+            if p:
+                periods.add(str(p).strip())
+        for (p,) in db.query(TrialBalanceRecord.periodo).distinct().all():
+            if p:
+                periods.add(str(p).strip())
+        q_je = db.query(ConsolidationJournalEntry.periodo)
+        if grupo_id is not None:
+            q_je = q_je.filter_by(grupo_id=grupo_id)
+        for (p,) in q_je.distinct().all():
+            if p:
+                periods.add(str(p).strip())
+    finally:
+        if local_db:
+            db.close()
+
+    valid = sorted([p for p in periods if re.match(r'^\d{4}-\d{2}$', p)], reverse=True)
+    return valid if valid else ["2026-12", "2025-12"]
+

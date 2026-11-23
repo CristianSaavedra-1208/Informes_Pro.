@@ -1,0 +1,22 @@
+{
+  "empresa": "Pacifico Cable SpA",
+  "periodo": "2024-12",
+  "comp_period_bal": "2023-12",
+  "comp_period_pl": "2023-12",
+  "base_scale": 1000.0,
+  "is_consolidated": false,
+  "fecha_cierre": "2026-11-18T19:37:23.112864",
+  "cerrado_por": "PDF PwC 2024 Import",
+  "statements_count": 5,
+  "notes_count": 0,
+  "statements": [
+    "#BALANCE",
+    "#ER",
+    "#ORI",
+    "#PATRIMONIO",
+    "#EFE"
+  ],
+  "notes": [],
+  "is_active": true,
+  "checksum": "b1b1b2c5ea771ec7b1f84dd07fe751fe7244b88d2d81b253727dfa2ca8e07995"
+}

@@ -5,7 +5,7 @@
   "comp_period_pl": "2025-10",
   "base_scale": 1000.0,
   "is_consolidated": false,
-  "fecha_cierre": "2026-11-13T10:47:07.892652",
+  "fecha_cierre": "2026-11-16T12:38:01.964751",
   "cerrado_por": "Usuario Cierre",
   "statements_count": 6,
   "notes_count": 22,
@@ -41,6 +41,6 @@
     "#N25",
     "#N27"
   ],
-  "checksum": "2dc667f905b28261322d657cf5f495e54486edfa06107543239af6c8a4962285",
+  "checksum": "b06af88401713f97ad15c1f7949dee7aabd1af7faf942a14ff9b4e934dc75547",
   "is_active": true
 }

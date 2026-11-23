@@ -90,33 +90,46 @@ def ejecutar_cierre_periodo(empresa: str, periodo: str, empresa_path: str, progr
         # 5. Agrupar y preparar summaries usando vectorización
         summaries = {}
         
+        # Detectar si el Balance de 1xxx+2xxx ya viene cerrado en 0 en el TB de origen
+        # (ej. Pacifico 2025-12), para no duplicar cuentas 3xxx+ dentro de Resultados acumulados.
+        _cid_str = merged['cuenta_id'].astype(str).str.strip()
+        _is_bs_acct = _cid_str.str.startswith(('1', '2')) | (
+            _cid_str.str.startswith('9999') & ~_cid_str.str.startswith('99993')
+        )
+        _bs_only_sum = float(merged.loc[_is_bs_acct, 'saldo_final'].sum())
+        _tb_all_sum = float(merged['saldo_final'].sum())
+        _bs_already_closed = (abs(_bs_only_sum) <= 100.0) and (abs(_tb_all_sum) > 100.0)
+
         # Filtrar registros mapeados para balance
         mapped_bal = merged[
             merged['clasificacion_balance'].notna() & 
             (merged['clasificacion_balance'] != '') & 
             (merged['clasificacion_balance'] != 'nan')
         ]
+        if _bs_already_closed:
+            mapped_bal = mapped_bal[_is_bs_acct.loc[mapped_bal.index]]
         
         if not mapped_bal.empty:
             bal_grouped = mapped_bal.groupby('clasificacion_balance')['saldo_final'].sum().to_dict()
             for cls_b, sum_val in bal_grouped.items():
                 summaries[('Balance', cls_b)] = float(sum_val)
 
-        # Calcular residuo de P&L (cuentas no clasificadas en Balance van a Resultados del ejercicio)
-        unmapped_bal = merged[
-            merged['clasificacion_balance'].isna() | 
-            (merged['clasificacion_balance'] == '') | 
-            (merged['clasificacion_balance'] == 'nan')
-        ]
-        pl_residual = float(unmapped_bal['saldo_final'].sum())
+        if not _bs_already_closed:
+            # Calcular residuo de P&L (cuentas no clasificadas en Balance van a Resultados del ejercicio)
+            unmapped_bal = merged[
+                merged['clasificacion_balance'].isna() | 
+                (merged['clasificacion_balance'] == '') | 
+                (merged['clasificacion_balance'] == 'nan')
+            ]
+            pl_residual = float(unmapped_bal['saldo_final'].sum())
 
-        # Inyectar el resultado del ejercicio a Resultados acumulados
-        found_key = ('Balance', 'Resultados acumulados')
-        for k in list(summaries.keys()):
-            if k[0] == 'Balance' and k[1].lower() in ['resultados acumulados', 'ganancias (pérdidas) acumuladas']:
-                found_key = k
-                break
-        summaries[found_key] = summaries.get(found_key, 0.0) + pl_residual
+            # Inyectar el resultado del ejercicio a Resultados acumulados
+            found_key = ('Balance', 'Resultados acumulados')
+            for k in list(summaries.keys()):
+                if k[0] == 'Balance' and k[1].lower() in ['resultados acumulados', 'ganancias (pérdidas) acumuladas']:
+                    found_key = k
+                    break
+            summaries[found_key] = summaries.get(found_key, 0.0) + pl_residual
                 
         # Agregar sumatorias del Cubo P&L
         for r in pl_records:

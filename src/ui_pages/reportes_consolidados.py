@@ -34,11 +34,8 @@ def render(empresa_seleccionada, empresa_path):
         
         # (El estado de las plantillas se muestra al final de la página para no obstruir la operación)
         
-        db = SessionLocal()
-        per_recs3 = db.query(HistoricalDataRecord.periodo).distinct().all()
-        db.close()
-        periodos_hist3 = sorted([r[0] for r in per_recs3], reverse=True)
-        if not periodos_hist3: periodos_hist3 = ["2026-12", "2025-12"]
+        from src.core.consolidacion_engine import get_available_consolidation_periods
+        periodos_hist3 = get_available_consolidation_periods(grupo_id=sel_g3)
         
         with st.form("form_emision_consolidada"):
             col_p_act, col_p_comp = st.columns(2)
@@ -659,6 +656,15 @@ def render(empresa_seleccionada, empresa_path):
                                 target_lang=target_lang
                             )
                             # pl_df ya viene listo del ERGenerator como preview_df
+
+                            # Si el período comparativo posee un Snapshot cerrado en Bóveda, blindar bal_df y pl_df con los saldos congelados
+                            if periodo_comp_g != "Ninguno" and SnapshotVaultManager.has_active_snapshot(ent_grp_name, periodo_comp_g):
+                                bal_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                    bal_df, ent_grp_name, "BALANCE", periodo_act_g, periodo_comp_g, scale_factor=scale_factor
+                                )
+                                pl_df = SnapshotVaultManager.apply_closed_comp_to_statement(
+                                    pl_df, ent_grp_name, "ER", periodo_act_g, periodo_comp_g, scale_factor=scale_factor
+                                )
                             
                             # 3. Generar reporte
                             if report_type == "Estado de Cambios en el Patrimonio":
@@ -1009,7 +1015,7 @@ def render(empresa_seleccionada, empresa_path):
                     st.write("")
                     st.subheader("🔍 Validación de Ecuación Contable: Activos - (Pasivos + Patrimonio)")
                     
-                    cols_verificar = [col_actual, col_comp]
+                    cols_verificar = [c for c in [col_actual, col_comp] if c in preview_df.columns]
                     cols_metrics = st.columns(len(cols_verificar))
                     
                     for idx, col in enumerate(cols_verificar):
@@ -1038,7 +1044,7 @@ def render(empresa_seleccionada, empresa_path):
                 st.subheader("🔍 Validación de Resultado Consolidado vs. Hoja de Trabajo")
                 
                 df_valid_rows = preview_df[preview_df.iloc[:, 0].notna() & (preview_df.iloc[:, 0].astype(str).str.strip() != "")]
-                if not df_valid_rows.empty and df_hoja_act is not None:
+                if not df_valid_rows.empty:
                     target_names = [
                         "ganancias (perdida) del ejercicio",
                         "ganancias (pérdida) del ejercicio",
@@ -1058,46 +1064,52 @@ def render(empresa_seleccionada, empresa_path):
                             net_income_row = matched_rows.iloc[0]
                             break
 
+                    def _get_hoja_res(df_hoja_p):
+                        if df_hoja_p is None or df_hoja_p.empty:
+                            return None
+                        idx_er_p = df_hoja_p[df_hoja_p['Balance clasificado'] == "Estado de Resultados"].index
+                        df_sec_p = df_hoja_p.loc[idx_er_p[0]+1:] if not idx_er_p.empty else df_hoja_p
+                        row_hoja_p = df_sec_p[df_sec_p['Balance clasificado'].astype(str).str.strip() == "Ganancias (Pérdida) del Ejercicio"]
+                        return float(row_hoja_p['CONSOLIDADO'].values[0]) if not row_hoja_p.empty else 0.0
+
                     val_actual_report = float(net_income_row[col_actual]) if pd.notna(net_income_row[col_actual]) else 0.0
                     val_actual_report_pesos = val_actual_report * scale_factor
-                    
-                    idx_er_act = df_hoja_act[df_hoja_act['Balance clasificado'] == "Estado de Resultados"].index
-                    df_sec_act = df_hoja_act.loc[idx_er_act[0]+1:] if not idx_er_act.empty else df_hoja_act
-                    
-                    row_hoja_act = df_sec_act[df_sec_act['Balance clasificado'].astype(str).str.strip() == "Ganancias (Pérdida) del Ejercicio"]
-                    val_actual_workpaper = float(row_hoja_act['CONSOLIDADO'].values[0]) if not row_hoja_act.empty else 0.0
-                    
-                    cols_verificar = [(col_actual, val_actual_report_pesos, val_actual_workpaper)]
-                    
-                    if col_comp in preview_df.columns and df_hoja_comp is not None:
+                    cols_verificar = [(col_actual, periodo_act_g, val_actual_report_pesos, _get_hoja_res(df_hoja_act))]
+
+                    if col_comp in preview_df.columns and periodo_comp_g != "Ninguno":
                         val_comp_report = float(net_income_row[col_comp]) if pd.notna(net_income_row[col_comp]) else 0.0
                         val_comp_report_pesos = val_comp_report * scale_factor
-                        
-                        idx_er_comp = df_hoja_comp[df_hoja_comp['Balance clasificado'] == "Estado de Resultados"].index
-                        df_sec_comp = df_hoja_comp.loc[idx_er_comp[0]+1:] if not idx_er_comp.empty else df_hoja_comp
-                        
-                        row_hoja_comp = df_sec_comp[df_sec_comp['Balance clasificado'].astype(str).str.strip() == "Ganancias (Pérdida) del Ejercicio"]
-                        val_comp_workpaper = float(row_hoja_comp['CONSOLIDADO'].values[0]) if not row_hoja_comp.empty else 0.0
-                        cols_verificar.append((col_comp, val_comp_report_pesos, val_comp_workpaper))
-                        
+                        cols_verificar.append((col_comp, periodo_comp_g, val_comp_report_pesos, _get_hoja_res(df_hoja_comp)))
+
+                    from src.core.snapshot_vault_manager import SnapshotVaultManager
+                    ent_grp_name_val = f"[GRUPO] {grupo_name}"
                     cols_metrics = st.columns(len(cols_verificar))
-                    for idx, (col_name, val_rep_pesos, val_wp_pesos) in enumerate(cols_verificar):
-                        diff = abs(abs(val_rep_pesos) - abs(val_wp_pesos))
-                        
+                    for idx, (col_name, per_val, val_rep_pesos, val_wp_pesos) in enumerate(cols_verificar):
+                        meta_p = SnapshotVaultManager._get_snapshot_meta(ent_grp_name_val, per_val) or {}
+                        is_pdf_snap = "pdf" in str(meta_p.get("cerrado_por", "")).lower()
+                        rep_fmt = f"{val_rep_pesos:,.0f}".replace(",", ".")
+
                         with cols_metrics[idx]:
-                            if diff <= 999.0:
-                                diff_fmt = f"{diff:,.0f}".replace(",", ".")
-                                st.success(f"**{col_name}**\n\nCuadrado (Diferencia: ${diff_fmt})")
-                            else:
-                                diff_fmt = f"{diff:,.0f}".replace(",", ".")
-                                rep_fmt = f"{val_rep_pesos:,.0f}".replace(",", ".")
-                                wp_fmt = f"{val_wp_pesos:,.0f}".replace(",", ".")
-                                st.error(
+                            if is_pdf_snap or val_wp_pesos is None:
+                                st.info(
                                     f"**{col_name}**\n\n"
-                                    f"❌ Descuadre: ${diff_fmt}\n\n"
-                                    f"* Reporte Cons.: ${rep_fmt}\n"
-                                    f"* Hoja de Trabajo: ${wp_fmt}"
+                                    f"🔒 Snapshot histórico importado (sin Hoja de Trabajo en BD)\n\n"
+                                    f"* Reporte Cons.: ${rep_fmt}"
                                 )
+                            else:
+                                diff = abs(abs(val_rep_pesos) - abs(val_wp_pesos))
+                                if diff <= 999.0:
+                                    diff_fmt = f"{diff:,.0f}".replace(",", ".")
+                                    st.success(f"**{col_name}**\n\nCuadrado (Diferencia: ${diff_fmt})")
+                                else:
+                                    diff_fmt = f"{diff:,.0f}".replace(",", ".")
+                                    wp_fmt = f"{val_wp_pesos:,.0f}".replace(",", ".")
+                                    st.error(
+                                        f"**{col_name}**\n\n"
+                                        f"❌ Descuadre: ${diff_fmt}\n\n"
+                                        f"* Reporte Cons.: ${rep_fmt}\n"
+                                        f"* Hoja de Trabajo: ${wp_fmt}"
+                                    )
                 st.write("")
                 
             col_dn1, col_dn2 = st.columns(2)

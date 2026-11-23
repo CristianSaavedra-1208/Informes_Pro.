@@ -200,6 +200,96 @@ class TestHybridSnapshotComparative(unittest.TestCase):
                 self.assertEqual(list(res_none["2026-10"]), [500000, -200000, 300000])
                 self.assertTrue(res_none["Comp"].isna().all())
 
+    def test_open_parent_or_subsidiary_consolidation_and_patrimonio_shield(self):
+        """
+        Verifica que si una sociedad del grupo tiene su período abierto en memoria activa
+        (sin registros en HistoricalDataRecord), obtener_saldos_base / generar_hoja_trabajo
+        calcule sus saldos al vuelo y el Estado de Cambios en el Patrimonio cuadre 2025-12 completo.
+        """
+        from src.core.consolidacion_engine import generar_hoja_trabajo
+        from src.reporting.patrimonio_generator import get_patrimonio_balances_from_db
+
+        df_h, _ = generar_hoja_trabajo(1, "2025-12")
+        self.assertIsNotNone(df_h)
+        row_cap = df_h[df_h["Balance clasificado"] == "Capital emitido"]
+        row_ej = df_h[df_h["Balance clasificado"] == "Ganancias (Pérdida) del Ejercicio"]
+        self.assertFalse(row_cap.empty)
+        self.assertAlmostEqual(round(float(row_cap["CONSOLIDADO"].iloc[0]) / 1000.0), -503344995, delta=1)
+        self.assertAlmostEqual(round(float(row_ej["CONSOLIDADO"].iloc[0]) / 1000.0), 33412509, delta=1)
+
+        row_gan_h = df_h[df_h["Balance clasificado"] == "Resultados acumulados"]
+        expected_gan_m = round(-float(row_gan_h["CONSOLIDADO"].iloc[0]) / 1000.0) if not row_gan_h.empty else -100817186
+
+        cap, gan, res = get_patrimonio_balances_from_db("[GRUPO] Consolidado DB Terra Holdco", "2025-12")
+        self.assertAlmostEqual(round(cap), 503344995, delta=1)
+        if not SnapshotVaultManager.has_active_snapshot("[GRUPO] Consolidado DB Terra Holdco", "2025-12"):
+            self.assertAlmostEqual(round(gan), expected_gan_m, delta=2)
+        self.assertAlmostEqual(round(res), 178355741, delta=1)
+
+    def test_closed_actual_note_recomputes_open_native_comp_with_new_anexo(self):
+        """
+        Verifica que cuando el período actual está cerrado (ej. 2026-10 en Holdco) pero su
+        período comparativo nativo (2025-12) está ABIERTO y recibe un nuevo Anexo Externo,
+        get_note_elements recalcule la columna 2025-12 al vuelo preservando intacto 2026-10.
+        """
+        emp = "Db Terra Chile Holdco SpA"
+        if not SnapshotVaultManager.has_active_snapshot(emp, "2026-10"):
+            self.skipTest("Db Terra Chile Holdco SpA no tiene snapshot activo 2026-10.")
+        if SnapshotVaultManager.has_active_snapshot(emp, "2025-12"):
+            self.skipTest("Db Terra Chile Holdco SpA 2025-12 está cerrado; este test valida 2025-12 abierto.")
+
+        els = SnapshotVaultManager.get_note_elements(emp, "2026-10", "#N07", scale_factor=1000.0, comp_period="2025-12")
+        self.assertIsNotNone(els)
+        tables = [el[1] for el in els if el[0] == "table"]
+        self.assertGreaterEqual(len(tables), 2)
+        # En #N07.1, Otras bodegas (fila 4 col 2) y #N07.2 Saldo inicial (tabla 1 fila 3 col 2) deben traer el anexo 2025-12
+        t_inv = tables[0]
+        self.assertEqual(round(float(t_inv.iloc[3, 1])), 32391252)
+        self.assertEqual(round(float(t_inv.iloc[4, 2])), 1730997)
+
+    def test_intangibles_stacked_comparative_blocks_and_movements(self):
+        """
+        Verifica que #N08 (Intangibles) en bloques verticales apilados separe correctamente
+        el período actual y el comparativo (tanto entre años distintos 2026-10 vs 2025-12
+        como dentro del mismo año 2026-10 vs 2026-06), preserve la cabecera 'Licencias' en #N08.2
+        y cuadre #N08.2 contra #N08.1.
+        """
+        emp = "Db Terra Chile Holdco SpA"
+        if not SnapshotVaultManager.has_active_snapshot(emp, "2026-10"):
+            self.skipTest("Db Terra Chile Holdco SpA no tiene snapshot activo 2026-10.")
+
+        # 1. Comparación inter-anual: 2026-10 vs 2025-12
+        els_25 = SnapshotVaultManager.get_note_elements(emp, "2026-10", "#N08", scale_factor=1000.0, comp_period="2025-12")
+        self.assertIsNotNone(els_25)
+        tables_25 = [el[1] for el in els_25 if el[0] == "table"]
+        self.assertEqual(len(tables_25), 2)
+
+        n08_1 = tables_25[0]
+        self.assertEqual(str(n08_1.iloc[0, 0]).strip(), "31.10.2026")
+        self.assertEqual(str(n08_1.iloc[9, 0]).strip(), "31.12.2025")
+        self.assertEqual(round(float(n08_1.iloc[7, 3])), 3472288)   # Total Neto 31.10.2026
+        self.assertEqual(round(float(n08_1.iloc[16, 3])), 1530575)  # Total Neto 31.12.2025
+
+        n08_2 = tables_25[1]
+        self.assertEqual(str(n08_2.iloc[1, 2]).strip(), "Licencias")
+        self.assertEqual(str(n08_2.iloc[9, 2]).strip(), "Licencias")
+        self.assertEqual(round(float(n08_2.iloc[3, 5])), 1530575)   # Inicio 2026 = Cierre 2025
+        self.assertEqual(round(float(n08_2.iloc[4, 5])), 3015368)   # Adiciones 2026
+        self.assertEqual(round(float(n08_2.iloc[5, 5])), -1073655)  # Amortización 2026
+        self.assertEqual(round(float(n08_2.iloc[6, 5])), 3472288)   # Cierre 2026 == #N08.1
+
+        # 2. Comparación intra-anual (mismo año): 2026-10 vs 2026-06
+        if SnapshotVaultManager.has_active_snapshot(emp, "2026-06"):
+            els_26 = SnapshotVaultManager.get_note_elements(emp, "2026-10", "#N08", scale_factor=1000.0, comp_period="2026-06")
+            self.assertIsNotNone(els_26)
+            tables_26 = [el[1] for el in els_26 if el[0] == "table"]
+            self.assertEqual(str(tables_26[0].iloc[0, 0]).strip(), "31.10.2026")
+            self.assertEqual(str(tables_26[0].iloc[9, 0]).strip(), "30.06.2026")
+            self.assertEqual(round(float(tables_26[0].iloc[7, 3])), 3472288)
+            self.assertEqual(round(float(tables_26[0].iloc[16, 3])), 3013718)
+            # Además, como 2025-12 existe como año previo de 2026-06, el bloque comparativo de #N08.2 también cuadra
+            self.assertEqual(round(float(tables_26[1].iloc[14, 5])), 3013718)
+
 
 if __name__ == "__main__":
     unittest.main()

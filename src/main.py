@@ -498,6 +498,8 @@ def main():
         importlib.reload(ng_mod)
         import src.core.external_notes_manager as ext_mgr
         importlib.reload(ext_mgr)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
         import src.core.sabana_manager as sm_mod
         importlib.reload(sm_mod)
         import src.core.external_notes_manager as ext_mgr
@@ -511,6 +513,8 @@ def main():
         import importlib
         import src.core.excel_utils as ex_mod
         importlib.reload(ex_mod)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
         import src.core.rounding_reconciler as rr_mod
         importlib.reload(rr_mod)
         import src.reporting.balance_generator as bg_mod
@@ -562,6 +566,8 @@ def main():
         import importlib
         import src.core.excel_utils as ex_mod
         importlib.reload(ex_mod)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
         import src.reporting.formatting as fmt_mod
         importlib.reload(fmt_mod)
         import src.reporting.word_export as wexp_mod
@@ -587,6 +593,8 @@ def main():
         import importlib
         import src.core.excel_utils as ex_mod
         importlib.reload(ex_mod)
+        import src.core.consolidacion_engine as ce_mod
+        importlib.reload(ce_mod)
         import src.reporting.formatting as fmt_mod
         importlib.reload(fmt_mod)
         import src.reporting.word_export as wexp_mod
